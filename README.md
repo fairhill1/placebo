@@ -21,8 +21,9 @@ cargo dev
 ```
 
 The starter includes two editors, validation and version checks, development
-rebuild/reload, and `AGENTS.md` instructions for LLM coding. The dev loop checks
-for detectable API bypasses before each build. Use these commands in CI too:
+rebuild/reload, a source-contract test, and `AGENTS.md` instructions for LLM
+coding. The dev loop checks for detectable API bypasses before each build.
+Use these commands in CI too:
 
 ```sh
 cargo check-placebo
@@ -36,172 +37,29 @@ Ordinary Axum endpoints are unaffected. This is a source check with documented
 limits, not full Rust name resolution or proof of browser correctness. See
 [project checks and exceptions](docs/project-checks.md).
 
-## Build your first app
+## Start from the generated application
 
-This complete app has two independent editors sharing one save action. It
-includes server validation, draft preservation, normalized titles, and version
-checks for conflicting saves from another tab. No custom JavaScript is needed.
-It is also a complete manual setup if you prefer to build without the generator;
-run `placebo check` separately in that app after installing the development CLI.
+For a new app, run `placebo new` and adapt its files. Keep its `.cargo` aliases,
+`AGENTS.md`, and `tests/placebo_contract.rs`. This is the supported starting point
+for humans and coding agents. Use `cargo dev` while working and `cargo test`
+before reporting completion; fix reported errors and verify the changed browser
+flows. Do not substitute compilation or a source-check pass for browser testing.
 
-Placebo is not published to crates.io. From this checkout, create a sibling app:
+The generated contract test runs `cargo check-placebo`, so an ordinary `cargo test`
+also detects recognized raw action routes and handwritten request configuration.
+It invokes the checkout's CLI and may compile its development dependencies on the
+first test run. It adds no dependencies to release application builds.
+`cargo build` and `cargo run` alone still do not execute source checks.
 
-```sh
-cargo new --bin ../my-app
-cd ../my-app
-```
-
-Replace `Cargo.toml` with the following. The path assumes the Placebo checkout
-is named `placebo`; adjust it if yours is elsewhere.
-
-```toml
-[package]
-name = "my-app"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-placebo = { path = "../placebo" }
-axum = "0.8.9"
-maud = { version = "0.27.0", features = ["axum"] }
-serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net"] }
-```
-
-Replace `src/main.rs` with this entire file:
-
-```rust
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::get,
-    Router,
-};
-use maud::{html, Markup, DOCTYPE};
-use placebo::{fields, Component, Control, FormInput, MutationAction};
-use serde::Deserialize;
-use std::sync::{Arc, Mutex};
-
-struct Item {
-    id: u64,
-    title: String,
-    version: u64,
-}
-type Store = Arc<Mutex<Vec<Item>>>;
-
-#[derive(Deserialize, FormInput)]
-struct SaveTitle {
-    id: u64,
-    title: String,
-    version: u64,
-}
-
-const SAVE: MutationAction<SaveTitle> = MutationAction::new("save-title", "/save");
-
-// Render the component's CONTENTS, including its form and feedback.
-// Both the initial page and save responses reuse this function.
-fn editor(item: &Item, feedback: &str) -> Markup {
-    let component = Component::new("editor", item.id);
-    let title_id = format!("title-{}", item.id);
-    let feedback_id = format!("feedback-{}", item.id);
-    let fields = fields! { SaveTitle {
-        // IDs and versions belong to the server and must refresh on each reply.
-        @field id = Control::hidden(item.id);
-        @field version = Control::hidden(item.version);
-        div data-placebo-local="draft" {
-            label for=(title_id) { "Title" }
-            @field title = Control::text(&item.title)
-                .id(&title_id).described_by(&feedback_id);
-        }
-        p id=(feedback_id) role="status" { (feedback) }
-        button type="submit" { "Save" }
-    } };
-    html! {
-        article {
-            h2 { (item.title) }
-            (SAVE.bind(&component).form(fields))
-        }
-    }
-}
-
-async fn home(State(store): State<Store>) -> Markup {
-    let items = store.lock().unwrap();
-    html! {
-        (DOCTYPE)
-        html lang="en" {
-            head {
-                meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "My Placebo app" }
-                script type="module" src="/placebo.js" {}
-            }
-            body {
-                h1 { "Two editors" }
-                @for item in items.iter() {
-                    // Only the initial page adds the component's outer mount.
-                    (Component::new("editor", item.id).mount(editor(item, "")))
-                }
-            }
-        }
-    }
-}
-
-// SAVE.route supplies the state and deserialized SaveTitle directly.
-async fn save(store: Store, input: SaveTitle) -> Response {
-    let mut items = store.lock().unwrap();
-    let Some(item) = items.iter_mut().find(|item| item.id == input.id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let component = Component::new("editor", item.id);
-    let binding = SAVE.bind(&component);
-    let title = input.title.trim();
-    if !(3..=80).contains(&title.chars().count()) {
-        return binding
-            .invalid(editor(item, "Use 3–80 characters."))
-            .into_response();
-    }
-    if input.version != item.version {
-        return binding
-            .conflict(editor(item, "Changed in another tab. Review the saved title and retry."))
-            .into_response();
-    }
-    // The version check and write happen under the same lock.
-    item.title = title.to_owned();
-    item.version += 1;
-    binding
-        .reply(editor(item, "Saved."))
-        .reset_local("draft")
-        .into_response()
-}
-
-#[tokio::main]
-async fn main() {
-    let store: Store = Arc::new(Mutex::new(vec![
-        Item { id: 1, title: "First item".into(), version: 1 },
-        Item { id: 2, title: "Second item".into(), version: 1 },
-    ]));
-    let app = Router::new()
-        .route("/", get(home))
-        .route("/placebo.js", get(placebo::runtime))
-        .route(SAVE.path(), SAVE.route(save))
-        .with_state(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
-    println!("Open http://127.0.0.1:3000");
-    axum::serve(listener, app).await.unwrap();
-}
-```
-
-Run `cargo run` and open <http://127.0.0.1:3000>. Try a title shorter than three
-characters, save while keeping an unsaved draft in the other editor, or open
-two tabs and save the same item in both. After a conflict, the saved heading
-and hidden version update while your draft remains available for review/retry.
-Data lives in memory and resets on restart. Saving requires the browser runtime;
-this example does not implement a separate no-JavaScript POST flow.
+The starter's `src/main.rs` is a complete working example. For an existing Axum
+application or an explicitly chosen custom integration, see [manual setup](docs/manual-setup.md).
+Do not replace the generated setup just to avoid a check.
 
 ## The application API
 
-| Responsibility | API used above |
+The starter uses the following form, action, and component APIs.
+
+| Responsibility | API |
 |---|---|
 | Connect a payload to its controls | `#[derive(FormInput)]` and `fields! { SaveTitle { ... } }` |
 | Define one reusable endpoint | `MutationAction<SaveTitle>` |
@@ -218,9 +76,19 @@ and the complete [task example](examples/tasks.rs).
 
 **Mount on the page; reply with contents.** A refresh keeps the existing outer
 component element. Passing `component.mount(...)` into `reply`, `invalid`, or
-`conflict` creates an unsupported nested component. All three responses should
+`conflict` now fails to compile: mounting returns `MountedComponent`, while replies
+accept `Markup`. Wrapping a mount in arbitrary `html!` erases that distinction;
+the browser still rejects nested components. All three responses should
 render the complete component contents, including the form and feedback;
 returning only an error paragraph would remove the form and its draft.
+
+**Keep the dialog root persistent.** Use
+`component.mount_dialog("heading-id", contents)` to make the native dialog the
+component root, or put `component.mount(contents)` inside a dialog. The browser
+rejects dialogs nested inside replaceable component contents with
+`unstable-dialog`, before sending a mutation or applying a malformed response.
+This also applies to dialogs inside local subtrees. Opening/closing is still
+local application behavior; see [the dialog recipe](docs/interactions.md).
 
 **Keep drafts local; keep feedback and versions outside.** A matching
 `data-placebo-local="draft"` subtree retains its existing DOM, values, and
@@ -250,8 +118,11 @@ the runtime prevents older responses from overwriting newer results. Read
 handlers receive `(state, input, headers)` so they can return a full page for a
 normal GET or an update for an enhanced request. See the [search example](examples/search.rs).
 
-For updates to summaries/counts alongside an editor, declare destinations with
-`.affects(region)` and reply with `.also_replace(...)` or `.also_append(...)`.
+For shared summaries/counts, declare a `VersionedRegion`, mount it with
+`counts.mount(revision, contents)`, declare `.affects(counts)`, and reply with
+`.also_replace(counts, revision, contents)`. A plain `Region` cannot be passed to
+`also_replace`; use plain regions for reads or `.also_append(...)` collections.
+The server must increment the snapshot revision with each corresponding change.
 [Coordinated updates](docs/interactions.md) explains revisions and ownership.
 
 ## Development rebuild and reload
@@ -319,7 +190,7 @@ cargo run --example editors
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
 The [editors](examples/editors.rs) and [tasks](examples/tasks.rs) are reference
-applications you can read and adapt; the quickstart above needs neither file.
+applications you can read and adapt; the generated quickstart needs neither file.
 
 ## Diagnose failures
 
@@ -401,3 +272,7 @@ on macOS/Chromium, not a browser/platform compatibility claim.
 - [DOM child replacement](https://developer.mozilla.org/en-US/docs/Web/API/Element/replaceChildren)
 - [Focus restoration](https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus)
 - [tower-livereload](https://docs.rs/tower-livereload/0.10.3/tower_livereload/)
+
+
+See the [corrected Issue Desk comparison](docs/comparison.md) for current evidence
+against Datastar: both repaired apps pass 14/14, with important scope limits.

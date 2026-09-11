@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, MutationAction, Region, fields};
+use placebo::{Component, Control, FormInput, MutationAction, Region, VersionedRegion, fields};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -17,7 +17,7 @@ use std::{
 mod support;
 
 const LIST: Region = Region::new("tasks");
-const SUMMARY: Region = Region::new("task-count");
+const SUMMARY: VersionedRegion = VersionedRegion::new("task-count");
 const ADD: MutationAction<AddTask> = MutationAction::new("add-task", "/actions/add-task");
 const SAVE: MutationAction<SaveTask> = MutationAction::new("save-task", "/actions/save-task");
 
@@ -50,8 +50,8 @@ struct Tasks {
 }
 type Store = Arc<Mutex<Tasks>>;
 
-fn row_summary(task: &Task) -> Region {
-    Region::keyed("task-summary", task.id)
+fn row_summary(task: &Task) -> VersionedRegion {
+    VersionedRegion::keyed("task-summary", task.id)
 }
 
 fn count(tasks: &Tasks) -> Markup {
@@ -110,7 +110,7 @@ fn row(task: &Task) -> Markup {
     let component = Component::new("task", task.id);
     html! {
         article .task-row data-placebo-behavior="dialog" data-owner=(component.id()) data-task=(task.id) {
-            (row_summary(task).mount_versioned(task.version, summary(task)))
+            (row_summary(task).mount(task.version, summary(task)))
             dialog aria-labelledby=(format!("dialog-title-{}", task.id)) {
                 .dialog-heading {
                     .eyebrow { "TASK " (format!("{:02}", task.id)) }
@@ -136,10 +136,10 @@ fn add_form(draft: &str, feedback: &str) -> Markup {
             button .secondary type="button" data-dialog-close { "Cancel" }
         }
     } };
-    ADD.bind(&component)
-        .affects(LIST)
-        .affects(SUMMARY)
-        .form(fields)
+    html! {
+        .dialog-heading { p .eyebrow { "A FRESH START" } h2 #add-heading { "What’s next?" } p { "Give it a name. You can work out the rest later." } }
+        (ADD.bind(&component).affects(LIST).affects(SUMMARY).form(fields))
+    }
 }
 
 async fn home(State(store): State<Store>) -> Markup {
@@ -172,13 +172,10 @@ async fn home(State(store): State<Store>) -> Markup {
                             div { p .eyebrow { "YOUR DAY" } h2 { "The small things" } }
                             section data-placebo-behavior="dialog" data-owner="composer:new" {
                                 button #add-task type="button" data-dialog-open { "+ Add task" }
-                                dialog aria-labelledby="add-heading" {
-                                    .dialog-heading { p .eyebrow { "A FRESH START" } h2 #add-heading { "What’s next?" } p { "Give it a name. You can work out the rest later." } }
-                                    (Component::new("composer", "new").mount(add_form("", "Use 3–80 characters.")))
-                                }
+                                (Component::new("composer", "new").mount_dialog("add-heading", add_form("", "Use 3–80 characters.")))
                             }
                         }
-                        (SUMMARY.mount_versioned(tasks.revision, count(&tasks)))
+                        (SUMMARY.mount(tasks.revision, count(&tasks)))
                         (LIST.mount(html! { @for task in tasks.items.values() { (row(task)) } }))
                     }
                     p .hint { "Tip: Cancel keeps an unfinished edit. Save accepts the cleaned-up title unless you’ve already started typing something newer." }

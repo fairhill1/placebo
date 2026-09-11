@@ -148,13 +148,14 @@ const hints = {
   "invalid-outcome": "Use reply(), invalid(), or conflict() so HTTP status and update outcome agree.",
   "invalid-patch": "Declare extra regions with affects() and use the matching region update operation.",
   "overlapping-targets": "Use distinct update boundaries that do not contain one another.",
-  "invalid-revision": "Mount shared snapshots with mount_versioned() and reply with a monotonic server revision.",
+  "invalid-revision": "Mount shared snapshots with VersionedRegion::mount(revision, contents) and reply with a monotonic server revision.",
   "duplicate-append": "Append new instances with unique ids; appends are not an idempotent retry mechanism.",
   "duplicate-local": "Give each retained subtree a unique key within its component.",
   "missing-local": "Reset only a local key present in both the mounted and incoming component.",
   "local-shape": "Keep a retained local key on the same element type, or use a new key for a fresh subtree.",
   "nested-local": "Use separate local ownership boundaries; nested local subtrees are not supported.",
   "nested-component": "Refresh separate component instances; nested component refreshes are not supported yet.",
+  "unstable-dialog": "Use component.mount_dialog(headingId, contents), or mount the component inside a persistent dialog. Replies must contain only the component contents.",
   "nested-region": "Keep shared snapshot regions free of other mounted regions.",
   "unknown-behavior": "Check the name and module import. Register with behavior() before mounting, or reserve an asynchronous import with lazyBehavior().",
   "behavior-setup": "Inspect the original cause and setup function. Return a cleanup function or undefined.",
@@ -353,6 +354,7 @@ function updateFragment(work, update) {
 
 function locals(root) {
   require(!root.querySelector("[data-placebo-component]"), "nested-component", "Nested component refresh is not supported yet.");
+  require(!root.querySelector("dialog"), "unstable-dialog", "A dialog inside replaceable component contents would lose its native state and listeners.");
   const found = new Map();
   for (const element of root.querySelectorAll("[data-placebo-local]")) {
     const key = element.dataset.placeboLocal;

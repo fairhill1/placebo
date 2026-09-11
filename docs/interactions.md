@@ -25,9 +25,17 @@ binding.reply(editor_markup)
     .also_replace(SUMMARY, tasks.revision, count_markup)
 ```
 
-`Region::keyed("task-summary", task.id)` supplies a runtime instance name.
-Regions with shared snapshots use `mount_versioned(revision, markup)`. Their
+Declare counts with `VersionedRegion::new("task-count")` and row summaries with
+`VersionedRegion::keyed("task-summary", task.id)`. Mount them with
+`region.mount(revision, markup)`. The revision is a required argument;
+`also_replace` accepts only `VersionedRegion`, so accidentally using a plain
+`Region` for shared snapshots fails to compile. Their
 monotonic revisions come from the server, not the browser's request order.
+Migrate old `Region::mount_versioned` sites by changing the declaration to
+`VersionedRegion` and the mount call to `mount(revision, markup)`. Do not replace
+the initial revision with a fixed value on replies: types do not prove monotonicity
+or that a matching target is actually mounted.
+
 The example updates records and revisions under the same lock. A real store
 would need an equivalent consistency guarantee.
 
@@ -76,6 +84,9 @@ ID; retained controls keep focus and selection.
 
 The `placebo:applied` event includes `resetLocal` (keys actually reset) and
 `skippedRegions` (snapshots skipped because their revision was not newer).
+Lifecycle events are dispatched on `document`; register listeners with
+`document.addEventListener("placebo:applied", ...)` and filter `detail.target`.
+A listener on a component or page container will not receive those events.
 The dialog example closes on success only when its draft was actually reset.
 If the user is already writing something newer, it stays open.
 
@@ -106,10 +117,38 @@ element. See [diagnostics](diagnostics.md) for tracing and loading behavior.
 
 The example delegates open/close clicks and uses a native `<dialog>` for
 modality, keyboard behavior, and focus containment. The dialog and behavior
-root live outside the refreshed form component, so their lifetime remains
-stable. A row summary may replace its Edit button; delegation handles the new
+root stay persistent. The edit dialogs contain a mounted form component. The
+add dialog uses `component.mount_dialog("add-heading", add_contents(...))`,
+which mounts the dialog itself as the component root. In both cases the native
+dialog node survives every reply. A row summary may replace its Edit button; delegation handles the new
 button, and close restores focus to the current trigger. There is no reactive
 expression language or global client state store in this experiment.
+
+## Persistent dialog recipe
+
+Render the same complete contents on initial mount, validation, conflict and
+success. Include the heading, form and feedback each time:
+
+```rust
+// Initial page: MountedComponent renders inside Maud's html!.
+html! { (component.mount_dialog("add-heading", add_contents("", ""))) }
+// Handler: Markup contents only. The dialog root is never in this fragment.
+binding.invalid(add_contents(&input.title, "Use 3–80 characters."))
+binding.reply(add_contents("", "Saved.")).reset_local("draft")
+```
+
+`mount()` and `mount_dialog()` return `MountedComponent`, so passing a mount
+directly to `reply`, `invalid` or `conflict` fails to compile. Arbitrary Maud
+composition can erase that type distinction; nested component wrappers remain
+runtime errors. A dialog anywhere inside replaceable component contents,
+including local subtrees, produces `unstable-dialog`. The runtime checks the
+mounted shape before sending and the incoming shape before applying any patches.
+Keep dialogs at the component root or outside the refreshed component.
+
+This guards native dialog lifetime, not arbitrary application structure. A reply
+that omits a heading, button or form can still be valid HTML and wrong UI. Browser
+flow tests are still required. Plain read regions have replacement semantics;
+these mutation-component checks do not make dialogs inside read regions persistent.
 
 ## What this experiment tells us
 

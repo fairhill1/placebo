@@ -4,15 +4,36 @@ use axum::{
     extract::{FromRequestParts, State},
     http::{StatusCode, request::Parts},
 };
-use maud::{Markup, html};
+use maud::{Markup, Render, html};
 use std::{future::Future, marker::PhantomData};
 
-use crate::{Config, FormFields, FormInput, Region, Update, VERSION};
+use crate::{Config, FormFields, FormInput, RegionTarget, Update, VERSION};
 
 /// Identity is scoped by component kind and a runtime instance key. This is
 /// UI addressing, not authorization to modify the record with that key.
 pub struct Component {
     id: String,
+}
+
+/// An initial component mount, renderable inside `html!`, not reply contents.
+/// This distinction catches accidentally sending a second component wrapper.
+/// It does not inspect arbitrary HTML composed around a mount.
+///
+/// ```compile_fail
+/// use placebo::{Component, FormInput, MutationAction};
+/// use maud::html;
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Save { title: String }
+/// let component = Component::new("editor", 1);
+/// let save = MutationAction::<Save>::new("save", "/save");
+/// save.bind(&component).reply(component.mount(html! { p { "Contents" } }));
+/// ```
+pub struct MountedComponent(Markup);
+
+impl Render for MountedComponent {
+    fn render_to(&self, buffer: &mut String) {
+        self.0.render_to(buffer);
+    }
 }
 
 impl Component {
@@ -35,8 +56,22 @@ impl Component {
         &self.id
     }
 
-    pub fn mount(&self, content: Markup) -> Markup {
-        html! { div id=(self.id()) data-placebo-region data-placebo-component { (content) } }
+    pub fn mount(&self, content: Markup) -> MountedComponent {
+        MountedComponent(
+            html! { div id=(self.id()) data-placebo-region data-placebo-component { (content) } },
+        )
+    }
+
+    /// Mount the native dialog itself as the persistent component root.
+    /// Replies replace its contents, preserving the dialog node, open state,
+    /// native modality and listeners. Include the labelled heading in every
+    /// render of the contents. Opening and closing remain application behavior.
+    /// Alternatively, mount a normal component *inside* a persistent dialog.
+    pub fn mount_dialog(&self, labelled_by: &str, content: Markup) -> MountedComponent {
+        assert!(!labelled_by.is_empty(), "a dialog needs a heading id");
+        MountedComponent(html! {
+            dialog id=(self.id()) aria-labelledby=(labelled_by) data-placebo-region data-placebo-component { (content) }
+        })
     }
 
     /// This entire subtree belongs to the browser after initial rendering.
@@ -112,15 +147,15 @@ impl<I: FormInput> MutationAction<I> {
 pub struct MutationBinding<'a, I: FormInput> {
     action: MutationAction<I>,
     component: &'a Component,
-    effects: Vec<Region>,
+    effects: Vec<String>,
 }
 
 impl<I: FormInput> MutationBinding<'_, I> {
     /// Declare additional mounted regions this form's response may update.
     /// Their DOM identities are captured when the request is scheduled.
-    pub fn affects(mut self, region: Region) -> Self {
-        assert!(!self.effects.iter().any(|r| r.id() == region.id()));
-        self.effects.push(region);
+    pub fn affects(mut self, region: impl RegionTarget) -> Self {
+        assert!(!self.effects.iter().any(|id| id == region.id()));
+        self.effects.push(region.id().to_owned());
         self
     }
 
@@ -133,7 +168,7 @@ impl<I: FormInput> MutationBinding<'_, I> {
             policy: "exclusive",
             operation: "refresh-component",
             input_delay_ms: None,
-            effects: self.effects.iter().map(|r| r.id()).collect(),
+            effects: self.effects.iter().map(String::as_str).collect(),
         };
         let config = serde_json::to_string(&config).expect("configuration serializes");
         html! { form method="post" action=(self.action.path) data-placebo=(config) { (content) } }

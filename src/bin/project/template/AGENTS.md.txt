@@ -1,0 +1,38 @@
+# Application conventions
+
+Adapt this generated app in place. Keep `.cargo/config.toml` and
+`tests/placebo_contract.rs`: they connect the normal dev/test commands to
+Placebo's source checks. Use `cargo dev` while working. `cargo test` runs the
+contract check even if you forget `cargo check-placebo`.
+
+Use `fields!` and typed `Control` values for Placebo form payloads. Generate forms
+with action bindings and register both read and mutation handlers with the
+matching `action.route(handler)` adapter. Use `ReadAction` for enhanced server
+search; do not recreate it with fetch/DOMParser/replacement code. Use Axum normally
+for unrelated pages, assets, and JSON endpoints. Do not handwrite `data-placebo`
+request configuration.
+
+Use `Component::mount` only when adding the component to the page; update replies
+render its complete contents. Mount a dialog as the component root with
+`mount_dialog`, or keep it outside the refreshed component. Listen for
+`placebo:applied` on `document`. Keep draft controls local and feedback/record
+versions server-owned.
+
+Use `VersionedRegion` for shared counts/summaries and `Region` for read results
+or append collections. Mount snapshots with `region.mount(revision, contents)`
+and increment their server revision with the data under the same lock/transaction.
+Reply with `also_replace(region, revision, contents)`. A fixed revision on every
+reply will not update an already mounted snapshot.
+
+Before reporting completion:
+- Run `cargo test` and fix its failures. `cargo check-placebo` provides a faster
+  source-only check during editing; neither establishes browser correctness.
+- Run the app and verify changed browser flows with assertions, including valid
+  saves, invalid input, independent drafts, conflict/retry and any added dialog
+  or search behavior. Inspect console warnings and errors as well as page state.
+- If a check fails, fix the cause and rerun it. Report checks actually completed
+  and unresolved failures; do not call an unexecuted script a passing test.
+
+Explicit `placebo:allow` exceptions are for intentional custom integrations with
+a documented reason. Fix accidental bypasses instead of adding an exception to
+silence the check. Do not remove checks to make CI pass.

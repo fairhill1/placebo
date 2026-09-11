@@ -5,6 +5,7 @@ use std::{
 
 const APP: &str = include_str!("template/main.rs.txt");
 const CSS: &str = include_str!("template/app.css");
+const CONTRACT: &str = include_str!("template/placebo_contract.rs.txt");
 
 fn relative(from: &Path, to: &Path) -> PathBuf {
     let a: Vec<_> = from.components().collect();
@@ -135,8 +136,11 @@ cargo test
 
 `cargo check-placebo` exits nonzero for detected Placebo API bypasses. The dev
 supervisor also runs this check before each build, keeping the previous server
-if it fails. Cargo alone does not run this source check. Configure CI to require
-both commands; editing instructions or suppressing diagnostics is not verification.
+if it fails. The generated `tests/placebo_contract.rs` invokes the check during
+ordinary `cargo test` too. Its first run may compile the CLI's development
+dependencies; release application builds do not acquire those dependencies.
+`cargo build` and `cargo run` alone do not run source checks. Keep the contract
+test and aliases; editing instructions or suppressing diagnostics is not verification.
 
 Placebo is currently a local path dependency at `{dependency}`. CI needs that
 checkout at the same relative location as your app, just as Cargo does. The
@@ -153,10 +157,11 @@ save with another unsaved editor, a stale save from another tab, and retry.
 Compilation and endpoint checks alone do not verify those flows.
 "#
     );
-    let instructions = "# Application conventions\n\nUse `fields!` and typed `Control` values for Placebo form payloads. Generate forms\nwith action bindings and register both read and mutation handlers with the\nmatching `action.route(handler)` adapter. Use Axum normally for unrelated pages,\nassets, and JSON endpoints. Do not handwrite `data-placebo` request configuration.\n\nUse `Component::mount` only when adding the component to the page; update replies\nrender its complete contents. Keep persistent dialogs outside refreshed form\ncomponents. Keep draft controls local and feedback/record versions server-owned.\n\nRun `cargo check-placebo` and `cargo test` before reporting completion. Run the app\nand verify changed browser flows, including validation and retry. Report which\nchecks you actually performed and any unresolved failures.\n\nExplicit `placebo:allow` exceptions are for intentional custom integrations with\na documented reason. Fix accidental bypasses instead of adding an exception to\nsilence the check. Do not remove checks to make CI pass.\n";
+    let instructions = include_str!("template/AGENTS.md.txt");
     let files = [
         ("Cargo.toml", manifest.as_str()),
         ("src/main.rs", APP),
+        ("tests/placebo_contract.rs", CONTRACT),
         ("static/app.css", CSS),
         (".cargo/config.toml", aliases.as_str()),
         ("README.md", readme.as_str()),

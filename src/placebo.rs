@@ -26,7 +26,9 @@ pub use placebo_macros::fields;
 
 mod component;
 mod diagnostics;
-pub use component::{Component, MutationAction, MutationBinding, MutationRequest};
+pub use component::{
+    Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
+};
 
 #[cfg(all(feature = "dev", debug_assertions))]
 pub mod dev;
@@ -60,10 +62,82 @@ impl Region {
     pub fn mount(&self, content: Markup) -> Markup {
         html! { div id=(self.id()) data-placebo-region { (content) } }
     }
+}
 
-    /// Shared snapshots use a monotonic server revision, scoped to this region.
-    pub fn mount_versioned(&self, revision: u64, content: Markup) -> Markup {
+/// A shared server snapshot, such as counts updated by several editors.
+/// Mounting always requires a revision; only this type supports `also_replace`.
+/// Revisions must increase with the corresponding server data under the same
+/// transaction/lock. Types cannot prove that a region exists in the actual DOM
+/// or that a revision reflects the data it accompanies.
+///
+/// ```
+/// use placebo::VersionedRegion;
+/// use maud::html;
+/// const COUNTS: VersionedRegion = VersionedRegion::new("counts");
+/// let initial = COUNTS.mount(1, html! { "3 items" });
+/// assert!(initial.into_string().contains("data-placebo-revision=\"1\""));
+/// ```
+///
+/// A plain region cannot receive a versioned snapshot:
+/// ```compile_fail
+/// use placebo::{Component, FormInput, MutationAction, Region};
+/// use maud::html;
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Save { title: String }
+/// let component = Component::new("editor", 1);
+/// MutationAction::<Save>::new("save", "/save").bind(&component)
+///     .reply(html! {}).also_replace(Region::new("counts"), 1, html! {});
+/// ```
+///
+/// A versioned region cannot be mounted without its revision:
+/// ```compile_fail
+/// use placebo::VersionedRegion;
+/// use maud::html;
+/// VersionedRegion::new("counts").mount(html! { "3 items" });
+/// ```
+#[derive(Clone, Debug)]
+pub struct VersionedRegion(Region);
+
+impl VersionedRegion {
+    pub const fn new(id: &'static str) -> Self {
+        Self(Region::new(id))
+    }
+
+    pub fn keyed(kind: &str, key: impl std::fmt::Display) -> Self {
+        Self(Region::keyed(kind, key))
+    }
+
+    pub fn id(&self) -> &str {
+        self.0.id()
+    }
+
+    pub fn mount(&self, revision: u64, content: Markup) -> Markup {
         html! { div id=(self.id()) data-placebo-region data-placebo-revision=(revision) { (content) } }
+    }
+}
+
+mod sealed {
+    pub trait RegionTarget {}
+    impl RegionTarget for super::Region {}
+    impl RegionTarget for super::VersionedRegion {}
+}
+
+/// A destination accepted by `MutationBinding::affects`: either a plain
+/// [`Region`] for appends, or a [`VersionedRegion`] for shared snapshots.
+/// The operation-specific reply methods retain their stricter target types.
+pub trait RegionTarget: sealed::RegionTarget {
+    fn id(&self) -> &str;
+}
+
+impl RegionTarget for Region {
+    fn id(&self) -> &str {
+        self.id()
+    }
+}
+
+impl RegionTarget for VersionedRegion {
+    fn id(&self) -> &str {
+        self.id()
     }
 }
 
@@ -239,8 +313,8 @@ impl Update {
     }
 
     /// Refresh a declared shared region only when its server revision is newer.
-    /// The region must have been mounted with mount_versioned().
-    pub fn also_replace(mut self, region: Region, revision: u64, content: Markup) -> Self {
+    /// `VersionedRegion::mount` requires the corresponding initial revision.
+    pub fn also_replace(mut self, region: VersionedRegion, revision: u64, content: Markup) -> Self {
         self.patches.push(Patch {
             target: region.id().into(),
             operation: "replace-children",
@@ -252,12 +326,12 @@ impl Update {
 
     /// Append new content without replacing existing component instances.
     /// Delivery is not retried; existing/duplicate ids cause rejection.
-    pub fn also_append(mut self, region: Region, content: Markup) -> Self {
+    pub fn also_append(mut self, region: Region, content: impl maud::Render) -> Self {
         self.patches.push(Patch {
             target: region.id().into(),
             operation: "append-children",
             revision: None,
-            html: content.into_string(),
+            html: content.render().into_string(),
         });
         self
     }
@@ -350,7 +424,7 @@ mod tests {
     #[test]
     fn coordinated_updates_keep_exact_server_revisions_and_explicit_resets() {
         let component = Component::new("editor", 42);
-        let summary = Region::keyed("summary", 42);
+        let summary = VersionedRegion::keyed("summary", 42);
         let action = MutationAction::<Search>::new("save", "/save");
         let form = action
             .bind(&component)
@@ -375,7 +449,7 @@ mod tests {
         assert_eq!(update["patches"][1]["operation"], "append-children");
         assert!(
             summary
-                .mount_versioned(u64::MAX, html! {})
+                .mount(u64::MAX, html! {})
                 .into_string()
                 .contains(&u64::MAX.to_string())
         );

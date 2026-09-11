@@ -312,3 +312,69 @@ test("task list and dialog fit desktop and mobile", async t => {
   assert.ok(await page.locator("dialog[open]").evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth));
   if (process.env.PLACEBO_SCREENSHOTS) await page.screenshot({ path: "test-results/tasks-dialog.png", fullPage: true });
 });
+
+
+test("mounted dialog survives invalid, successful and repeated creates as the same native node", async t => {
+  const page = await visit(t);
+  await page.locator("#add-task").click();
+  await page.evaluate(() => { window.composerDialog = document.getElementById("composer:new"); });
+  assert.equal(await page.evaluate(() => composerDialog.tagName), "DIALOG");
+  await page.locator("#new-title").fill("x");
+  await page.locator("#new-title").press("Enter");
+  await applied(page, "composer:new", "invalid");
+  assert.ok(await page.evaluate(() => composerDialog === document.getElementById("composer:new") && composerDialog.open));
+  assert.equal(await page.locator("#add-heading").count(), 1);
+  await page.locator("#new-title").fill("A valid second attempt");
+  await page.locator("#new-title").press("Enter");
+  await applied(page, "composer:new");
+  assert.ok(await page.evaluate(() => composerDialog === document.getElementById("composer:new") && !composerDialog.open));
+  await page.locator("#add-task").click();
+  assert.ok(await page.evaluate(() => composerDialog.open));
+  await page.keyboard.press("Escape");
+  assert.ok(await page.evaluate(() => !composerDialog.open));
+});
+
+test("dialog nested in replaceable contents fails before sending a write", async t => {
+  const page = await visit(t);
+  const requests = [];
+  page.on("request", request => { if (request.method() === "POST") requests.push(request.url()); });
+  await page.evaluate(() => {
+    const component = document.getElementById("composer:new");
+    const wrapper = document.createElement("div");
+    for (const name of ["id", "data-placebo-region", "data-placebo-component"]) {
+      wrapper.setAttribute(name, component.getAttribute(name)); component.removeAttribute(name);
+    }
+    component.before(wrapper); wrapper.append(component);
+    window.unsafeDialog = component;
+    component.showModal();
+  });
+  await page.locator("#new-title").fill("Never send this write");
+  await page.locator("#new-title").press("Enter");
+  await failure(page, "unstable-dialog");
+  assert.equal(requests.length, 0);
+  assert.ok(await page.evaluate(() => unsafeDialog.isConnected && unsafeDialog.open));
+  const diagnostic = await page.evaluate(() => events.find(e => e.code === "unstable-dialog"));
+  assert.equal(diagnostic.target, "composer:new");
+  assert.equal(diagnostic.writeState, "not-started");
+  assert.match(diagnostic.hint, /mount_dialog/);
+});
+
+test("incoming dialog wrapper rejects the entire update and retains the open dialog", async t => {
+  const page = await visit(t);
+  await page.route("**/actions/add-task", async route => {
+    const response = await route.fetch();
+    const update = await response.json();
+    update.html = `<dialog>${update.html}</dialog>`;
+    await route.fulfill({ response, body: JSON.stringify(update) });
+  });
+  const count = await page.locator(".task-row").count();
+  const summary = await page.locator("#task-count").innerHTML();
+  await page.locator("#add-task").click();
+  await page.locator("#new-title").fill("Committed but malformed reply");
+  await page.locator("#new-title").press("Enter");
+  await failure(page, "unstable-dialog");
+  assert.equal(await page.locator(".task-row").count(), count);
+  assert.equal(await page.locator("#task-count").innerHTML(), summary);
+  assert.equal(await page.locator("#new-title").inputValue(), "Committed but malformed reply");
+  assert.ok(await page.locator('[id="composer:new"]').evaluate(dialog => dialog.open));
+});

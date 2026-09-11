@@ -26,8 +26,10 @@ from disk in dev and embedded otherwise. `PLACEBO_ADDR` changes the listening
 address; `127.0.0.1:0` selects an available port. Data is in memory.
 
 It also includes `AGENTS.md` with application conventions and verification
-instructions. Those instructions are guidance; enforcement of the detectable
-bypasses comes from the source check below.
+instructions, plus `tests/placebo_contract.rs`, which invokes the source check
+from ordinary `cargo test`. Keep the generated aliases and contract test while
+adapting the starter. The README quickstart uses this path; manual integration
+is a separate reference for existing apps.
 
 ## Run the check locally and in CI
 
@@ -45,7 +47,10 @@ directory, or `placebo check --path path/to/app`.
 `placebo check` returns exit code 1 for detected bypasses, invalid/stale
 exceptions, unreadable or invalid Rust source, or an unsupported source layout.
 It returns 0 when the selected source passes, printing any explicit exceptions.
-Cargo compilation remains a separate check. A CI job for a generated app should
+The generated contract test runs the check during `cargo test`, using its alias
+and the checkout CLI. The first test run may compile the CLI development
+dependencies; they are not release application dependencies. Cargo compilation
+remains a separate operation. A CI job for a generated app can
 require both steps (after checking out Placebo at the relative dependency path):
 
 ```yaml
@@ -61,9 +66,10 @@ not a complete checkout workflow.
 
 `placebo dev` runs the source check before every build, so its normal development
 loop also rejects detected bypasses. If the check fails, it prints the findings,
-keeps the last working server, and waits for a Rust edit. `cargo run`,
-`cargo build`, and `cargo test` alone do not run this check. Configure CI to
-require the separate check if it is part of your project's contract.
+keeps the last working server, and waits for a Rust edit. `cargo run` and
+`cargo build` alone do not run this check. Generated apps run it through their
+contract test; manually integrated apps must add an equivalent test or CI step.
+Removing or filtering out that test bypasses it, just as with any test.
 
 ## What it flags
 

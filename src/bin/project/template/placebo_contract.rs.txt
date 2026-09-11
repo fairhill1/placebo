@@ -1,0 +1,16 @@
+//! Keep source checks in the ordinary `cargo test` path as well as `cargo dev`.
+//! This checks authoring conventions, not browser behavior.
+#[test]
+fn placebo_source_contract() {
+    let output = std::process::Command::new(env!("CARGO"))
+        .arg("check-placebo")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run cargo check-placebo using the generated .cargo/config.toml alias");
+    assert!(
+        output.status.success(),
+        "Placebo source checks failed. Fix the findings before submitting.\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}

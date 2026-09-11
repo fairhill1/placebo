@@ -1,0 +1,8 @@
+:root { font-family: system-ui, sans-serif; color: #22352d; background: #f4f6f3; }
+body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+article { padding: 1.25rem; margin: 1rem 0; background: white; border: 1px solid #ccd5cc; border-radius: .5rem; }
+label { display: block; margin-bottom: .4rem; }
+input { box-sizing: border-box; width: 100%; padding: .5rem; font: inherit; }
+button { font: inherit; padding: .5rem 1rem; cursor: pointer; }
+h2 { overflow-wrap: anywhere; }
+[role=status] { min-height: 1.5rem; }

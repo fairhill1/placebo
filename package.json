@@ -1,0 +1,7 @@
+{
+  "name": "placebo-runtime-experiment",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test --test-concurrency=1 tests/*.test.mjs" },
+  "devDependencies": { "playwright": "1.62.1" }
+}

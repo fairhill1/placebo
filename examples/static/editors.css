@@ -1,0 +1,14 @@
+[data-placebo-component] { min-height: 0; opacity: 1; }
+.editor { height: 100%; padding: 26px; background: #fffefa; border: 1px solid #d9ddd2; border-radius: 14px; }
+.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.card-heading .eyebrow { margin: 0; font-size: 10px; }
+.version { font: 11px ui-monospace, monospace; color: #65726a; }
+.saved-title { font-size: 24px; line-height: 1.2; min-height: 58px; overflow-wrap: anywhere; }
+.feedback { min-height: 60px; font-size: 13px; line-height: 1.55; color: #65726a; margin: 20px 0; }
+.feedback .error { color: #9b302d; }
+.busy-label { display: none; }
+[aria-busy="true"] .busy-label { display: inline; }
+[aria-busy="true"] .idle-label { display: none; }
+[aria-busy="true"] button { background: #687867; }
+.trace { margin-top: 28px; }
+@media (max-width: 650px) { .editor { padding: 20px; } }

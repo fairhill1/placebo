@@ -1,0 +1,3 @@
+[alias]
+dev = "run --features dev --bin placebo -- dev --example editors --features dev"
+tasks = "run --features dev --bin placebo -- dev --example tasks --features dev"

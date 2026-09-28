@@ -4,7 +4,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use maud::html;
-use placebo::{Component, Control, FormInput, MutationAction, ReadAction, Region, fields};
+use placebo::{Component, Control, FormInput, Input, MutationAction, ReadAction, Region, fields};
 use serde::Deserialize;
 use tower::ServiceExt;
 
@@ -99,7 +99,7 @@ fn raw_field_identifiers_keep_their_serde_wire_name() {
     assert!(output.contains("name=\"kind\""));
 }
 
-async fn save(_: (), input: Renamed) -> String {
+async fn save(Input(input): Input<Renamed>) -> String {
     format!("{}:{}:{}", input.id, input.title, input.delay_ms)
 }
 
@@ -201,10 +201,7 @@ async fn read_adapter_and_builder_share_the_input_type() {
         .form(fields())
         .into_string();
     assert!(form.contains("method=\"get\""));
-    let app = Router::new().route(
-        action.path(),
-        action.route(|state: (), input, _headers| save(state, input)),
-    );
+    let app = Router::new().route(action.path(), action.route(save));
     let response = app
         .oneshot(
             Request::builder()
@@ -324,7 +321,7 @@ fn control_specific_attributes_are_not_silently_ignored() {
     Control::<String>::text("title").rows(3);
 }
 
-async fn save_profile(_: (), input: Profile) -> String {
+async fn save_profile(Input(input): Input<Profile>) -> String {
     format!("{input:?}")
 }
 
@@ -415,7 +412,7 @@ async fn read_queries_use_the_same_decoding_rules() {
     let action = ReadAction::<Filter>::new("filter", "/filter");
     let app = Router::new().route(
         action.path(),
-        action.route(|_: (), input: Filter, _| async move { format!("{input:?}") }),
+        action.route(|Input(input): Input<Filter>| async move { format!("{input:?}") }),
     );
     for (query, expected) in [
         (
@@ -514,7 +511,7 @@ fn enum_controls_render_serde_variant_names() {
 
 #[tokio::test]
 async fn enum_fields_decode_their_rendered_names_and_reject_others() {
-    async fn save(_: (), input: Triage) -> String {
+    async fn save(Input(input): Input<Triage>) -> String {
         format!("{input:?}")
     }
     let app = Router::new().route(TRIAGE.path(), TRIAGE.route(save));
@@ -562,7 +559,11 @@ async fn rejected_mutations_explain_themselves_to_a_person() {
     let cases = [
         (None, None, "The page had not finished loading"),
         (Some("1"), None, "This page is out of date"),
-        (Some("3"), Some("cross-site"), "submitted from another website"),
+        (
+            Some("3"),
+            Some("cross-site"),
+            "submitted from another website",
+        ),
     ];
     for (version, site, explanation) in cases {
         let mut request = request("id=42&display-title=Hello", false);
@@ -586,4 +587,49 @@ async fn rejected_mutations_explain_themselves_to_a_person() {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains(explanation), "{body}");
     }
+}
+
+/// Stands in for an application's session extractor.
+struct User(String);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for User {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _: &S,
+    ) -> Result<Self, Self::Rejection> {
+        parts
+            .headers
+            .get("x-user")
+            .and_then(|value| value.to_str().ok())
+            .map(|user| Self(user.to_owned()))
+            .ok_or(StatusCode::UNAUTHORIZED)
+    }
+}
+
+#[tokio::test]
+async fn handlers_take_other_extractors_before_the_input() {
+    async fn save(User(user): User, Input(input): Input<Renamed>) -> String {
+        format!("{user}:{}", input.title)
+    }
+    let app = Router::new().route(SAVE.path(), SAVE.route(save));
+    let mut signed_in = request("id=42&display-title=Hello", true);
+    signed_in
+        .headers_mut()
+        .insert("x-user", "ada".parse().unwrap());
+    let response = app.clone().oneshot(signed_in).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 4096).await.unwrap(),
+        "ada:Hello"
+    );
+    let signed_out = request("id=42&display-title=Hello", true);
+    let response = app.clone().oneshot(signed_out).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.headers()["x-placebo-action"], "save");
+    // The mutation check runs before any of the handler's extractors.
+    let unmarked = request("id=42&display-title=Hello", false);
+    let response = app.oneshot(unmarked).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

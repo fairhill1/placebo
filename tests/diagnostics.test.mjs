@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test, after } from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
-import { serverFixture } from "./fixture.mjs";
+import { browserType, serverFixture } from "./fixture.mjs";
 
 const fixture = serverFixture("tasks");
 const evidence = [];
@@ -187,6 +187,25 @@ test("a lost response reports uncertainty and correlates with the completed serv
   assert.ok(fixture.serverLog.includes(`request=${sentId} POST /actions/save-task HTTP 200`));
   await audit.page.reload();
   assert.equal(await audit.page.locator('[data-task="1"] .task-title').textContent(), "Committed before losing the response");
+});
+
+test("a redirect, such as an expired session, is reported as a redirect rather than a network failure", {
+  skip: browserType.name() === "webkit" && "Playwright cannot fulfill redirects in WebKit",
+}, async t => {
+  const audit = await visit(t);
+  let followed = false;
+  await audit.page.route("**/login", route => { followed = true; return route.fulfill({ status: 200, contentType: "text/html", body: "Sign in" }); });
+  await audit.page.route("**/actions/save-task", route => route.fulfill({ status: 302, headers: { location: "/login" } }));
+  await submit(audit.page, "Not saved while signed out");
+  const { detail, text } = await error(audit, "redirected");
+  assert.equal(detail.status, null);
+  assert.equal(detail.requestState, "response-received");
+  assert.equal(detail.updateState, "not-applied");
+  assert.equal(detail.writeState, "unknown");
+  assert.match(text, /login page/);
+  assert.match(detail.hint, /Sign in again/);
+  assert.equal(followed, false, "the runtime does not follow the redirect");
+  assert.ok(!audit.logs.some(log => log.detail.code === "network-error"));
 });
 
 test("remounted secondary target identifies the old ownership without hiding the write uncertainty", async t => {

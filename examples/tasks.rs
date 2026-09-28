@@ -7,7 +7,10 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, MutationAction, Region, VersionedRegion, fields};
+use placebo::{
+    Component, Control, FormInput, Input, MutationAction, MutationBinding, Region, VersionedRegion,
+    fields,
+};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -54,6 +57,20 @@ fn row_summary(task: &Task) -> VersionedRegion {
     VersionedRegion::keyed("task-summary", task.id)
 }
 
+// The view's forms and the handlers' replies share these bindings, so the
+// regions a form declares are the ones its replies may patch.
+fn save_binding(task: &Task) -> MutationBinding<SaveTask> {
+    SAVE.bind(&Component::new("task", task.id))
+        .affects(row_summary(task))
+        .affects(SUMMARY)
+}
+
+fn add_binding() -> MutationBinding<AddTask> {
+    ADD.bind(&Component::new("composer", "new"))
+        .affects(LIST)
+        .affects(SUMMARY)
+}
+
 fn count(tasks: &Tasks) -> Markup {
     let completed = tasks.items.values().filter(|task| task.done).count();
     html! {
@@ -76,7 +93,6 @@ fn summary(task: &Task) -> Markup {
 }
 
 fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
-    let component = Component::new("task", task.id);
     let title_id = format!("title-{}", task.id);
     let feedback_id = format!("feedback-{}", task.id);
     let fields = fields! { SaveTask {
@@ -100,10 +116,7 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
             button .secondary type="button" data-dialog-close { "Cancel" }
         }
     } };
-    SAVE.bind(&component)
-        .affects(row_summary(task))
-        .affects(SUMMARY)
-        .form(fields)
+    save_binding(task).form(fields)
 }
 
 fn row(task: &Task) -> Markup {
@@ -124,7 +137,6 @@ fn row(task: &Task) -> Markup {
 }
 
 fn add_form(draft: &str, feedback: &str) -> Markup {
-    let component = Component::new("composer", "new");
     let fields = fields! { AddTask {
         div data-placebo-local="draft" {
             label for="new-title" { "Task title" }
@@ -138,7 +150,7 @@ fn add_form(draft: &str, feedback: &str) -> Markup {
     } };
     html! {
         .dialog-heading { p .eyebrow { "A FRESH START" } h2 #add-heading { "What’s next?" } p { "Give it a name. You can work out the rest later." } }
-        (ADD.bind(&component).affects(LIST).affects(SUMMARY).form(fields))
+        (add_binding().form(fields))
     }
 }
 
@@ -192,9 +204,8 @@ fn normalized(title: &str) -> Option<String> {
     (3..=80).contains(&title.chars().count()).then_some(title)
 }
 
-async fn add(store: Store, input: AddTask) -> Response {
-    let component = Component::new("composer", "new");
-    let binding = ADD.bind(&component);
+async fn add(State(store): State<Store>, Input(input): Input<AddTask>) -> Response {
+    let binding = add_binding();
     let Some(title) = normalized(&input.title) else {
         return binding
             .invalid(add_form(&input.title, "Use between 3 and 80 characters."))
@@ -220,14 +231,13 @@ async fn add(store: Store, input: AddTask) -> Response {
         .into_response()
 }
 
-async fn save(store: Store, input: SaveTask) -> Response {
+async fn save(State(store): State<Store>, Input(input): Input<SaveTask>) -> Response {
     tokio::time::sleep(Duration::from_millis(input.delay_ms.min(1500))).await;
     let mut tasks = store.lock().unwrap();
     let Some(task) = tasks.items.get_mut(&input.id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let component = Component::new("task", task.id);
-    let binding = SAVE.bind(&component);
+    let binding = save_binding(task);
     let Some(title) = normalized(&input.title) else {
         return binding
             .invalid(edit_form(

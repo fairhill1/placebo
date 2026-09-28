@@ -6,7 +6,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, MutationAction, fields};
+use placebo::{Component, Control, FormInput, Input, MutationAction, fields};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
@@ -74,8 +74,9 @@ async fn home(State(store): State<Store>) -> Markup {
     }
 }
 
-// SAVE.route supplies the state and deserialized SaveTitle directly.
-async fn save(store: Store, input: SaveTitle) -> Response {
+// SAVE.route requires `Input<SaveTitle>` last. Other Axum extractors, such as
+// a session for authorization, go before it.
+async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Response {
     let mut items = store.lock().unwrap();
     let Some(item) = items.iter_mut().find(|item| item.id == input.id) else {
         return StatusCode::NOT_FOUND.into_response();

@@ -1,12 +1,17 @@
 use axum::{
-    extract::{FromRequestParts, State},
+    extract::{FromRequestParts, Request},
+    handler::Handler,
     http::{StatusCode, header, request::Parts},
+    middleware::Next,
     response::{IntoResponse, Response},
 };
 use maud::{DOCTYPE, Markup, Render, html};
-use std::{future::Future, marker::PhantomData};
+use std::marker::PhantomData;
 
-use crate::{Config, FormFields, FormInput, RegionTarget, Update, VERSION, forms::FormBody};
+use crate::{
+    Applied, Config, EndsWithInput, Envelope, FormFields, FormInput, RegionTarget, Rejected,
+    VERSION,
+};
 
 /// Identity is scoped by component kind and a runtime instance key. This is
 /// UI addressing, not authorization to modify the record with that key.
@@ -114,42 +119,65 @@ impl<I: FormInput> MutationAction<I> {
         self.path
     }
 
-    pub fn bind(self, component: &Component) -> MutationBinding<'_, I> {
+    pub fn bind(self, component: &Component) -> MutationBinding<I> {
         MutationBinding {
             action: self,
-            component,
+            target: component.id().to_owned(),
             effects: Vec::new(),
         }
     }
 
-    /// Connect this payload type to the handler and enforce the mutation header.
-    pub fn route<S, H, F, R>(self, handler: H) -> axum::routing::MethodRouter<S>
+    /// Registers a POST handler behind the mutation request check. It may take
+    /// any Axum extractors, such as a session, and must end with [`crate::Input`]
+    /// of this action's payload type.
+    pub fn route<H, T, S>(self, handler: H) -> axum::routing::MethodRouter<S>
     where
+        H: Handler<T, S>,
+        T: EndsWithInput<I> + 'static,
         S: Clone + Send + Sync + 'static,
-        I: Send + 'static,
-        H: Fn(S, I) -> F + Clone + Send + Sync + 'static,
-        F: Future<Output = R> + Send + 'static,
-        R: IntoResponse + 'static,
     {
-        axum::routing::post(
-            move |State(state): State<S>, _: MutationRequest, FormBody(input): FormBody<I>| {
-                handler(state, input)
-            },
-        )
-        .layer(axum::middleware::from_fn_with_state(
-            self.name,
-            crate::diagnostics::request,
-        ))
+        axum::routing::post(handler)
+            .layer(axum::middleware::from_fn(require_mutation))
+            .layer(axum::middleware::from_fn_with_state(
+                self.name,
+                crate::diagnostics::request,
+            ))
     }
 }
 
-pub struct MutationBinding<'a, I: FormInput> {
+/// Runs before the handler's extractors, so refused requests reach no handler code.
+async fn require_mutation(request: Request, next: Next) -> Response {
+    let (mut parts, body) = request.into_parts();
+    match MutationRequest::from_request_parts(&mut parts, &()).await {
+        Ok(MutationRequest) => next.run(Request::from_parts(parts, body)).await,
+        Err(rejection) => rejection,
+    }
+}
+
+/// A mutation form and its replies, for one component instance. Build the view's
+/// form and the handler's replies from one function that returns the binding,
+/// so both agree on `affects`:
+///
+/// ```
+/// use placebo::{Component, FormInput, MutationAction, MutationBinding, VersionedRegion};
+/// use maud::html;
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Save { title: String }
+/// const SAVE: MutationAction<Save> = MutationAction::new("save", "/save");
+/// const COUNTS: VersionedRegion = VersionedRegion::new("counts");
+/// fn save_binding(id: u64) -> MutationBinding<Save> {
+///     SAVE.bind(&Component::new("editor", id)).affects(COUNTS)
+/// }
+/// // The handler replies through the same binding as the view's form.
+/// save_binding(1).reply(html! {}).also_replace(COUNTS, 2, html! { "3 items" });
+/// ```
+pub struct MutationBinding<I: FormInput> {
     action: MutationAction<I>,
-    component: &'a Component,
+    target: String,
     effects: Vec<String>,
 }
 
-impl<I: FormInput> MutationBinding<'_, I> {
+impl<I: FormInput> MutationBinding<I> {
     /// Declare additional mounted regions this form's response may update.
     /// Their DOM identities are captured when the request is scheduled.
     pub fn affects(mut self, region: impl RegionTarget) -> Self {
@@ -163,7 +191,7 @@ impl<I: FormInput> MutationBinding<'_, I> {
         let config = Config {
             version: VERSION,
             action: self.action.name,
-            target: self.component.id(),
+            target: &self.target,
             policy: "exclusive",
             operation: "refresh-component",
             input_delay_ms: None,
@@ -173,20 +201,30 @@ impl<I: FormInput> MutationBinding<'_, I> {
         html! { form method="post" action=(self.action.path) data-placebo=(config) { (content) } }
     }
 
-    pub fn reply(&self, content: Markup) -> Update {
-        self.update(StatusCode::OK, content)
+    pub fn reply(&self, content: Markup) -> Applied {
+        Applied {
+            envelope: self.envelope(StatusCode::OK, content),
+            effects: self.effects.clone(),
+        }
     }
-    pub fn invalid(&self, content: Markup) -> Update {
-        self.update(StatusCode::UNPROCESSABLE_ENTITY, content)
+    pub fn invalid(&self, content: Markup) -> Rejected {
+        self.rejected(StatusCode::UNPROCESSABLE_ENTITY, content)
     }
-    pub fn conflict(&self, content: Markup) -> Update {
-        self.update(StatusCode::CONFLICT, content)
+    pub fn conflict(&self, content: Markup) -> Rejected {
+        self.rejected(StatusCode::CONFLICT, content)
     }
 
-    fn update(&self, status: StatusCode, content: Markup) -> Update {
-        Update::new(
+    fn rejected(&self, status: StatusCode, content: Markup) -> Rejected {
+        Rejected {
+            envelope: self.envelope(status, content),
+            effects: self.effects.clone(),
+        }
+    }
+
+    fn envelope(&self, status: StatusCode, content: Markup) -> Envelope {
+        Envelope::new(
             self.action.name,
-            self.component.id(),
+            &self.target,
             "refresh-component",
             status,
             content,
@@ -273,7 +311,8 @@ mod tests {
         let action = MutationAction::<Input>::new("save", "/save");
         for id in [7, 19] {
             let component = Component::new("editor", id);
-            let response = serde_json::to_value(action.bind(&component).reply(html! {})).unwrap();
+            let response =
+                serde_json::to_value(action.bind(&component).reply(html! {}).envelope).unwrap();
             assert_eq!(response["target"], format!("editor:{id}"));
             assert_eq!(response["action"], "save");
         }

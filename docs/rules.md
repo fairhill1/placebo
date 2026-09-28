@@ -8,7 +8,8 @@ These apply to people and coding agents alike.
   `ACTION.bind(region).form(fields)` for reads. Don't write `data-placebo`
   attributes, named inputs for payload fields, or protocol headers by hand.
 - **Routes:** register every action with its adapter:
-  `.route(ACTION.path(), ACTION.route(handler))`. A plain Axum route such as
+  `.route(ACTION.path(), ACTION.route(handler))`. The handler takes any Axum
+  extractors (state, session) and then `Input<Payload>` last. A plain Axum route such as
   `post(save)` skips payload decoding and the mutation request check; the
   browser reports it as `unadapted-route`. Unrelated pages, assets, and JSON
   endpoints are ordinary Axum routes.
@@ -24,7 +25,8 @@ These apply to people and coding agents alike.
   it outside the refreshed component. Listen for `placebo:applied` on `document`.
 - **Shared counts and summaries:** use `VersionedRegion`, mount it with
   `region.mount(revision, contents)`, declare it with `.affects(region)`, and
-  reply with `.also_replace(region, revision, contents)`. Increment the revision
+  reply with `.also_replace(region, revision, contents)`. Return the binding
+  from one function that both the view's form and the handler's reply use. Increment the revision
   with the data under the same lock or transaction. Use a plain `Region` for
   read results and `.also_append(...)` collections.
 - **Verify in a browser:** compiling proves the Rust side agrees. Before calling

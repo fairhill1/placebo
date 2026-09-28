@@ -10,21 +10,20 @@
 extern crate self as placebo;
 
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode, header},
+    handler::Handler,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use maud::{Markup, html};
 use serde::Serialize;
-use std::{borrow::Cow, future::Future, marker::PhantomData};
+use std::{borrow::Cow, marker::PhantomData};
 
 mod forms;
-use forms::QueryInput;
 #[doc(hidden)]
 pub use forms::private as __private;
 pub use forms::{
-    Control, FieldValue, FormEnum, FormFields, FormInput, FormValue, NumberValue, SingleValue,
-    TextValue,
+    Control, FieldValue, FormEnum, FormFields, FormInput, FormValue, Input, NumberValue,
+    SingleValue, TextValue,
 };
 /// Render a typed form body using Maud markup and `@field name = control;` entries.
 /// See [`FormInput`] for examples and compile-time guarantees.
@@ -52,6 +51,16 @@ pub struct Region(Cow<'static, str>);
 impl Region {
     pub const fn new(id: &'static str) -> Self {
         assert!(!id.is_empty(), "a region needs a nonempty id");
+        let bytes = id.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // HTML ids cannot contain ASCII whitespace.
+            assert!(
+                !bytes[i].is_ascii_whitespace(),
+                "a region id cannot contain whitespace"
+            );
+            i += 1;
+        }
         Self(Cow::Borrowed(id))
     }
 
@@ -148,6 +157,52 @@ impl RegionTarget for VersionedRegion {
     }
 }
 
+/// The extractor list of an action handler: any Axum extractors, then
+/// [`Input<I>`] last. `action.route(handler)` requires it, so a handler for
+/// another payload, or without one, does not compile.
+///
+/// ```compile_fail
+/// use placebo::{FormInput, Input, MutationAction};
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Save { title: String }
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Other { name: String }
+/// async fn save(Input(_): Input<Other>) {}
+/// let route: axum::routing::MethodRouter<()> =
+///     MutationAction::<Save>::new("save", "/save").route(save);
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "an action handler must take `placebo::Input<{I}>` as its last argument",
+    label = "handler does not end with `Input<{I}>`",
+    note = "other Axum extractors, such as `State` or a session, go before the input"
+)]
+pub trait EndsWithInput<I> {}
+
+// Axum's handler extractor tuples are `(M, T1, ..., Tn)`, with up to 16 extractors.
+macro_rules! ends_with_input {
+    ($($ty:ident),*) => {
+        impl<M, $($ty,)* I> EndsWithInput<I> for (M, $($ty,)* Input<I>,) {}
+    };
+}
+ends_with_input!();
+ends_with_input!(T1);
+ends_with_input!(T1, T2);
+ends_with_input!(T1, T2, T3);
+ends_with_input!(T1, T2, T3, T4);
+ends_with_input!(T1, T2, T3, T4, T5);
+ends_with_input!(T1, T2, T3, T4, T5, T6);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8, T9);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
+ends_with_input!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
+ends_with_input!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15
+);
+
 /// A GET-only action with latest-request-wins scheduling per mounted target.
 /// Aborting a request is NOT a way to undo server writes: this API is for reads.
 pub struct ReadAction<I: FormInput> {
@@ -187,21 +242,15 @@ impl<I: FormInput> ReadAction<I> {
         }
     }
 
-    /// Registers a GET handler whose payload must match this action's input.
-    pub fn route<S, H, F, R>(self, handler: H) -> axum::routing::MethodRouter<S>
+    /// Registers a GET handler. It may take any Axum extractors, and must end
+    /// with [`Input`] of this action's payload type.
+    pub fn route<H, T, S>(self, handler: H) -> axum::routing::MethodRouter<S>
     where
+        H: Handler<T, S>,
+        T: EndsWithInput<I> + 'static,
         S: Clone + Send + Sync + 'static,
-        I: Send + 'static,
-        H: Fn(S, I, HeaderMap) -> F + Clone + Send + Sync + 'static,
-        F: Future<Output = R> + Send + 'static,
-        R: IntoResponse + 'static,
     {
-        axum::routing::get(
-            move |State(state): State<S>, QueryInput(input): QueryInput<I>, headers: HeaderMap| {
-                handler(state, input, headers)
-            },
-        )
-        .layer(axum::middleware::from_fn_with_state(
+        axum::routing::get(handler).layer(axum::middleware::from_fn_with_state(
             self.name,
             diagnostics::request,
         ))
@@ -249,14 +298,14 @@ impl<I: FormInput> ReadBinding<I> {
         }
     }
 
-    pub fn reply(&self, content: Markup) -> Update {
-        Update::new(
+    pub fn reply(&self, content: Markup) -> ReadUpdate {
+        ReadUpdate(Envelope::new(
             self.action.name,
             self.target.id(),
             "replace-children",
             StatusCode::OK,
             content,
-        )
+        ))
     }
 }
 
@@ -271,8 +320,9 @@ struct Config<'a> {
     effects: Vec<&'a str>,
 }
 
+/// The serialized update. The public reply types decide which additions apply.
 #[derive(Serialize)]
-pub struct Update {
+struct Envelope {
     version: u8,
     action: &'static str,
     target: String,
@@ -285,7 +335,7 @@ pub struct Update {
     status: StatusCode,
 }
 
-impl Update {
+impl Envelope {
     fn new(
         action: &'static str,
         target: &str,
@@ -309,50 +359,9 @@ impl Update {
             patches: Vec::new(),
         }
     }
-
-    /// Accept incoming local markup only if it has not changed since submission.
-    /// Newer browser edits win. Validation/conflict responses cannot reset drafts.
-    pub fn reset_local(mut self, key: &str) -> Self {
-        assert!(self.status == StatusCode::OK && self.operation == "refresh-component");
-        assert!(!key.is_empty() && !self.reset_local.iter().any(|k| k == key));
-        self.reset_local.push(key.into());
-        self
-    }
-
-    /// Refresh a declared shared region only when its server revision is newer.
-    /// `VersionedRegion::mount` requires the corresponding initial revision.
-    pub fn also_replace(mut self, region: VersionedRegion, revision: u64, content: Markup) -> Self {
-        self.patches.push(Patch {
-            target: region.id().into(),
-            operation: "replace-children",
-            revision: Some(revision.to_string()),
-            html: content.into_string(),
-        });
-        self
-    }
-
-    /// Append new content without replacing existing component instances.
-    /// Delivery is not retried; existing/duplicate ids cause rejection.
-    pub fn also_append(mut self, region: Region, content: impl maud::Render) -> Self {
-        self.patches.push(Patch {
-            target: region.id().into(),
-            operation: "append-children",
-            revision: None,
-            html: content.render().into_string(),
-        });
-        self
-    }
 }
 
-#[derive(Serialize)]
-struct Patch {
-    target: String,
-    operation: &'static str,
-    revision: Option<String>,
-    html: String,
-}
-
-impl IntoResponse for Update {
+impl IntoResponse for Envelope {
     fn into_response(self) -> Response {
         (
             self.status,
@@ -364,6 +373,133 @@ impl IntoResponse for Update {
         )
             .into_response()
     }
+}
+
+/// A read reply. It replaces its region's children and nothing else.
+///
+/// Reads cannot patch other regions:
+/// ```compile_fail
+/// use placebo::{FormInput, ReadAction, Region};
+/// use maud::html;
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Search { q: String }
+/// ReadAction::<Search>::new("search", "/search").bind(Region::new("results"))
+///     .reply(html! {}).also_append(Region::new("list"), html! {});
+/// ```
+pub struct ReadUpdate(Envelope);
+
+impl IntoResponse for ReadUpdate {
+    fn into_response(self) -> Response {
+        self.0.into_response()
+    }
+}
+
+/// A successful mutation reply, from `MutationBinding::reply`. Only a
+/// successful write can reset drafts or append new instances.
+pub struct Applied {
+    envelope: Envelope,
+    effects: Vec<String>,
+}
+
+impl Applied {
+    /// Accept incoming local markup only if it has not changed since submission.
+    /// Newer browser edits win.
+    pub fn reset_local(mut self, key: &str) -> Self {
+        let resets = &mut self.envelope.reset_local;
+        assert!(!key.is_empty() && !resets.iter().any(|k| k == key));
+        resets.push(key.into());
+        self
+    }
+
+    /// Refresh a declared shared region only when its server revision is newer.
+    /// `VersionedRegion::mount` requires the corresponding initial revision.
+    pub fn also_replace(mut self, region: VersionedRegion, revision: u64, content: Markup) -> Self {
+        replace(&mut self.envelope, &self.effects, region, revision, content);
+        self
+    }
+
+    /// Append new content without replacing existing component instances.
+    /// Delivery is not retried; existing/duplicate ids cause rejection.
+    pub fn also_append(mut self, region: Region, content: impl maud::Render) -> Self {
+        declared(&self.effects, region.id());
+        self.envelope.patches.push(Patch {
+            target: region.id().into(),
+            operation: "append-children",
+            revision: None,
+            html: content.render().into_string(),
+        });
+        self
+    }
+}
+
+impl IntoResponse for Applied {
+    fn into_response(self) -> Response {
+        self.envelope.into_response()
+    }
+}
+
+/// A validation or conflict reply, from `MutationBinding::invalid` or
+/// `conflict`. It can refresh shared snapshots, but keeps drafts and adds nothing.
+///
+/// ```compile_fail
+/// use placebo::{Component, FormInput, MutationAction};
+/// use maud::html;
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Save { title: String }
+/// MutationAction::<Save>::new("save", "/save").bind(&Component::new("editor", 1))
+///     .invalid(html! {}).reset_local("draft");
+/// ```
+pub struct Rejected {
+    envelope: Envelope,
+    effects: Vec<String>,
+}
+
+impl Rejected {
+    /// Refresh a declared shared region only when its server revision is newer.
+    pub fn also_replace(mut self, region: VersionedRegion, revision: u64, content: Markup) -> Self {
+        replace(&mut self.envelope, &self.effects, region, revision, content);
+        self
+    }
+}
+
+impl IntoResponse for Rejected {
+    fn into_response(self) -> Response {
+        self.envelope.into_response()
+    }
+}
+
+fn replace(
+    envelope: &mut Envelope,
+    effects: &[String],
+    region: VersionedRegion,
+    revision: u64,
+    content: Markup,
+) {
+    declared(effects, region.id());
+    envelope.patches.push(Patch {
+        target: region.id().into(),
+        operation: "replace-children",
+        revision: Some(revision.to_string()),
+        html: content.into_string(),
+    });
+}
+
+/// The browser rejects patches its form did not declare. Checking the reply's
+/// own binding catches a handler that builds a different binding from the view.
+fn declared(effects: &[String], id: &str) {
+    debug_assert!(
+        effects.iter().any(|effect| effect == id),
+        "region '{id}' is not declared with .affects() on this reply's binding. \
+         Build the view's form and the handler's reply from one binding function."
+    );
+}
+
+#[derive(Serialize)]
+struct Patch {
+    target: String,
+    operation: &'static str,
+    revision: Option<String>,
+    html: String,
 }
 
 /// Serve the exact browser half embedded in this crate, with no independent
@@ -407,7 +543,7 @@ mod tests {
         let region = Region::new("results");
         let action = ReadAction::<Search>::new("search", "/search").bind(region.clone());
         let update =
-            serde_json::to_value(action.reply(html! { p { "<script>bad()</script>" } })).unwrap();
+            serde_json::to_value(action.reply(html! { p { "<script>bad()</script>" } }).0).unwrap();
         assert_eq!(update["target"], region.id());
         assert_eq!(update["html"], "<p>&lt;script&gt;bad()&lt;/script&gt;</p>");
         let form = action
@@ -432,20 +568,22 @@ mod tests {
     fn coordinated_updates_keep_exact_server_revisions_and_explicit_resets() {
         let component = Component::new("editor", 42);
         let summary = VersionedRegion::keyed("summary", 42);
-        let action = MutationAction::<Search>::new("save", "/save");
-        let form = action
+        let list = Region::new("list");
+        let binding = MutationAction::<Search>::new("save", "/save")
             .bind(&component)
             .affects(summary.clone())
+            .affects(list.clone());
+        let form = binding
             .form(Search::fields().with_q(Control::text("draft")).finish())
             .into_string();
-        assert!(form.contains("&quot;effects&quot;:[&quot;summary:42&quot;]"));
+        assert!(form.contains("&quot;effects&quot;:[&quot;summary:42&quot;,&quot;list&quot;]"));
         let update = serde_json::to_value(
-            action
-                .bind(&component)
+            binding
                 .reply(html! { p { "Saved" } })
                 .reset_local("draft")
                 .also_replace(summary.clone(), u64::MAX, html! { p { "<new>" } })
-                .also_append(Region::new("list"), html! { p { "Next" } }),
+                .also_append(list, html! { p { "Next" } })
+                .envelope,
         )
         .unwrap();
         assert_eq!(update["target"], component.id());
@@ -463,11 +601,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn validation_cannot_request_a_draft_reset() {
+    #[should_panic(expected = "not declared with .affects()")]
+    #[cfg(debug_assertions)]
+    fn replies_patch_only_regions_their_binding_declares() {
         MutationAction::<Search>::new("save", "/save")
             .bind(&Component::new("editor", 1))
-            .invalid(html! {})
-            .reset_local("draft");
+            .reply(html! {})
+            .also_replace(VersionedRegion::new("counts"), 1, html! {});
+    }
+
+    #[test]
+    #[should_panic(expected = "whitespace")]
+    fn region_ids_cannot_contain_whitespace() {
+        Region::new("my region");
     }
 }

@@ -70,6 +70,11 @@ application may have committed even when the UI did not update. Read current
 server state before retrying; neither an HTTP status nor a diagnostic implements
 transaction rollback or idempotent retries.
 
+A redirect is reported as `redirected`, not as a network failure. The usual
+cause is authentication middleware sending an expired session to a login page,
+which happens before the handler runs. The browser does not expose the redirect's
+status or location, so `status` is null and the write outcome stays unknown.
+
 Method/path context excludes query strings and fragments. The framework does
 not log form bodies, response bodies, or credentials. JSON parser messages can
 contain body snippets, so malformed JSON gets a sanitized error. Network and

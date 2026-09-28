@@ -137,7 +137,8 @@ impl<I: FormInput> MutationAction<I> {
         S: Clone + Send + Sync + 'static,
     {
         axum::routing::post(handler)
-            .layer(axum::middleware::from_fn(require_mutation))
+            // A route layer skips the 405 fallback for other methods.
+            .route_layer(axum::middleware::from_fn(require_mutation))
             .layer(axum::middleware::from_fn_with_state(
                 self.name,
                 crate::diagnostics::request,

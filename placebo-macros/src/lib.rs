@@ -12,6 +12,96 @@ pub fn fields(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[proc_macro_derive(FormEnum, attributes(serde))]
+pub fn form_enum(input: TokenStream) -> TokenStream {
+    expand_enum(parse_macro_input!(input as DeriveInput))
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// A form enum renders its serde name and decodes it again, so both directions
+/// must agree. Reject serde attributes that make them differ or add data.
+fn expand_enum(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let Data::Enum(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "FormEnum requires an enum with unit variants",
+        ));
+    };
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "FormEnum requires a concrete enum without generics",
+        ));
+    }
+    if data.variants.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "FormEnum requires at least one variant",
+        ));
+    }
+    check_serde(
+        &input.attrs,
+        &[
+            "untagged", "tag", "content", "remote", "from", "try_from", "into",
+        ],
+    )?;
+    for variant in &data.variants {
+        if !matches!(variant.fields, Fields::Unit) {
+            return Err(syn::Error::new_spanned(
+                &variant.fields,
+                "FormEnum variants cannot hold data; a form submits one name per value",
+            ));
+        }
+        check_serde(
+            &variant.attrs,
+            &[
+                "skip",
+                "skip_serializing",
+                "skip_deserializing",
+                "serialize_with",
+                "deserialize_with",
+                "with",
+                "untagged",
+            ],
+        )?;
+    }
+    let name = &input.ident;
+    Ok(quote! {
+        impl ::placebo::__private::EnumSeal for #name {}
+        impl ::placebo::FormEnum for #name {}
+    })
+}
+
+fn check_serde(attrs: &[syn::Attribute], rejected: &[&str]) -> syn::Result<()> {
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("serde")) {
+        attr.parse_nested_meta(|meta| {
+            if rejected.iter().any(|name| meta.path.is_ident(name)) {
+                return Err(meta.error(
+                    "FormEnum values must serialize and deserialize as the same variant name",
+                ));
+            }
+            if meta.input.peek(syn::Token![=]) {
+                let _: syn::Expr = meta.value()?.parse()?;
+            } else if meta.input.peek(syn::token::Paren) {
+                if meta.path.is_ident("rename") || meta.path.is_ident("rename_all") {
+                    return Err(meta.error(
+                        "FormEnum needs one name per variant; use rename = \"...\" instead of separate serialize/deserialize names",
+                    ));
+                }
+                meta.parse_nested_meta(|nested| {
+                    if nested.input.peek(syn::Token![=]) {
+                        let _: syn::Expr = nested.value()?.parse()?;
+                    }
+                    Ok(())
+                })?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
 #[proc_macro_derive(FormInput, attributes(serde))]
 pub fn form_input(input: TokenStream) -> TokenStream {
     expand(parse_macro_input!(input as DeriveInput))
@@ -212,6 +302,37 @@ mod tests {
             "struct Input { #[serde(rename = \"x\")] a: String, #[serde(rename = \"x\")] b: String }",
         ] {
             assert!(expand(syn::parse_str(source).unwrap()).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn form_enums_reject_data_and_asymmetric_serde_names() {
+        for source in [
+            "struct Priority;",
+            "enum Priority {}",
+            "enum Priority<T> { Low(T) }",
+            "enum Priority { Low(u8) }",
+            "enum Priority { Low { level: u8 } }",
+            "#[serde(untagged)] enum Priority { Low }",
+            "#[serde(tag = \"kind\")] enum Priority { Low }",
+            "#[serde(rename_all(serialize = \"lowercase\"))] enum Priority { Low }",
+            "enum Priority { #[serde(rename(deserialize = \"low\"))] Low }",
+            "enum Priority { #[serde(skip)] Low, High }",
+        ] {
+            assert!(
+                expand_enum(syn::parse_str(source).unwrap()).is_err(),
+                "{source}"
+            );
+        }
+        for source in [
+            "enum Priority { Low, High }",
+            "#[serde(rename_all = \"lowercase\", deny_unknown_fields)] enum Priority { Low }",
+            "enum Priority { #[serde(rename = \"lo\", alias = \"l\")] Low, #[serde(other)] Unknown }",
+        ] {
+            assert!(
+                expand_enum(syn::parse_str(source).unwrap()).is_ok(),
+                "{source}"
+            );
         }
     }
 }

@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use maud::{Markup, PreEscaped, html};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use std::{fmt::Display, marker::PhantomData};
 
 #[doc = include_str!("../docs/typed-forms.md")]
@@ -32,23 +32,50 @@ impl<I> FormFields<I> {
     }
 }
 
-mod sealed {
-    pub trait Value {}
-    pub trait Field {}
+/// Rustc may report any trait in the chain for an unsupported field type, so
+/// each one carries the same explanation.
+macro_rules! field_type_trait {
+    ($item:item) => {
+        #[diagnostic::on_unimplemented(
+            message = "`{Self}` is not a supported form field type",
+            note = "form fields can be String, bool, integers, floats, #[derive(FormEnum)] enums, or Option<T> or Vec<T> of those"
+        )]
+        $item
+    };
 }
 
-/// Scalar values whose Display encoding matches their form deserialization.
-pub trait FieldValue: sealed::Value + Display + DeserializeOwned {}
+mod sealed {
+    field_type_trait!(
+        pub trait Value {}
+    );
+    field_type_trait!(
+        pub trait Field {}
+    );
+}
 
-/// Every supported payload field type: a [`FieldValue`], an `Option` of one
-/// (an empty or absent submission is `None`), or a `Vec` of one (repeated submissions).
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a supported form field type",
-    note = "form fields can be String, bool, integers, floats, Option<T> or Vec<T> of those"
-)]
-pub trait FormValue: sealed::Field + DeserializeOwned {
-    #[doc(hidden)]
-    const ABSENT: private::Absent;
+field_type_trait! {
+    /// A scalar submitted as one form value: `String`, `bool`, integers, floats, or
+    /// an enum with `#[derive(FormEnum)]`. `Option` and `Vec` of these are fields too.
+    pub trait FieldValue: sealed::Value + DeserializeOwned {
+        #[doc(hidden)]
+        const ABSENT: private::Absent;
+        #[doc(hidden)]
+        fn encode(&self) -> String;
+    }
+}
+
+/// A unit-only enum usable as a form value. Derive it with `#[derive(FormEnum)]`
+/// alongside serde's `Serialize` and `Deserialize`: the submitted value is the
+/// variant's serde name, so `rename` and `rename_all` apply to forms as well.
+pub trait FormEnum: Serialize + DeserializeOwned + private::EnumSeal {}
+
+field_type_trait! {
+    /// Every supported payload field type: a [`FieldValue`], an `Option` of one
+    /// (an empty or absent submission is `None`), or a `Vec` of one (repeated submissions).
+    pub trait FormValue: sealed::Field + DeserializeOwned {
+        #[doc(hidden)]
+        const ABSENT: private::Absent;
+    }
 }
 
 /// A value submitted once by a single control: a scalar, or an optional scalar
@@ -69,25 +96,52 @@ pub trait NumberValue: SingleValue {
     const STEP: Option<&'static str>;
 }
 
+impl<T: FieldValue> sealed::Field for T {}
+impl<T: FieldValue> FormValue for T {
+    const ABSENT: private::Absent = <T as FieldValue>::ABSENT;
+}
+impl<T: FieldValue> SingleValue for T {
+    fn encode(&self) -> String {
+        FieldValue::encode(self)
+    }
+}
+impl<T: FieldValue> sealed::Field for Option<T> {}
+impl<T: FieldValue> FormValue for Option<T> {
+    const ABSENT: private::Absent = private::Absent::None;
+}
+impl<T: FieldValue> SingleValue for Option<T> {
+    fn encode(&self) -> String {
+        self.as_ref().map(FieldValue::encode).unwrap_or_default()
+    }
+}
+impl<T: FieldValue> sealed::Field for Vec<T> {}
+impl<T: FieldValue> FormValue for Vec<T> {
+    const ABSENT: private::Absent = private::Absent::Empty;
+}
+
 macro_rules! scalars {
     ($absent:ident: $($ty:ty),* $(,)?) => { $(
         impl sealed::Value for $ty {}
-        impl FieldValue for $ty {}
-        impl sealed::Field for $ty {}
-        impl FormValue for $ty { const ABSENT: private::Absent = private::Absent::$absent; }
-        impl SingleValue for $ty { fn encode(&self) -> String { self.to_string() } }
-        impl sealed::Field for Option<$ty> {}
-        impl FormValue for Option<$ty> { const ABSENT: private::Absent = private::Absent::None; }
-        impl SingleValue for Option<$ty> {
-            fn encode(&self) -> String { self.as_ref().map(ToString::to_string).unwrap_or_default() }
+        impl FieldValue for $ty {
+            const ABSENT: private::Absent = private::Absent::$absent;
+            fn encode(&self) -> String { self.to_string() }
         }
-        impl sealed::Field for Vec<$ty> {}
-        impl FormValue for Vec<$ty> { const ABSENT: private::Absent = private::Absent::Empty; }
     )* };
 }
 scalars!(Required: String, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64);
 // An unchecked checkbox submits nothing, so an absent bool decodes as false.
 scalars!(False: bool);
+
+impl<T: FormEnum> sealed::Value for T {}
+impl<T: FormEnum> FieldValue for T {
+    const ABSENT: private::Absent = private::Absent::Required;
+    fn encode(&self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(name)) => name,
+            _ => panic!("a FormEnum must serialize as a unit variant name"),
+        }
+    }
+}
 
 impl TextValue for String {}
 impl TextValue for Option<String> {}
@@ -387,7 +441,7 @@ impl Control<bool> {
     }
 }
 
-impl<T: FieldValue + SingleValue + PartialEq> Control<Vec<T>> {
+impl<T: FieldValue + PartialEq> Control<Vec<T>> {
     /// A `<select multiple>`. Every selected value must be one of the options.
     pub fn multi_select<L: Into<String>>(
         selected: impl IntoIterator<Item = T>,
@@ -511,6 +565,9 @@ pub mod private {
     pub use maud::{Markup, html};
     pub struct Missing;
     pub struct Present;
+
+    /// Implemented only by `#[derive(FormEnum)]`, which checks for unit variants.
+    pub trait EnumSeal {}
 
     /// What an absent field means when a browser omits it from a submission.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

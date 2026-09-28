@@ -44,7 +44,7 @@ test("the runtime submits every control type and the adapter decodes it", async 
   await applied(page, "applied");
   assert.equal(await page.locator("#saved").textContent(), 'SaveProfile { name: "Ada Lovelace", ' +
     'email: "ada@example.com", nickname: None, bio: "\\nIndented\\nsecond line", age: None, height_m: 1.72, ' +
-    'newsletter: false, plan: "pro", role: Some(2), topics: ["web", "ops"], days: [5], birthday: Some("1815-12-10") }');
+    'newsletter: false, plan: Pro, role: Some(2), topics: ["web", "ops"], days: [5], birthday: Some("1815-12-10") }');
   // The reset draft renders the saved values, including the textarea's leading newline.
   assert.deepEqual(await controlState(page), { name: "Ada Lovelace", bio: "\nIndented\nsecond line",
     newsletter: false, role: "2", topics: ["web", "ops"], days: ["5"] });

@@ -6,8 +6,8 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, MutationAction, fields};
-use serde::Deserialize;
+use placebo::{Component, Control, FormEnum, FormInput, MutationAction, fields};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 #[allow(dead_code)]
 mod support;
@@ -25,13 +25,20 @@ struct SaveProfile {
     age: Option<u32>,
     height_m: f64,
     newsletter: bool,
-    plan: String,
+    plan: Plan,
     role: Option<u8>,
     #[serde(default)]
     topics: Vec<String>,
     #[serde(default)]
     days: Vec<u8>,
     birthday: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, FormEnum)]
+#[serde(rename_all = "lowercase")]
+enum Plan {
+    Free,
+    Pro,
 }
 
 type Store = Arc<Mutex<SaveProfile>>;
@@ -58,7 +65,7 @@ fn editor(saved: &SaveProfile, draft: &SaveProfile, feedback: Option<&str>) -> M
             @field birthday = Control::date(d.birthday).id("birthday");
             label { @field newsletter = Control::checkbox(d.newsletter).id("newsletter"); " Newsletter" }
             label for="plan" { "Plan" }
-            @field plan = Control::select(d.plan, [("free".to_owned(), "Free"), ("pro".to_owned(), "Pro")]).id("plan");
+            @field plan = Control::select(d.plan, [(Plan::Free, "Free"), (Plan::Pro, "Pro")]).id("plan");
             fieldset {
                 legend { "Role" }
                 @field role = Control::radios(d.role, [(Some(1), "Owner"), (Some(2), "Editor")]).id("role");
@@ -125,7 +132,7 @@ async fn main() {
         age: Some(36),
         height_m: 1.65,
         newsletter: true,
-        plan: "free".into(),
+        plan: Plan::Free,
         role: None,
         topics: vec!["rust".into()],
         days: vec![6],

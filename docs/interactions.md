@@ -6,24 +6,34 @@ add dialog. State is in memory; restarting the server resets the tasks.
 
 ## A response can update several declared regions
 
-A mutation form declares additional destinations with `affects()`:
+A mutation form declares additional destinations with `affects()`. Declare
+them once, in a function that both the view and the handler call:
 
 ```rust
-SAVE.bind(&component)
-    .affects(row_summary(task))
-    .affects(SUMMARY)
-    .form(fields)
+fn save_binding(task: &Task) -> MutationBinding<SaveTask> {
+    SAVE.bind(&Component::new("task", task.id))
+        .affects(row_summary(task))
+        .affects(SUMMARY)
+}
+// View
+save_binding(task).form(fields)
 ```
 
 The response still refreshes its originating component. It can also replace
 shared snapshots or append new elements to a collection:
 
 ```rust
-binding.reply(editor_markup)
+// Handler
+save_binding(task).reply(editor_markup)
     .reset_local("draft")
     .also_replace(row_summary(task), task.version, summary_markup)
     .also_replace(SUMMARY, tasks.revision, count_markup)
 ```
+
+The browser rejects a patch its form did not declare. Replies also carry their
+binding's declarations, so in debug builds a handler that patches an undeclared
+region panics at the server, before the response is sent. `invalid` and
+`conflict` replies can refresh snapshots with `also_replace`, but cannot append.
 
 Declare counts with `VersionedRegion::new("task-count")` and row summaries with
 `VersionedRegion::keyed("task-summary", task.id)`. Mount them with

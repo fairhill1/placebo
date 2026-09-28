@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, MutationAction, fields};
+use placebo::{Component, Control, FormInput, Input, MutationAction, fields};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -122,7 +122,7 @@ async fn home(State(store): State<Store>) -> Markup {
     }
 }
 
-async fn save(store: Store, input: SaveTitle) -> Response {
+async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Response {
     tokio::time::sleep(Duration::from_millis(input.delay_ms.min(1500))).await;
     let mut items = store.lock().unwrap();
     let Some(item) = items.get_mut(&input.id) else {

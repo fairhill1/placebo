@@ -5,7 +5,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Control, FormInput, ReadAction, Region, UPDATE_TYPE, fields};
+use placebo::{Control, FormInput, Input, ReadAction, Region, UPDATE_TYPE, fields};
 use serde::Deserialize;
 use std::time::Duration;
 mod support;
@@ -131,11 +131,11 @@ async fn home() -> Markup {
     page("", "")
 }
 
-async fn search_books(_: (), query: Search, headers: HeaderMap) -> Response {
+async fn search_books(headers: HeaderMap, Input(query): Input<Search>) -> Response {
     search(query, headers, SEARCH_BOOKS, BOOK_TITLES, true).await
 }
 
-async fn search_places(_: (), query: Search, headers: HeaderMap) -> Response {
+async fn search_places(headers: HeaderMap, Input(query): Input<Search>) -> Response {
     search(query, headers, SEARCH_PLACES, PLACE_NAMES, false).await
 }
 

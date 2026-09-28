@@ -6,7 +6,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormEnum, FormInput, MutationAction, fields};
+use placebo::{Component, Control, FormEnum, FormInput, Input, MutationAction, fields};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 #[allow(dead_code)]
@@ -105,7 +105,7 @@ async fn home(State(store): State<Store>) -> Markup {
     }
 }
 
-async fn save(store: Store, mut input: SaveProfile) -> Response {
+async fn save(State(store): State<Store>, Input(mut input): Input<SaveProfile>) -> Response {
     let component = Component::new("profile", 1);
     let binding = SAVE.bind(&component);
     let mut saved = store.lock().unwrap();

@@ -5,7 +5,7 @@ types come from the input struct; every declared field must appear exactly once.
 The completed form and its action share that input type.
 
 ```rust
-use placebo::{Component, Control, FormInput, MutationAction, fields};
+use placebo::{Component, Control, FormInput, Input, MutationAction, fields};
 use serde::Deserialize;
 
 #[derive(Deserialize, FormInput)]
@@ -23,7 +23,7 @@ let fields = fields! { SaveTitle {
 } };
 let form = SAVE.bind(&component).form(fields);
 
-async fn save(_state: (), input: SaveTitle) -> String {
+async fn save(Input(input): Input<SaveTitle>) -> String {
     format!("{}: {}", input.id, input.title)
 }
 let route: axum::routing::MethodRouter<()> = SAVE.route(save);
@@ -92,16 +92,30 @@ let component = Component::new("editor", 1);
 action.bind(&component).form(fields! { Search { @field query = Control::text("query"); } });
 ```
 
-Registering a mutation handler with a different payload type fails:
+Handlers take any Axum extractors, such as `State` or a session, followed by
+`Input` of the action's payload type. Registering a mutation handler with a
+different payload type fails:
+
+```compile_fail,E0631
+use placebo::{FormInput, Input, MutationAction};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct SaveTitle { title: String }
+#[derive(Deserialize, FormInput)]
+struct Other { title: String }
+async fn wrong(Input(_input): Input<Other>) {}
+let action = MutationAction::<SaveTitle>::new("save", "/save");
+let route: axum::routing::MethodRouter<()> = action.route(wrong);
+```
+
+So does a handler without the input, or with it before other extractors:
 
 ```compile_fail,E0631
 use placebo::{FormInput, MutationAction};
 use serde::Deserialize;
 #[derive(Deserialize, FormInput)]
 struct SaveTitle { title: String }
-#[derive(Deserialize, FormInput)]
-struct Other { title: String }
-async fn wrong(_state: (), _input: Other) {}
+async fn wrong(_headers: axum::http::HeaderMap) {}
 let action = MutationAction::<SaveTitle>::new("save", "/save");
 let route: axum::routing::MethodRouter<()> = action.route(wrong);
 ```
@@ -109,13 +123,13 @@ let route: axum::routing::MethodRouter<()> = action.route(wrong);
 Read handlers obey the same rule:
 
 ```compile_fail,E0631
-use placebo::{FormInput, ReadAction};
+use placebo::{FormInput, Input, ReadAction};
 use serde::Deserialize;
 #[derive(Deserialize, FormInput)]
 struct Search { query: String }
 #[derive(Deserialize, FormInput)]
 struct Other { query: String }
-async fn wrong(_state: (), _input: Other, _headers: axum::http::HeaderMap) {}
+async fn wrong(_headers: axum::http::HeaderMap, Input(_input): Input<Other>) {}
 let action = ReadAction::<Search>::new("search", "/search");
 let route: axum::routing::MethodRouter<()> = action.route(wrong);
 ```
@@ -292,7 +306,7 @@ conditional in its value expression: `@field title = if editing { ... } else { .
 Control expressions run once, in field order, before the surrounding markup
 renders. Declare shared variables with ordinary Rust `let` statements before
 `fields!`, rather than Maud `@let` alongside fields. The lower-level
-`Input::fields().with_*().markup(...).finish()` builder remains available for
+`SaveTitle::fields().with_*().markup(...).finish()` builder remains available for
 programmatic construction and is what the macro uses internally.
 
 Every declared field needs a control, including fields marked `serde(default)`;

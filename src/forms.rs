@@ -2,8 +2,8 @@
 //! completion requires every declared field, including fields with serde defaults.
 use axum::{
     body::Bytes,
-    extract::{FromRequest, FromRequestParts, Request},
-    http::{StatusCode, header, request::Parts},
+    extract::{FromRequest, Request},
+    http::{Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use maud::{Markup, PreEscaped, html};
@@ -473,14 +473,41 @@ fn many<T: SingleValue + PartialEq, L: Into<String>>(
     options
 }
 
-/// A mutation body decoded with [`decode`]. Rejections match axum's `Form`:
-/// 415 for another content type and 422 for a payload that does not decode.
-pub(crate) struct FormBody<I>(pub I);
+/// The action's typed payload, decoded with the same rules as its form fields.
+/// Take it as the handler's last argument, after any other Axum extractors:
+///
+/// ```
+/// use axum::extract::State;
+/// use placebo::{FormInput, Input, MutationAction};
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Save { title: String }
+/// const SAVE: MutationAction<Save> = MutationAction::new("save", "/save");
+/// async fn save(State(db): State<()>, Input(input): Input<Save>) -> String {
+///     input.title
+/// }
+/// let route: axum::routing::MethodRouter<()> = SAVE.route(save);
+/// ```
+///
+/// GET and HEAD requests decode the query string and reject with 400, like
+/// axum's `Query`. Other methods decode an urlencoded body and reject like
+/// axum's `Form`: 415 for another content type, 422 for an undecodable payload.
+pub struct Input<I>(pub I);
 
-impl<I: FormInput, S: Send + Sync> FromRequest<S> for FormBody<I> {
+impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
     type Rejection = Response;
 
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        if matches!(*request.method(), Method::GET | Method::HEAD) {
+            return decode(request.uri().query().unwrap_or_default().as_bytes())
+                .map(Self)
+                .map_err(|error| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Failed to deserialize query string: {error}"),
+                    )
+                        .into_response()
+                });
+        }
         let form = request
             .headers()
             .get(header::CONTENT_TYPE)
@@ -507,24 +534,6 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for FormBody<I> {
             )
                 .into_response()
         })
-    }
-}
-
-/// A read query decoded with [`decode`]. Rejects with 400, like axum's `Query`.
-pub(crate) struct QueryInput<I>(pub I);
-
-impl<I: FormInput, S: Send + Sync> FromRequestParts<S> for QueryInput<I> {
-    type Rejection = (StatusCode, String);
-
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        decode(parts.uri.query().unwrap_or_default().as_bytes())
-            .map(Self)
-            .map_err(|error| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("Failed to deserialize query string: {error}"),
-                )
-            })
     }
 }
 

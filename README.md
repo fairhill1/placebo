@@ -44,7 +44,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, MutationAction, fields};
+use placebo::{Component, Control, FormInput, Input, MutationAction, fields};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
@@ -112,8 +112,9 @@ async fn home(State(store): State<Store>) -> Markup {
     }
 }
 
-// SAVE.route supplies the state and deserialized SaveTitle directly.
-async fn save(store: Store, input: SaveTitle) -> Response {
+// SAVE.route requires `Input<SaveTitle>` last. Other Axum extractors, such as
+// a session for authorization, go before it.
+async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Response {
     let mut items = store.lock().unwrap();
     let Some(item) = items.iter_mut().find(|item| item.id == input.id) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -186,7 +187,8 @@ These apply to people and coding agents alike.
   `ACTION.bind(region).form(fields)` for reads. Don't write `data-placebo`
   attributes, named inputs for payload fields, or protocol headers by hand.
 - **Routes:** register every action with its adapter:
-  `.route(ACTION.path(), ACTION.route(handler))`. A plain Axum route such as
+  `.route(ACTION.path(), ACTION.route(handler))`. The handler takes any Axum
+  extractors (state, session) and then `Input<Payload>` last. A plain Axum route such as
   `post(save)` skips payload decoding and the mutation request check; the
   browser reports it as `unadapted-route`. Unrelated pages, assets, and JSON
   endpoints are ordinary Axum routes.
@@ -202,7 +204,8 @@ These apply to people and coding agents alike.
   it outside the refreshed component. Listen for `placebo:applied` on `document`.
 - **Shared counts and summaries:** use `VersionedRegion`, mount it with
   `region.mount(revision, contents)`, declare it with `.affects(region)`, and
-  reply with `.also_replace(region, revision, contents)`. Increment the revision
+  reply with `.also_replace(region, revision, contents)`. Return the binding
+  from one function that both the view's form and the handler's reply use. Increment the revision
   with the data under the same lock or transaction. Use a plain `Region` for
   read results and `.also_append(...)` collections.
 - **Verify in a browser:** compiling proves the Rust side agrees. Before calling
@@ -222,7 +225,7 @@ The quickstart uses the following form, action, and component APIs.
 | Define one reusable endpoint | `MutationAction<SaveTitle>` |
 | Address a runtime record ID | `Component::new("editor", item.id)` |
 | Generate the form and request configuration | `SAVE.bind(&component).form(fields)` |
-| Deserialize the payload and check the mutation request header | `SAVE.route(save)` |
+| Deserialize the payload and check the mutation request header | `SAVE.route(save)`, with `Input<SaveTitle>` as the handler's last argument |
 | Render the initial component wrapper | `component.mount(editor(...))` |
 | Refresh that component's contents | `binding.reply(editor(...))`, `.invalid(...)`, or `.conflict(...)` |
 
@@ -253,7 +256,8 @@ listeners during a refresh. Incoming server markup inside it is ignored.
 `.reset_local("draft")` accepts normalized server values after a successful save
 only if the user has not edited that draft since submitting. Without that reset,
 the saved heading can change while the input retains its old value. Validation
-and conflict replies retain the draft. Local keys are scoped to each component;
+and conflict replies retain the draft: `invalid` and `conflict` return `Rejected`,
+which has no `reset_local`. Local keys are scoped to each component;
 nested or duplicate local keys are rejected.
 
 `fields!` requires every payload field exactly once, with the right value type.
@@ -271,11 +275,13 @@ payload decoding and mutation-header check; the browser rejects its responses
 with an `unadapted-route` error. Rust also cannot prove that a component is mounted, that its
 response markup has the right structure, or that a user may edit a record.
 Applications still own runtime validation, authentication, and authorization.
+Handlers take any Axum extractors before `Input<T>`, so a session extractor can
+identify the user and the handler can check what they may change.
 
 For server search, use `ReadAction<Input>`, bind it to a `Region`, and register
 its handler with `action.route(handler)`. `.on_input(120)` adds debounced search;
-the runtime prevents older responses from overwriting newer results. Read
-handlers receive `(state, input, headers)` so they can return a full page for a
+the runtime prevents older responses from overwriting newer results. A read
+handler can take `HeaderMap` before `Input<Search>` to return a full page for a
 normal GET or an update for an enhanced request. See the [search example](examples/search.rs).
 
 For shared summaries/counts, declare a `VersionedRegion`, mount it with
@@ -283,6 +289,9 @@ For shared summaries/counts, declare a `VersionedRegion`, mount it with
 `.also_replace(counts, revision, contents)`. A plain `Region` cannot be passed to
 `also_replace`; use plain regions for reads or `.also_append(...)` collections.
 The server must increment the snapshot revision with each corresponding change.
+Build the form and the handler's replies from one function that returns the
+binding, so both declare the same regions; debug builds panic when a reply
+patches a region its binding did not declare.
 [Coordinated updates](docs/interactions.md) explains revisions and ownership.
 
 ## Development rebuild and reload

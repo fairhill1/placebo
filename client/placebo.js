@@ -7,6 +7,8 @@ let composing = new WeakSet();
 let started = false;
 let observer;
 let edits = new WeakMap();
+// Parsed configuration per form, reused while its attribute is unchanged.
+const configs = new WeakMap();
 const behaviors = new Map();
 const mountedBehaviors = new Map();
 let unknownBehaviors = new WeakMap();
@@ -144,6 +146,7 @@ const hints = {
   "invalid-json": "Return a complete Placebo update envelope; inspect the response in Network and the server logs.",
   "response-read-error": "Check Network and server logs for an interrupted response body. Read current state before retrying a write.",
   "network-error": "Check Network and server logs. A dispatched write may have committed; read current state before retrying.",
+  "redirected": "Sign in again, in another tab to keep this page's input, then resubmit. If the action's handler redirects, return a Placebo update instead.",
   "response-mismatch": "Build the reply from the same action and component instance as the initiating form.",
   "invalid-update": "Check the reply operation, HTML, and reset/patch declarations against the initiating binding.",
   "invalid-outcome": "Use reply(), invalid(), or conflict() so HTTP status and update outcome agree.",
@@ -185,7 +188,7 @@ function requestContext(work) {
     phase: work?.phase ?? null,
     status: work?.status ?? null,
     contentType: work?.contentType ?? null,
-    requestState: !work?.sent ? "not-started" : work.status == null ? "started" : "response-received",
+    requestState: !work?.sent ? "not-started" : work.phase === "request" ? "started" : "response-received",
     updateState: work?.applied ? "applied" : work?.phase === "applying" ? "possibly-partial" : "not-applied",
     writeState: work?.method !== "POST" ? "not-applicable" : !work.sent ? "not-started" :
       work.applied ? (work.outcome === "applied" ? "acknowledged" : "rejected") : "unknown",
@@ -214,9 +217,14 @@ function emit(type, work, extra = {}, cause) {
 }
 
 function configFor(form, work) {
-  let config;
-  try { config = JSON.parse(form.dataset.placebo); }
-  catch { throw new ProtocolError("invalid-config", "The action configuration is not valid JSON."); }
+  const source = form.dataset.placebo;
+  let config = configs.get(form);
+  if (config?.source === source) config = config.parsed;
+  else {
+    try { config = JSON.parse(source); }
+    catch { throw new ProtocolError("invalid-config", "The action configuration is not valid JSON."); }
+    configs.set(form, { source, parsed: config });
+  }
   if (work && config && typeof config === "object") work.config = config;
   require(config?.version === VERSION, "version-mismatch", `Browser protocol ${VERSION} does not match form protocol ${config?.version}.`,
     { expectedVersion: VERSION, receivedVersion: config?.version ?? null });
@@ -239,7 +247,7 @@ function configFor(form, work) {
 
 function targetFor(id) {
   // Count all ids, including ordinary elements: getElementById alone hides duplicates.
-  const matches = Array.from(document.querySelectorAll("[id]")).filter(node => node.id === id);
+  const matches = document.querySelectorAll(`#${CSS.escape(id)}`);
   require(matches.length > 0, "missing-target", `Region '${id}' is not mounted.`, { relatedTarget: id });
   require(matches.length === 1, "duplicate-target", `Region '${id}' has multiple elements with the same id.`, { relatedTarget: id });
   require(matches[0].hasAttribute("data-placebo-region"), "undeclared-target", `Element '${id}' is not a declared region.`, { relatedTarget: id });
@@ -306,6 +314,7 @@ function updateFragment(work, update) {
     : { commit: () => work.target.replaceChildren(fragment), resetLocal: [] };
   const targets = [work.target];
   const appendedIds = new Set();
+  let primaryIds;
   const plans = patches.map(patch => {
     require(patch && work.effects.has(patch.target) && typeof patch.html === "string" &&
       ["replace-children", "append-children"].includes(patch.operation), "invalid-patch", "Patch must address a declared additional region.");
@@ -330,9 +339,9 @@ function updateFragment(work, update) {
     }
     require(patch.revision == null && !target.hasAttribute("data-placebo-revision"),
       "invalid-patch", "Append destinations must be unversioned collections.");
+    primaryIds ??= new Set(Array.from(fragment.querySelectorAll("[id]"), node => node.id));
     for (const node of content.querySelectorAll("[id]")) {
-      require(node.id && !document.getElementById(node.id) && !appendedIds.has(node.id) &&
-        !Array.from(fragment.querySelectorAll("[id]")).some(other => other.id === node.id),
+      require(node.id && !document.getElementById(node.id) && !appendedIds.has(node.id) && !primaryIds.has(node.id),
         "duplicate-append", "Appended content must have new, unique ids.");
       appendedIds.add(node.id);
     }
@@ -393,7 +402,7 @@ function prepareComponent(work, fragment, resets) {
     ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
   const resetFocusKey = resetLocal.find(key => current.get(key).contains(focused));
   const replacementFocus = resetFocusKey && focused.id
-    ? Array.from(incoming.get(resetFocusKey).querySelectorAll("[id]")).find(node => node.id === focused.id) : null;
+    ? incoming.get(resetFocusKey).querySelector(`#${CSS.escape(focused.id)}`) : null;
   return { resetLocal, commit() {
     for (const [key, next] of incoming) {
       const old = current.get(key);
@@ -431,13 +440,19 @@ async function send(work) {
         ...(work.method === "POST" ? { "X-Placebo-Request": String(VERSION) } : {}) },
       body: work.body,
       credentials: "same-origin",
-      redirect: "error",
+      // "error" would report a login redirect as a network failure. A manual
+      // redirect is opaque: its status and location are not exposed.
+      redirect: "manual",
       signal: work.controller.signal,
     });
-    work.status = response.status;
-    work.contentType = response.headers.get("content-type")?.split(";")[0].trim() ?? null;
     work.phase = "response";
+    const redirected = response.type === "opaqueredirect";
+    if (!redirected) {
+      work.status = response.status;
+      work.contentType = response.headers.get("content-type")?.split(";")[0].trim() ?? null;
+    }
     if (!isCurrent(work)) return;
+    require(!redirected, "redirected", "The server redirected this action instead of answering it, often to a login page after a session expired.");
     const adapter = response.headers.get("x-placebo-action");
     // An update without the adapter's marker came from a plain Axum route. Other
     // unmarked responses (proxy errors, login pages) keep their HTTP diagnostics.

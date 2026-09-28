@@ -1,0 +1,62 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+* { margin: 0; }
+
+/* `* { margin: 0 }` above wipes the UA's `margin: auto`, which is how [popover]
+   and <dialog> centre themselves (they position via fixed; inset: 0; margin: auto).
+   Without this line every popover and dialog renders in the top-left corner. */
+[popover], dialog { margin: auto; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body { min-block-size: 100dvh; -webkit-font-smoothing: antialiased; }
+
+img, picture, video, canvas, svg { display: block; max-inline-size: 100%; }
+
+input, button, textarea, select { font: inherit; color: inherit; }
+
+p, h1, h2, h3, h4, h5, h6 { overflow-wrap: break-word; }
+
+/* `pretty`, not `balance`. Balance evens out the line lengths instead of
+   filling them, so a two-line heading breaks near the middle and leaves the
+   first line short -- display typography, and wrong for a heading that is
+   running text in a list. `pretty` fills greedily and only looks ahead far
+   enough to keep one word off the last line. Unsupported, it falls back to
+   plain greedy wrap, so there is nothing to guard. */
+h1, h2, h3, h4, h5, h6 { text-wrap: pretty; }
+
+ul[class], ol[class] { list-style: none; padding: 0; }
+
+:target { scroll-margin-block-start: var(--space-xl); }
+
+/* The grey-blue flash a mobile browser paints over whatever you tap, sized to
+   the element's box rather than to anything this stylesheet drew. The kit has
+   its own :hover, :active and focus states; this is the one the platform adds
+   on top. Killing it does not touch the focus ring below, which is a different
+   mechanism and the one that matters for a keyboard. */
+* { -webkit-tap-highlight-color: transparent; }
+
+:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    /* A delay is motion the user is waiting on, so it goes with the duration.
+       Sequenced effects would otherwise keep the pause and lose the movement,
+       which is a stutter rather than the absence of one. */
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  /* The universal selector above cannot reach these: view-transition pseudos
+     hang off the root as their own tree, and `*::before` never matches them.
+     Without this, the one animation left for a reduced-motion reader would be
+     the biggest one -- a whole-page morph. */
+  ::view-transition-group(*),
+  ::view-transition-image-pair(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.01ms !important;
+  }
+}

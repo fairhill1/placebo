@@ -1,0 +1,42 @@
+/* Composition primitives. Spacing between elements belongs here, in the layout
+   parent -- never inside a component. Each one reads a custom property with a
+   default, so an instance adjusts its spacing without a modifier class. */
+
+.wrapper {
+  inline-size: 100%;
+  max-inline-size: var(--wrapper);
+  margin-inline: auto;
+  padding-inline: var(--space-md);
+}
+
+/* Vertical rhythm. Override per instance with --stack-space. */
+.stack > * + * { margin-block-start: var(--stack-space, var(--space-md)); }
+
+/* Horizontal group that wraps. Override the gap with --cluster-space. */
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cluster-space, var(--space-sm));
+}
+.cluster-between { justify-content: space-between; }
+.cluster-end { justify-content: end; }
+
+/* As many columns of at least --grid-min as fit, never wider than the parent. */
+.grid {
+  display: grid;
+  gap: var(--grid-space, var(--space-md));
+  grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min, 16rem), 100%), 1fr));
+}
+
+/* Two columns that stack when the content column would drop below 60%.
+   The first child is the sidebar, sized by --sidebar-width. */
+.sidebar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg);
+}
+.sidebar > :first-child { flex-basis: var(--sidebar-width, 16rem); flex-grow: 1; }
+.sidebar > :last-child { flex-basis: 0; flex-grow: 999; min-inline-size: 60%; }
+
+.center { display: flex; flex-direction: column; align-items: center; }

@@ -397,8 +397,8 @@ cargo test --workspace --all-features
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo build --features dev --bin placebo --examples
 npm install
-npx playwright install chromium
-PLACEBO_TEST_DEV=1 npm test
+npx playwright install chromium firefox webkit
+PLACEBO_TEST_DEV=1 npm run test:browsers
 
 # Also verify production isolation with the dev feature explicitly enabled:
 cargo build --release --features dev --example editors
@@ -407,8 +407,9 @@ PLACEBO_TEST_DEV=1 PLACEBO_TEST_RELEASE=1 npm test
 
 Rust tests include deliberately uncompilable form/handler examples, working
 typed examples, and request/response checks for renamed fields, browser
-absence rules, and malformed payloads. The browser tests use Chromium and real local Axum servers.
-They cover adverse request
+absence rules, and malformed payloads. The browser tests use real local Axum
+servers and run in Chromium, Firefox, and WebKit; `npm test` uses Chromium, and
+`PLACEBO_BROWSER=firefox` or `webkit` selects another engine. They cover adverse request
 ordering, remounts, independent instances, draft/focus preservation, validation,
 conflicts, static reload, Rust rebuild, compile-error recovery, and supervisor
 cleanup. Task tests additionally cover coordinated updates, reversed response
@@ -423,8 +424,9 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 File uploads, enum-valued fields, and generated protocol definitions; richer state ownership;
 idempotency and recovery after uncertain mutations; nested components;
 navigation/history; streaming; general morphing; and an
-authoring layer evaluated against the Maud baseline. Current verification is
-on macOS/Chromium, not a browser/platform compatibility claim.
+authoring layer evaluated against the Maud baseline. Current verification uses
+Playwright's Chromium, Firefox, and WebKit builds on macOS. WebKit there
+approximates Safari; real Safari, mobile browsers, and other platforms are untested.
 
 ## References
 

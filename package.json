@@ -2,6 +2,9 @@
   "name": "placebo-runtime-experiment",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test --test-concurrency=1 tests/*.test.mjs" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.mjs",
+    "test:browsers": "PLACEBO_BROWSER=chromium npm test && PLACEBO_BROWSER=firefox npm test && PLACEBO_BROWSER=webkit npm test"
+  },
   "devDependencies": { "playwright": "1.62.1" }
 }

@@ -450,13 +450,16 @@ async function send(work) {
     require(response.ok || (work.method === "POST" && expectedOutcome), "http-error", `Action returned HTTP ${response.status}.`);
     require(work.contentType === UPDATE_TYPE,
       "invalid-content-type", `Expected '${UPDATE_TYPE}'; received '${work.contentType ?? "no content type"}'.`);
-    let update;
-    try { update = await response.json(); }
+    // Read and parse separately: engines disagree on the error response.json()
+    // throws for malformed JSON (WebKit does not throw a SyntaxError).
+    let body, update;
+    try { body = await response.text(); }
     catch (error) {
-      // JSON parser messages can contain response-body snippets; omit those.
-      if (error instanceof SyntaxError) throw new ProtocolError("invalid-json", "The update response is not valid JSON (body omitted).");
       throw new ProtocolError("response-read-error", "Could not finish reading the update response body.", {}, error);
     }
+    // JSON parser messages can contain response-body snippets; omit those.
+    try { update = JSON.parse(body); }
+    catch { throw new ProtocolError("invalid-json", "The update response is not valid JSON (body omitted)."); }
     // Cancellation is an optimization. This check also protects against a
     // transport that delivers an older response despite cancellation.
     if (!isCurrent(work)) return;

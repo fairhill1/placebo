@@ -4,9 +4,13 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { after, before } from "node:test";
 
-const { chromium } = process.env.PLAYWRIGHT_MODULE
+const playwright = process.env.PLAYWRIGHT_MODULE
   ? createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE)
   : await import("playwright");
+// PLACEBO_BROWSER selects the engine: chromium (default), firefox, or webkit.
+const engine = process.env.PLACEBO_BROWSER ?? "chromium";
+if (!["chromium", "firefox", "webkit"].includes(engine)) throw new Error(`Unknown PLACEBO_BROWSER: ${engine}`);
+export const browserType = playwright[engine];
 
 export function serverFixture(example) {
   const fixture = {};
@@ -29,7 +33,7 @@ export function serverFixture(example) {
       server.once("error", error => { clearTimeout(timeout); reject(error); });
       server.once("exit", code => { clearTimeout(timeout); reject(new Error(`Demo exited: ${code}\n${stderr}`)); });
     });
-    fixture.browser = await chromium.launch({ headless: true });
+    fixture.browser = await browserType.launch({ headless: true });
   });
   after(async () => { await fixture.browser?.close(); server?.kill(); });
   fixture.page = async (t, options = {}) => {

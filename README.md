@@ -1,5 +1,7 @@
 # Placebo
 
+**Type-checked HTML over the wire for Rust and Axum.**
+
 An experimental framework for Rust + Axum server-rendered apps. Rust renders
 HTML with Maud; Placebo updates the page while preserving browser-owned drafts.
 Maud is the current renderer, and the framework's name and API are provisional.

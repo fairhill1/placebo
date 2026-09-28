@@ -261,7 +261,7 @@ Missing/renamed fields, duplicate controls, the wrong form schema, and mismatche
 typed handlers fail compilation. Ordinary Maud handles layout; `@field` declares
 payload controls. Controls cover text-like inputs, textareas, numbers,
 checkboxes, radios, selects, multiple selections, and hidden values, with
-`Option` and `Vec` fields. See [typed forms](docs/typed-forms.md) for the
+`Option`, `Vec`, and `#[derive(FormEnum)]` enum fields. See [typed forms](docs/typed-forms.md) for the
 control table, how absent/empty values decode, and restrictions.
 
 These guarantees depend on using the APIs together. Raw named inputs bypass the
@@ -421,7 +421,7 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
 ## Still open
 
-File uploads, enum-valued fields, and generated protocol definitions; richer state ownership;
+File uploads and generated protocol definitions; richer state ownership;
 idempotency and recovery after uncertain mutations; nested components;
 navigation/history; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses

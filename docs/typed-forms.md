@@ -153,7 +153,8 @@ Each control constructor only accepts the field types it can submit correctly.
 | `String` / `Option<String>` | `text`, `search`, `email`, `url`, `tel`, `date`, `time`, `datetime_local`, `password`, `textarea`, plus `hidden`, `select`, `radios` |
 | integers, `f32`, `f64`, and `Option` of those | `number`, `hidden`, `select`, `radios` |
 | `bool` | `checkbox`, `hidden`, `select`, `radios` |
-| `Vec<T>` of a scalar | `multi_select`, `checkboxes` |
+| `#[derive(FormEnum)]` enums and `Option` of one | `select`, `radios`, `hidden` |
+| `Vec<T>` of any of the scalars above | `multi_select`, `checkboxes` |
 
 ```rust
 use placebo::{Control, FormInput, fields};
@@ -239,6 +240,47 @@ struct Save { count: u32 }
 let fields = fields! { Save { @field count = Control::checkbox(true); } };
 ```
 
+## Enums
+
+Derive `FormEnum` on an enum whose variants hold no data, next to serde's
+`Serialize` and `Deserialize`. Controls submit each variant's serde name, and the
+adapter decodes the same name, so `rename` and `rename_all` apply to forms too.
+Any other submitted value is rejected with a 422.
+
+```rust
+use placebo::{Control, FormEnum, FormInput, fields};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, FormEnum)]
+#[serde(rename_all = "lowercase")]
+enum Priority { Low, Normal, High }
+
+#[derive(Deserialize, FormInput)]
+struct SaveTask { priority: Priority }
+
+let fields = fields! { SaveTask {
+    label for="priority" { "Priority" }
+    @field priority = Control::select(Priority::Normal, [
+        (Priority::Low, "Low"), (Priority::Normal, "Normal"), (Priority::High, "High"),
+    ]).id("priority");
+} };
+```
+
+The derive rejects variants with data and serde attributes that would make the
+rendered name differ from the accepted one, such as `untagged`, `skip`, or
+separate `rename(serialize = ..., deserialize = ...)` names.
+
+An enum without the derive is not a form field type:
+
+```compile_fail,E0277
+use placebo::FormInput;
+use serde::{Deserialize, Serialize};
+#[derive(Serialize, Deserialize)]
+enum Priority { Low, High }
+#[derive(Deserialize, FormInput)]
+struct SaveTask { priority: Priority }
+```
+
 ## Layout and limits
 
 Use ordinary Maud elements for layout and `data-placebo-local="draft"` to retain
@@ -259,7 +301,7 @@ defaults still apply to incoming requests. Per-field
 such as flatten, skip, rename_all, and custom codecs are rejected.
 
 The implementation requires concrete, nonempty structs with named fields.
-Generic payloads, file uploads, enum-valued fields, and custom value codecs
+Generic payloads, file uploads, enums with data, and custom value codecs
 are not covered yet. Macro expansion currently expects
 the dependency to be named `placebo`.
 

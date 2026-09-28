@@ -464,3 +464,94 @@ fn request_to(uri: &str, body: &str) -> Request<Body> {
         .body(Body::from(body.to_owned()))
         .unwrap()
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, Deserialize, placebo::FormEnum)]
+#[serde(rename_all = "kebab-case")]
+enum Priority {
+    Low,
+    #[serde(rename = "normal")]
+    Medium,
+    VeryHigh,
+}
+
+#[derive(Debug, Deserialize, FormInput, PartialEq)]
+struct Triage {
+    priority: Priority,
+    fallback: Option<Priority>,
+    #[serde(default)]
+    also: Vec<Priority>,
+    kind: Priority,
+}
+
+const TRIAGE: MutationAction<Triage> = MutationAction::new("triage", "/triage");
+const PRIORITIES: [(Priority, &str); 3] = [
+    (Priority::Low, "Low"),
+    (Priority::Medium, "Medium"),
+    (Priority::VeryHigh, "Very high"),
+];
+
+#[test]
+fn enum_controls_render_serde_variant_names() {
+    let fields = fields! { Triage {
+        @field priority = Control::select(Priority::VeryHigh, PRIORITIES);
+        @field fallback = Control::select(None, [(None, "None"), (Some(Priority::Low), "Low")]);
+        @field also = Control::checkboxes([Priority::Medium], PRIORITIES);
+        @field kind = Control::radios(Priority::Low, PRIORITIES);
+    } };
+    let form = TRIAGE
+        .bind(&Component::new("triage", 1))
+        .form(fields)
+        .into_string();
+    assert!(form.contains("<option value=\"very-high\" selected>Very high</option>"));
+    assert!(
+        form.contains(
+            "<option value=\"\" selected>None</option><option value=\"low\">Low</option>"
+        )
+    );
+    assert!(form.contains("name=\"also\" value=\"normal\" checked> Medium"));
+    assert!(form.contains("name=\"kind\" value=\"low\" checked> Low"));
+}
+
+#[tokio::test]
+async fn enum_fields_decode_their_rendered_names_and_reject_others() {
+    async fn save(_: (), input: Triage) -> String {
+        format!("{input:?}")
+    }
+    let app = Router::new().route(TRIAGE.path(), TRIAGE.route(save));
+    let response = app
+        .clone()
+        .oneshot(request_to(
+            "/triage",
+            "priority=very-high&fallback=&also=low&also=normal&kind=normal",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let expected = Triage {
+        priority: Priority::VeryHigh,
+        fallback: None,
+        also: vec![Priority::Low, Priority::Medium],
+        kind: Priority::Medium,
+    };
+    assert_eq!(
+        to_bytes(response.into_body(), 4096).await.unwrap(),
+        format!("{expected:?}")
+    );
+    for body in [
+        "priority=VeryHigh&kind=low",
+        "priority=medium&kind=low",
+        "priority=&kind=low",
+        "priority=low&kind=low&also=urgent",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request_to("/triage", body))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}"
+        );
+    }
+}

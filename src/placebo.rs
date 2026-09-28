@@ -7,7 +7,7 @@
 extern crate self as placebo;
 
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -16,9 +16,12 @@ use serde::Serialize;
 use std::{borrow::Cow, future::Future, marker::PhantomData};
 
 mod forms;
+use forms::QueryInput;
 #[doc(hidden)]
 pub use forms::private as __private;
-pub use forms::{Control, FieldValue, FormFields, FormInput};
+pub use forms::{
+    Control, FieldValue, FormFields, FormInput, FormValue, NumberValue, SingleValue, TextValue,
+};
 pub use placebo_macros::FormInput;
 /// Render a typed form body using Maud markup and `@field name = control;` entries.
 /// See [`FormInput`] for examples and compile-time guarantees.
@@ -190,7 +193,7 @@ impl<I: FormInput> ReadAction<I> {
         R: IntoResponse + 'static,
     {
         axum::routing::get(
-            move |State(state): State<S>, Query(input): Query<I>, headers: HeaderMap| {
+            move |State(state): State<S>, QueryInput(input): QueryInput<I>, headers: HeaderMap| {
                 handler(state, input, headers)
             },
         )

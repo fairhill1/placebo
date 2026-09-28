@@ -1,13 +1,12 @@
 use axum::response::IntoResponse;
 use axum::{
-    Form,
     extract::{FromRequestParts, State},
     http::{StatusCode, request::Parts},
 };
 use maud::{Markup, Render, html};
 use std::{future::Future, marker::PhantomData};
 
-use crate::{Config, FormFields, FormInput, RegionTarget, Update, VERSION};
+use crate::{Config, FormFields, FormInput, RegionTarget, Update, VERSION, forms::FormBody};
 
 /// Identity is scoped by component kind and a runtime instance key. This is
 /// UI addressing, not authorization to modify the record with that key.
@@ -133,7 +132,7 @@ impl<I: FormInput> MutationAction<I> {
         R: IntoResponse + 'static,
     {
         axum::routing::post(
-            move |State(state): State<S>, _: MutationRequest, Form(input): Form<I>| {
+            move |State(state): State<S>, _: MutationRequest, FormBody(input): FormBody<I>| {
                 handler(state, input)
             },
         )

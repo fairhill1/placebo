@@ -181,7 +181,9 @@ test("a lost response reports uncertainty and correlates with the completed serv
   assert.equal(detail.writeState, "unknown");
   assert.equal(detail.status, null);
   assert.match(text, /read current state before retrying/i);
-  assert.match(cause.stack, /send/);
+  // The native error is preserved. Only Chromium includes async frames in its stack.
+  assert.equal(cause.name, "TypeError");
+  if (cause.stack) assert.match(cause.stack, /send/);
   assert.ok(fixture.serverLog.includes(`request=${sentId} POST /actions/save-task HTTP 200`));
   await audit.page.reload();
   assert.equal(await audit.page.locator('[data-task="1"] .task-title').textContent(), "Committed before losing the response");

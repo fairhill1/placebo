@@ -5,14 +5,11 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { createServer } from "node:net";
-import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { once } from "node:events";
 
 const exec = promisify(execFile);
-const { chromium } = process.env.PLAYWRIGHT_MODULE
-  ? createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE)
-  : await import("playwright");
+import { browserType } from "./fixture.mjs";
 
 async function until(check, description, timeout = 30000) {
   const end = Date.now() + timeout;
@@ -76,7 +73,7 @@ async fn main() {
     await until(async () => {
       try { return (await fetch(origin)).ok; } catch { return false; }
     }, "initial dev server", 45000);
-    browser = await chromium.launch({ headless: true });
+    browser = await browserType.launch({ headless: true });
     const page = await browser.newPage();
     page.setDefaultTimeout(15000);
     await page.addInitScript(() => {

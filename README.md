@@ -12,54 +12,209 @@ and handler types. They generate the request configuration and response format
 for you. Normal application code should not construct `data-placebo` JSON or
 write protocol headers by hand.
 
-## Create an app
+## Quickstart
 
-From this checkout, generate the recommended typed starter:
+Placebo is not published to crates.io yet. Next to this checkout, create an app:
 
 ```sh
-cargo run --features dev --bin placebo -- new ../my-app
+cargo new ../my-app
 cd ../my-app
-cargo dev
 ```
 
-The starter includes two editors, validation and version checks, development
-rebuild/reload, a source-contract test, and `AGENTS.md` instructions for LLM
-coding. The dev loop checks for detectable API bypasses before each build.
-Use these commands in CI too:
+Add the dependencies to `Cargo.toml` (adjust the path if your checkout is elsewhere):
 
-```sh
-cargo check-placebo
-cargo test
+```toml
+[dependencies]
+placebo = { path = "../placebo" }
+axum = "0.8.9"
+maud = { version = "0.27.0", features = ["axum"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net"] }
 ```
 
-`placebo check` flags handwritten request configuration and recognized Placebo
-actions registered outside their typed adapters. Intentional custom integrations
-need a scoped exception with a reason, which stays visible in the check output.
-Ordinary Axum endpoints are unaffected. This is a source check with documented
-limits, not full Rust name resolution or proof of browser correctness. See
-[project checks and exceptions](docs/project-checks.md).
+Replace `src/main.rs` with this complete app. It has two editors sharing one
+save action, with validation, draft preservation, and version conflict checks:
 
-## Start from the generated application
+```rust
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+};
+use maud::{DOCTYPE, Markup, html};
+use placebo::{Component, Control, FormInput, MutationAction, fields};
+use serde::Deserialize;
+use std::sync::{Arc, Mutex};
 
-For a new app, run `placebo new` and adapt its files. Keep its `.cargo` aliases,
-`AGENTS.md`, and `tests/placebo_contract.rs`. This is the supported starting point
-for humans and coding agents. Use `cargo dev` while working and `cargo test`
-before reporting completion; fix reported errors and verify the changed browser
-flows. Do not substitute compilation or a source-check pass for browser testing.
+struct Item {
+    id: u64,
+    title: String,
+    version: u64,
+}
+type Store = Arc<Mutex<Vec<Item>>>;
 
-The generated contract test runs `cargo check-placebo`, so an ordinary `cargo test`
-also detects recognized raw action routes and handwritten request configuration.
-It invokes the checkout's CLI and may compile its development dependencies on the
-first test run. It adds no dependencies to release application builds.
-`cargo build` and `cargo run` alone still do not execute source checks.
+#[derive(Deserialize, FormInput)]
+struct SaveTitle {
+    id: u64,
+    title: String,
+    version: u64,
+}
 
-The starter's `src/main.rs` is a complete working example. For an existing Axum
-application or an explicitly chosen custom integration, see [manual setup](docs/manual-setup.md).
-Do not replace the generated setup just to avoid a check.
+const SAVE: MutationAction<SaveTitle> = MutationAction::new("save-title", "/save");
+
+// Render the component's CONTENTS, including its form and feedback.
+// Both the initial page and save responses reuse this function.
+fn editor(item: &Item, feedback: &str) -> Markup {
+    let component = Component::new("editor", item.id);
+    let title_id = format!("title-{}", item.id);
+    let feedback_id = format!("feedback-{}", item.id);
+    let fields = fields! { SaveTitle {
+        // IDs and versions belong to the server and must refresh on each reply.
+        @field id = Control::hidden(item.id);
+        @field version = Control::hidden(item.version);
+        div data-placebo-local="draft" {
+            label for=(title_id) { "Title" }
+            @field title = Control::text(&item.title)
+                .id(&title_id).described_by(&feedback_id);
+        }
+        p id=(feedback_id) role="status" { (feedback) }
+        button type="submit" { "Save" }
+    } };
+    html! {
+        article {
+            h2 { (item.title) }
+            (SAVE.bind(&component).form(fields))
+        }
+    }
+}
+
+async fn home(State(store): State<Store>) -> Markup {
+    let items = store.lock().unwrap();
+    html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { "My Placebo app" }
+                script type="module" src="/placebo.js" {}
+            }
+            body {
+                h1 { "Two editors" }
+                @for item in items.iter() {
+                    // Only the initial page adds the component's outer mount.
+                    (Component::new("editor", item.id).mount(editor(item, "")))
+                }
+            }
+        }
+    }
+}
+
+// SAVE.route supplies the state and deserialized SaveTitle directly.
+async fn save(store: Store, input: SaveTitle) -> Response {
+    let mut items = store.lock().unwrap();
+    let Some(item) = items.iter_mut().find(|item| item.id == input.id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let component = Component::new("editor", item.id);
+    let binding = SAVE.bind(&component);
+    let title = input.title.trim();
+    if !(3..=80).contains(&title.chars().count()) {
+        return binding
+            .invalid(editor(item, "Use 3–80 characters."))
+            .into_response();
+    }
+    if input.version != item.version {
+        return binding
+            .conflict(editor(
+                item,
+                "Changed in another tab. Review the saved title and retry.",
+            ))
+            .into_response();
+    }
+    // The version check and write happen under the same lock.
+    item.title = title.to_owned();
+    item.version += 1;
+    binding
+        .reply(editor(item, "Saved."))
+        .reset_local("draft")
+        .into_response()
+}
+
+#[tokio::main]
+async fn main() {
+    let store: Store = Arc::new(Mutex::new(vec![
+        Item {
+            id: 1,
+            title: "First item".into(),
+            version: 1,
+        },
+        Item {
+            id: 2,
+            title: "Second item".into(),
+            version: 1,
+        },
+    ]));
+    let app = Router::new()
+        .route("/", get(home))
+        .route("/placebo.js", get(placebo::runtime))
+        .route(SAVE.path(), SAVE.route(save))
+        .with_state(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("Open http://127.0.0.1:3000");
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+Run `cargo run` and open <http://127.0.0.1:3000>. Try a title shorter than three
+characters, keep an unsaved draft in one editor while saving the other, or save
+the same item from two tabs. Data lives in memory. This file is
+[`examples/quickstart.rs`](examples/quickstart.rs); a test keeps the two identical.
+
+<!-- rules:start (generated from docs/rules.md; a test keeps them identical) -->
+## Rules for building with Placebo
+
+These apply to people and coding agents alike.
+
+- **Forms:** derive `FormInput` on the payload struct and write the form with
+  `fields!` and typed `Control` values. Render it with
+  `ACTION.bind(&component).form(fields)` for mutations or
+  `ACTION.bind(region).form(fields)` for reads. Don't write `data-placebo`
+  attributes, named inputs for payload fields, or protocol headers by hand.
+- **Routes:** register every action with its adapter:
+  `.route(ACTION.path(), ACTION.route(handler))`. A plain Axum route such as
+  `post(save)` skips payload decoding and the mutation request check; the
+  browser reports it as `unadapted-route`. Unrelated pages, assets, and JSON
+  endpoints are ordinary Axum routes.
+- **Search:** use `ReadAction` with `.on_input(ms)` for live server search. Don't
+  rebuild it with `fetch`, `DOMParser`, or manual DOM replacement.
+- **Components:** use `component.mount(contents)` only when adding a component to
+  the page. `reply`, `invalid`, and `conflict` take the complete contents,
+  including the form and its feedback, never another mount.
+- **Drafts:** wrap user-editable controls in `data-placebo-local="draft"`. Keep
+  record IDs, versions, and feedback outside it so every reply refreshes them.
+  Add `.reset_local("draft")` to a successful reply to show normalized values.
+- **Dialogs:** make the dialog the component root with `mount_dialog`, or keep
+  it outside the refreshed component. Listen for `placebo:applied` on `document`.
+- **Shared counts and summaries:** use `VersionedRegion`, mount it with
+  `region.mount(revision, contents)`, declare it with `.affects(region)`, and
+  reply with `.also_replace(region, revision, contents)`. Increment the revision
+  with the data under the same lock or transaction. Use a plain `Region` for
+  read results and `.also_append(...)` collections.
+- **Verify in a browser:** compiling proves the Rust side agrees. Before calling
+  a change done, run the app and exercise the changed flows: valid saves,
+  invalid input, independent drafts, conflicts, and any dialog or search. Check
+  the browser console: Placebo logs every failure as `[placebo:<code>]` with a
+  next step. Fix the cause rather than working around it.
+<!-- rules:end -->
 
 ## The application API
 
-The starter uses the following form, action, and component APIs.
+The quickstart uses the following form, action, and component APIs.
 
 | Responsibility | API |
 |---|---|
@@ -110,9 +265,10 @@ checkboxes, radios, selects, multiple selections, and hidden values, with
 control table, how absent/empty values decode, and restrictions.
 
 These guarantees depend on using the APIs together. Raw named inputs bypass the
-form checks; manually registering `post(save)` bypasses the action's handler
-adapter and mutation-header check. Deriving `FormInput` alone does not check
-handwritten HTML. Rust also cannot prove that a component is mounted, that its
+form checks, and deriving `FormInput` alone does not check handwritten HTML.
+Registering `post(save)` instead of `SAVE.route(save)` bypasses the adapter's
+payload decoding and mutation-header check; the browser rejects its responses
+with an `unadapted-route` error. Rust also cannot prove that a component is mounted, that its
 response markup has the right structure, or that a user may edit a record.
 Applications still own runtime validation, authentication, and authorization.
 
@@ -144,9 +300,9 @@ Add this section to your app's `Cargo.toml`:
 dev = ["placebo/dev"]
 ```
 
-Then run `placebo dev --bin my-app --features dev`. Rust edits run the project
-check, then trigger a Cargo rebuild and application restart. A failed check or
-build leaves the previous server running while the error is reported. Ctrl-C stops the supervisor,
+Then run `placebo dev --bin my-app --features dev`. Rust edits trigger a Cargo
+rebuild and application restart. A failed build leaves the previous server
+running while the error is reported. Ctrl-C stops the supervisor,
 build, and application; on Unix it also signals their process groups.
 
 For browser reload after a restart or a static-file edit, create a `static`
@@ -194,7 +350,7 @@ cargo run --example editors
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
 The [editors](examples/editors.rs) and [tasks](examples/tasks.rs) are reference
-applications you can read and adapt; the generated quickstart needs neither file.
+applications you can read and adapt; the quickstart needs neither file.
 
 ## Diagnose failures
 
@@ -249,9 +405,9 @@ cargo build --release --features dev --example editors
 PLACEBO_TEST_DEV=1 PLACEBO_TEST_RELEASE=1 npm test
 ```
 
-Rust tests include nine deliberately uncompilable form/handler examples, a
-working typed example, and request/response checks for renamed fields and
-malformed payloads. The browser tests use Chromium and real local Axum servers.
+Rust tests include deliberately uncompilable form/handler examples, working
+typed examples, and request/response checks for renamed fields, browser
+absence rules, and malformed payloads. The browser tests use Chromium and real local Axum servers.
 They cover adverse request
 ordering, remounts, independent instances, draft/focus preservation, validation,
 conflicts, static reload, Rust rebuild, compile-error recovery, and supervisor
@@ -264,7 +420,7 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
 ## Still open
 
-More control types and generated protocol definitions; richer state ownership;
+File uploads, enum-valued fields, and generated protocol definitions; richer state ownership;
 idempotency and recovery after uncertain mutations; nested components;
 navigation/history; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification is

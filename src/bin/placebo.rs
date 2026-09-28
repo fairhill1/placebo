@@ -1,7 +1,6 @@
 //! Development supervisor. Cargo remains the compiler; this process owns its
 //! rebuild loop and the running application. Browser reload lives in the app.
 use notify::{RecursiveMode, Watcher};
-mod project;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -26,15 +25,12 @@ fn options() -> Result<Option<Options>, String> {
     let first = args.next();
     if matches!(first.as_deref(), None | Some("--help" | "-h")) {
         println!(
-            "Placebo application tools\n\n  placebo new DIR [--name NAME] [--placebo-path DIR]\n  placebo check [--path DIR] [--examples]\n  placebo dev --example NAME [--features FEATURES]\n  placebo dev --bin NAME [--features FEATURES]\n\nRun check/dev from the Cargo package directory. Dev checks source before\neach build; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
+            "Placebo development supervisor\n\n  placebo dev --example NAME [--features FEATURES]\n  placebo dev --bin NAME [--features FEATURES]\n\nRun from the Cargo package directory. Rust edits rebuild and restart the app;\nthe app's Placebo dev layer handles browser reload. Ctrl-C stops."
         );
         return Ok(None);
     }
     if first.as_deref() != Some("dev") {
-        return Err(
-            "Expected `placebo new`, `placebo check`, or `placebo dev`; use --help for usage."
-                .into(),
-        );
+        return Err("Expected `placebo dev`; use --help for usage.".into());
     }
     let mut target = None;
     let mut features = None;
@@ -243,14 +239,7 @@ async fn supervise(options: Options) -> io::Result<()> {
                     }
                     if dirty && building.is_none() && changed.elapsed() >= Duration::from_millis(150) {
                         dirty = false;
-                        match project::check::check(&root, options.kind == "--example") {
-                            Ok(report) => {
-                                report.print();
-                                if report.passed() { building = Some(build(&options)?); }
-                                else { eprintln!("[placebo:build-failed] Project checks failed. Fix the reported error and save. The last working server is unchanged."); }
-                            }
-                            Err(error) => eprintln!("[placebo:build-failed] Project check could not complete: {error}. The last working server is unchanged."),
-                        }
+                        building = Some(build(&options)?);
                     }
                 }
             }
@@ -271,14 +260,6 @@ async fn supervise(options: Options) -> io::Result<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    match project::run(&std::env::args().skip(1).collect::<Vec<_>>()) {
-        Ok(true) => return,
-        Ok(false) => {}
-        Err(error) => {
-            eprintln!("[placebo:error] {error}");
-            std::process::exit(1);
-        }
-    }
     let result = match options() {
         Ok(Some(options)) => supervise(options).await,
         Ok(None) => return,

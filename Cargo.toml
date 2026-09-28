@@ -9,7 +9,7 @@ description = "An experimental Rust/browser contract for HTML fragment updates"
 members = ["placebo-macros"]
 
 [features]
-dev = ["dep:notify", "dep:tower-livereload", "dep:tokio", "dep:nix", "dep:syn", "dep:proc-macro2"]
+dev = ["dep:notify", "dep:tower-livereload", "dep:tokio", "dep:nix"]
 
 [lib]
 path = "src/placebo.rs"
@@ -20,8 +20,6 @@ axum = "0.8.9"
 maud = { version = "0.27.0", features = ["axum"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-syn = { version = "2.0.119", features = ["full", "visit"], optional = true }
-proc-macro2 = { version = "1.0.107", features = ["span-locations"], optional = true }
 notify = { version = "8.2.0", optional = true }
 tower-livereload = { version = "0.10.3", optional = true }
 tokio = { version = "1.53.1", optional = true, features = ["macros", "rt", "signal", "process", "io-util", "sync", "time"] }

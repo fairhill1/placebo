@@ -43,7 +43,8 @@ async function visit(t, { javaScriptEnabled = true, mockTransport = false } = {}
             operation: "replace-children",
             html: `<p>${q}</p>`,
             ...overrides,
-          }), { status, headers: { "Content-Type": "application/vnd.placebo.update+json" } }));
+          }), { status, headers: { "Content-Type": "application/vnd.placebo.update+json",
+            "X-Placebo-Action": books ? "search-books" : "search-places" } }));
         };
       }
     }, { mockTransport });

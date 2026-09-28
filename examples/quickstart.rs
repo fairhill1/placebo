@@ -1,48 +1,12 @@
-# Manual integration
-
-This complete app has two independent editors sharing one save action. It
-includes server validation, draft preservation, normalized titles, and version
-checks for conflicting saves from another tab. No custom JavaScript is needed.
-For an existing Axum app or an explicitly requested manual integration, use this
-reference. For a new application, follow the [generated quickstart](../README.md#create-an-app).
-Manual apps must arrange their own `placebo check` invocation and browser tests.
-
-Placebo is not published to crates.io. From this checkout, create a sibling app:
-
-```sh
-cargo new --bin ../my-app
-cd ../my-app
-```
-
-Replace `Cargo.toml` with the following. The path assumes the Placebo checkout
-is named `placebo`; adjust it if yours is elsewhere.
-
-```toml
-[package]
-name = "my-app"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-placebo = { path = "../placebo" }
-axum = "0.8.9"
-maud = { version = "0.27.0", features = ["axum"] }
-serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net"] }
-```
-
-Replace `src/main.rs` with this entire file:
-
-```rust
 use axum::{
+    Router,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
-use maud::{html, Markup, DOCTYPE};
-use placebo::{fields, Component, Control, FormInput, MutationAction};
+use maud::{DOCTYPE, Markup, html};
+use placebo::{Component, Control, FormInput, MutationAction, fields};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
@@ -126,7 +90,10 @@ async fn save(store: Store, input: SaveTitle) -> Response {
     }
     if input.version != item.version {
         return binding
-            .conflict(editor(item, "Changed in another tab. Review the saved title and retry."))
+            .conflict(editor(
+                item,
+                "Changed in another tab. Review the saved title and retry.",
+            ))
             .into_response();
     }
     // The version check and write happen under the same lock.
@@ -141,24 +108,25 @@ async fn save(store: Store, input: SaveTitle) -> Response {
 #[tokio::main]
 async fn main() {
     let store: Store = Arc::new(Mutex::new(vec![
-        Item { id: 1, title: "First item".into(), version: 1 },
-        Item { id: 2, title: "Second item".into(), version: 1 },
+        Item {
+            id: 1,
+            title: "First item".into(),
+            version: 1,
+        },
+        Item {
+            id: 2,
+            title: "Second item".into(),
+            version: 1,
+        },
     ]));
     let app = Router::new()
         .route("/", get(home))
         .route("/placebo.js", get(placebo::runtime))
         .route(SAVE.path(), SAVE.route(save))
         .with_state(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
     println!("Open http://127.0.0.1:3000");
     axum::serve(listener, app).await.unwrap();
 }
-```
-
-Run `cargo run` and open <http://127.0.0.1:3000>. Try a title shorter than three
-characters, save while keeping an unsaved draft in the other editor, or open
-two tabs and save the same item in both. After a conflict, the saved heading
-and hidden version update while your draft remains available for review/retry.
-Data lives in memory and resets on restart. Saving requires the browser runtime;
-this example does not implement a separate no-JavaScript POST flow.
-

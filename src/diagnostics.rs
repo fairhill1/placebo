@@ -1,11 +1,15 @@
 //! Action request correlation. No request bodies or query strings are logged.
 use axum::{
     extract::{Request, State},
+    http::HeaderValue,
     middleware::Next,
     response::Response,
 };
 
 const REQUEST_ID: &str = "x-placebo-request-id";
+/// Marks responses produced through an action's typed route adapter, so the
+/// browser can report a handler registered with a plain Axum route instead.
+const ACTION: &str = "x-placebo-action";
 
 pub(crate) async fn request(
     State(action): State<&'static str>,
@@ -40,8 +44,6 @@ pub(crate) async fn request(
             .and_then(|id| id.to_str().ok())
             .unwrap_or("none")
     );
-    #[cfg(not(debug_assertions))]
-    let _ = action;
     let mut response = next.run(request).await;
     #[cfg(debug_assertions)]
     eprintln!(
@@ -57,5 +59,8 @@ pub(crate) async fn request(
     if let Some(id) = id {
         response.headers_mut().insert(REQUEST_ID, id);
     }
+    response
+        .headers_mut()
+        .insert(ACTION, HeaderValue::from_static(action));
     response
 }

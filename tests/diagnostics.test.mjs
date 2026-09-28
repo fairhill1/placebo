@@ -17,7 +17,7 @@ test("a body stream failure is distinguished from malformed JSON", async t => {
     const nativeFetch = window.fetch;
     window.fetch = (url, options) => new URL(url).pathname === "/actions/save-task"
       ? Promise.resolve(new Response(new ReadableStream({ start(controller) { controller.error(new Error("Body stream interrupted")); } }),
-        { status: 200, headers: { "content-type": "application/vnd.placebo.update+json" } }))
+        { status: 200, headers: { "content-type": "application/vnd.placebo.update+json", "x-placebo-action": "save-task" } }))
       : nativeFetch(url, options);
   });
   await submit(audit.page);
@@ -123,18 +123,20 @@ test("invalid form configuration retains useful preflight context", async t => {
   assert.equal(detail.requestState, "not-started");
 });
 
-for (const [scenario, code, status, contentType] of [
+for (const [scenario, code, status, contentType, adapter = "save-task"] of [
   ["http-500", "http-error", 500, "text/plain"],
   ["html-response", "invalid-content-type", 200, "text/html"],
   ["invalid-json", "invalid-json", 200, "application/vnd.placebo.update+json"],
   ["version-mismatch", "version-mismatch", 200, "application/vnd.placebo.update+json"],
+  ["plain-axum-route", "unadapted-route", 200, "application/vnd.placebo.update+json", null],
+  ["another-actions-adapter", "unadapted-route", 200, "application/vnd.placebo.update+json", "add-task"],
 ]) {
   test(`${scenario} includes request context, consequence, and a next step`, async t => {
     const audit = await visit(t);
     let sentId;
     await audit.page.route("**/actions/save-task", route => {
       sentId = route.request().headers()["x-placebo-request-id"];
-      return route.fulfill({ status, contentType, body: scenario === "version-mismatch"
+      return route.fulfill({ status, contentType, headers: adapter ? { "x-placebo-action": adapter } : {}, body: scenario === "version-mismatch"
         ? JSON.stringify({ version: 999, outcome: "applied" }) : "RESPONSE_SECRET must not appear in diagnostics" });
     });
     await submit(audit.page, "FORM_SECRET must stay out of logs");
@@ -151,6 +153,10 @@ for (const [scenario, code, status, contentType] of [
     assert.match(text, /Next:/);
     assert.ok(!JSON.stringify(audit.logs).includes("FORM_SECRET"));
     assert.ok(!JSON.stringify(audit.logs).includes("RESPONSE_SECRET"));
+    if (code === "unadapted-route") {
+      assert.equal(detail.respondingAction, adapter);
+      assert.match(detail.hint, /ACTION\.route\(handler\)/);
+    }
     if (scenario === "version-mismatch") {
       assert.equal(detail.expectedVersion, 3);
       assert.equal(detail.receivedVersion, 999);

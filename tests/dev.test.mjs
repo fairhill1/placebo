@@ -99,12 +99,6 @@ async fn main() {
     await page.waitForFunction(() => document.querySelector("h1").textContent === "Version two");
     assert.ok((output.match(/\[placebo:ready\]/g) ?? []).length >= 2, "a rebuilt application was launched");
 
-    const beforeBypass = (output.match(/\[placebo:build\]/g) ?? []).length;
-    await writeFile(join(directory, "src/main.rs"), source.replace("Version one", "<form data-placebo='manual'></form>"));
-    await until(() => output.includes("[placebo:raw-config]"), "API bypass diagnostic");
-    assert.equal((output.match(/\[placebo:build\]/g) ?? []).length, beforeBypass, "a detected bypass never reaches Cargo");
-    assert.ok((await (await fetch(origin)).text()).includes("Version two"), "the previous server survives a failed project check");
-
     const previousFailures = (output.match(/\[placebo:build-failed\]/g) ?? []).length;
     await writeFile(join(directory, "src/main.rs"), source.replace('"Version one"', "42"));
     await until(() => (output.match(/\[placebo:build-failed\]/g) ?? []).length > previousFailures, "compiler failure diagnostic");

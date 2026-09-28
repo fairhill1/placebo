@@ -7,7 +7,10 @@ register handlers. Handwritten protocol data bypasses those authoring checks.
 
 Requests use form encoding and `Accept: application/vnd.placebo.update+json`.
 Reads use GET; mutations use POST plus `X-Placebo-Request: 3`. The mutation
-extractor requires that header and rejects cross-site browser metadata. This
+extractor requires that header and rejects cross-site browser metadata. A
+rejected request gets a 403 HTML page a person can read: a native submission
+sent before the runtime loaded says nothing was saved and how to retry, a stale
+runtime version asks for a reload, and a cross-site submission is refused. This
 assumes same-origin deployment without permissive CORS; applications still own
 authentication and record-level authorization.
 

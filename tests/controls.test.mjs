@@ -63,3 +63,19 @@ test("validation keeps checked, selected and multiline drafts in the same nodes"
   assert.deepEqual(await controlState(page), { name: "   ", bio: "\nIndented\nsecond line",
     newsletter: false, role: "2", topics: ["web", "ops"], days: ["5"] });
 });
+
+test("a save sent before the runtime loads explains that nothing was saved", async t => {
+  const page = await fixture.page(t);
+  await page.route("**/placebo.js", route => route.abort());
+  await page.goto(fixture.origin);
+  await page.locator("#name").fill("Unsaved draft");
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await page.waitForURL("**/actions/save-profile");
+  assert.equal(await page.locator("h1").textContent(), "Your changes were not saved");
+  assert.match(await page.locator("p").textContent(), /Back button/);
+  await page.goBack();
+  assert.equal(await page.locator("#name").inputValue(), "Unsaved draft", "Back restores the typed value");
+  await page.unroute("**/placebo.js");
+  await page.reload();
+  assert.doesNotMatch(await page.locator("#saved").textContent(), /Unsaved draft/);
+});

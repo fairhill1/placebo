@@ -1,9 +1,9 @@
-use axum::response::IntoResponse;
 use axum::{
     extract::{FromRequestParts, State},
-    http::{StatusCode, request::Parts},
+    http::{StatusCode, header, request::Parts},
+    response::{IntoResponse, Response},
 };
-use maud::{Markup, Render, html};
+use maud::{DOCTYPE, Markup, Render, html};
 use std::{future::Future, marker::PhantomData};
 
 use crate::{Config, FormFields, FormInput, RegionTarget, Update, VERSION, forms::FormBody};
@@ -201,7 +201,7 @@ impl<I: FormInput> MutationBinding<'_, I> {
 pub struct MutationRequest;
 
 impl<S: Send + Sync> FromRequestParts<S> for MutationRequest {
-    type Rejection = (StatusCode, &'static str);
+    type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
         let version = parts
@@ -212,15 +212,49 @@ impl<S: Send + Sync> FromRequestParts<S> for MutationRequest {
             .headers
             .get("sec-fetch-site")
             .and_then(|h| h.to_str().ok());
-        if version != Some(VERSION.to_string().as_str())
-            || matches!(site, Some("cross-site" | "same-site"))
-        {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "Expected a same-origin Placebo mutation request.",
-            ));
-        }
-        Ok(Self)
+        let (title, explanation) = if matches!(site, Some("cross-site" | "same-site")) {
+            (
+                "Request refused",
+                "This form was submitted from another website, so it was not accepted.",
+            )
+        } else if version.is_none() {
+            // A native submission: the runtime had not loaded, or failed to.
+            (
+                "Your changes were not saved",
+                "The page had not finished loading when the form was sent. Use your \
+                 browser's Back button (it usually keeps what you typed), wait for the \
+                 page to finish loading, and submit again.",
+            )
+        } else if version != Some(VERSION.to_string().as_str()) {
+            (
+                "Your changes were not saved",
+                "This page is out of date. Copy anything you typed, reload the page, \
+                 and submit again.",
+            )
+        } else {
+            return Ok(Self);
+        };
+        // Readable in the browser for native submissions; the runtime reports
+        // enhanced requests through its own http-error diagnostic.
+        Err((
+            StatusCode::FORBIDDEN,
+            [(header::CACHE_CONTROL, "no-store")],
+            html! {
+                (DOCTYPE)
+                html lang="en" {
+                    head {
+                        meta charset="utf-8";
+                        meta name="viewport" content="width=device-width, initial-scale=1";
+                        title { (title) }
+                    }
+                    body style="font: 1.1rem/1.5 system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem" {
+                        h1 { (title) }
+                        p { (explanation) }
+                    }
+                }
+            },
+        )
+            .into_response())
     }
 }
 

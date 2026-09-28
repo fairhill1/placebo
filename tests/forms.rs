@@ -555,3 +555,35 @@ async fn enum_fields_decode_their_rendered_names_and_reject_others() {
         );
     }
 }
+
+#[tokio::test]
+async fn rejected_mutations_explain_themselves_to_a_person() {
+    let app = Router::new().route(SAVE.path(), SAVE.route(save));
+    let cases = [
+        (None, None, "The page had not finished loading"),
+        (Some("1"), None, "This page is out of date"),
+        (Some("3"), Some("cross-site"), "submitted from another website"),
+    ];
+    for (version, site, explanation) in cases {
+        let mut request = request("id=42&display-title=Hello", false);
+        if let Some(version) = version {
+            request
+                .headers_mut()
+                .insert("x-placebo-request", version.parse().unwrap());
+        }
+        if let Some(site) = site {
+            request
+                .headers_mut()
+                .insert("sec-fetch-site", site.parse().unwrap());
+        }
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{explanation}");
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains(explanation), "{body}");
+    }
+}

@@ -421,7 +421,9 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
 ## Still open
 
-File uploads and generated protocol definitions; richer state ownership;
+Saves without JavaScript (a save submitted before the runtime loads is refused
+with a page explaining that nothing was saved); file uploads and generated
+protocol definitions; richer state ownership;
 idempotency and recovery after uncertain mutations; nested components;
 navigation/history; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses

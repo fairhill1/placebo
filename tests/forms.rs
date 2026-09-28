@@ -139,6 +139,7 @@ async fn mutation_adapter_deserializes_the_declared_input_and_keeps_the_request_
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-placebo-action"], "save");
     assert_eq!(
         to_bytes(response.into_body(), 4096).await.unwrap(),
         "42:Hello world:600"
@@ -148,6 +149,8 @@ async fn mutation_adapter_deserializes_the_declared_input_and_keeps_the_request_
         .await
         .unwrap();
     assert_eq!(unmarked.status(), StatusCode::FORBIDDEN);
+    // Rejections come from the adapter too, so the browser does not blame the route.
+    assert_eq!(unmarked.headers()["x-placebo-action"], "save");
 }
 
 #[tokio::test]
@@ -212,6 +215,7 @@ async fn read_adapter_and_builder_share_the_input_type() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-placebo-action"], "read");
     assert_eq!(
         to_bytes(response.into_body(), 4096).await.unwrap(),
         "7:Query:0"

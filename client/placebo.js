@@ -140,6 +140,7 @@ const hints = {
   "remounted-target": "The response belongs to an older DOM instance. Read current server state before retrying a write.",
   "http-error": "Inspect the request in Network and correlate its X-Placebo-Request-Id with server logs.",
   "invalid-content-type": "Return a Placebo update from this action. Check for a login/error page or an extractor rejection in the server logs.",
+  "unadapted-route": "Register the handler with its action's adapter: .route(ACTION.path(), ACTION.route(handler)). Plain Axum routes skip payload decoding and the mutation request check.",
   "invalid-json": "Return a complete Placebo update envelope; inspect the response in Network and the server logs.",
   "response-read-error": "Check Network and server logs for an interrupted response body. Read current state before retrying a write.",
   "network-error": "Check Network and server logs. A dispatched write may have committed; read current state before retrying.",
@@ -437,6 +438,14 @@ async function send(work) {
     work.contentType = response.headers.get("content-type")?.split(";")[0].trim() ?? null;
     work.phase = "response";
     if (!isCurrent(work)) return;
+    const adapter = response.headers.get("x-placebo-action");
+    // An update without the adapter's marker came from a plain Axum route. Other
+    // unmarked responses (proxy errors, login pages) keep their HTTP diagnostics.
+    require(adapter === work.config.action || (adapter === null && work.contentType !== UPDATE_TYPE),
+      "unadapted-route", adapter === null
+        ? `Action '${work.config.action}' responded without its typed route adapter.`
+        : `Action '${work.config.action}' was answered by the adapter for '${adapter}'.`,
+      { respondingAction: adapter });
     const expectedOutcome = response.ok ? "applied" : response.status === 422 ? "invalid" : response.status === 409 ? "conflict" : null;
     require(response.ok || (work.method === "POST" && expectedOutcome), "http-error", `Action returned HTTP ${response.status}.`);
     require(work.contentType === UPDATE_TYPE,

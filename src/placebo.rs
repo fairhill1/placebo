@@ -3,6 +3,9 @@
 //! The same action emits form configuration and addresses its response. This
 //! Input-derived builders connect form controls and handler payloads. Region
 //! existence and the contents of browser requests still need runtime checks.
+//!
+//! Start from `examples/quickstart.rs` in the repository.
+#![doc = include_str!("../docs/rules.md")]
 
 extern crate self as placebo;
 

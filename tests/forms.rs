@@ -633,3 +633,13 @@ async fn handlers_take_other_extractors_before_the_input() {
     let response = app.oneshot(unmarked).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn other_methods_on_a_mutation_route_are_not_allowed() {
+    let app = Router::new().route(SAVE.path(), SAVE.route(save));
+    let response = app
+        .oneshot(Request::builder().uri("/save").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}

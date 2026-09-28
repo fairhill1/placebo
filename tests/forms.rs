@@ -217,3 +217,246 @@ async fn read_adapter_and_builder_share_the_input_type() {
         "7:Query:0"
     );
 }
+
+#[derive(Debug, Deserialize, FormInput, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Profile {
+    bio: String,
+    email: String,
+    age: u32,
+    rating: Option<f64>,
+    newsletter: bool,
+    nickname: Option<String>,
+    role: Option<u8>,
+    #[serde(default)]
+    tags: Vec<u8>,
+    #[serde(default)]
+    days: Vec<String>,
+}
+
+const PROFILE: MutationAction<Profile> = MutationAction::new("profile", "/profile");
+
+fn profile_form() -> String {
+    let fields = fields! { Profile {
+        @field bio = Control::textarea("\nfirst line <b>").rows(4).placeholder("About you");
+        @field email = Control::email("ada@example.com").autocomplete("email");
+        @field age = Control::number(36).min(0).max(150);
+        @field rating = Control::number(Some(4.5)).step(0.5);
+        @field newsletter = Control::checkbox(true).id("newsletter");
+        @field nickname = Control::text(None);
+        @field role = Control::radios(None, [(Some(1), "Owner"), (Some(2), "Editor")]).id("role");
+        @field tags = Control::multi_select([2], [(1, "One"), (2, "Two"), (3, "Three")]);
+        @field days = Control::checkboxes(["sat".to_owned()], [("fri".to_owned(), "Friday"), ("sat".to_owned(), "Saturday")]);
+    } };
+    PROFILE
+        .bind(&Component::new("profile", 1))
+        .form(fields)
+        .into_string()
+}
+
+#[test]
+fn every_control_renders_its_generated_name_and_initial_value() {
+    let form = profile_form();
+    assert!(form.contains(
+        "<textarea name=\"bio\" rows=\"4\" placeholder=\"About you\">\n\nfirst line &lt;b&gt;</textarea>"
+    ));
+    assert!(form.contains(
+        "<input type=\"email\" name=\"email\" value=\"ada@example.com\" autocomplete=\"email\">"
+    ));
+    assert!(
+        form.contains("<input type=\"number\" name=\"age\" value=\"36\" min=\"0\" max=\"150\">")
+    );
+    assert!(form.contains("<input type=\"number\" name=\"rating\" value=\"4.5\" step=\"0.5\">"));
+    assert!(form.contains(
+        "<input type=\"checkbox\" name=\"newsletter\" value=\"true\" checked id=\"newsletter\">"
+    ));
+    assert!(form.contains("<input type=\"text\" name=\"nickname\" value=\"\">"));
+    assert!(form.contains("<div role=\"radiogroup\" id=\"role\"><label><input type=\"radio\" name=\"role\" value=\"1\"> Owner</label>"));
+    assert!(!form.contains("name=\"role\" value=\"1\" checked"));
+    assert!(form.contains("<select multiple name=\"tags\"><option value=\"1\">One</option><option value=\"2\" selected>Two</option>"));
+    assert!(
+        form.contains("<input type=\"checkbox\" name=\"days\" value=\"sat\" checked> Saturday")
+    );
+    assert_eq!(form.matches("name=\"days\"").count(), 2);
+}
+
+#[test]
+fn float_numbers_accept_fractions_and_passwords_are_never_echoed() {
+    #[allow(dead_code)]
+    #[derive(Deserialize, FormInput)]
+    struct Login {
+        password: String,
+        weight: f32,
+    }
+    let fields = fields! { Login {
+        @field password = Control::password().autocomplete("current-password");
+        @field weight = Control::number(1.25);
+    } };
+    let form = MutationAction::<Login>::new("login", "/login")
+        .bind(&Component::new("login", 1))
+        .form(fields)
+        .into_string();
+    assert!(form.contains(
+        "<input type=\"password\" name=\"password\" value=\"\" autocomplete=\"current-password\">"
+    ));
+    assert!(form.contains("<input type=\"number\" name=\"weight\" value=\"1.25\" step=\"any\">"));
+}
+
+#[test]
+#[should_panic(expected = "every selected value needs exactly one matching option")]
+fn multiple_selection_rejects_values_without_options() {
+    Control::<Vec<u8>>::checkboxes([9], [(1, "One")]);
+}
+
+#[test]
+#[should_panic(expected = "radios need an option matching their initial value")]
+fn required_radios_need_a_matching_option() {
+    Control::<u8>::radios(9, [(1, "One")]);
+}
+
+#[test]
+#[should_panic(expected = "rows applies to textarea controls")]
+fn control_specific_attributes_are_not_silently_ignored() {
+    Control::<String>::text("title").rows(3);
+}
+
+async fn save_profile(_: (), input: Profile) -> String {
+    format!("{input:?}")
+}
+
+fn profile(bio: &str) -> Profile {
+    Profile {
+        bio: bio.into(),
+        email: "a@b.c".into(),
+        age: 36,
+        rating: None,
+        newsletter: false,
+        nickname: None,
+        role: None,
+        tags: vec![],
+        days: vec![],
+    }
+}
+
+#[tokio::test]
+async fn browser_submissions_decode_with_html_absence_rules() {
+    let app = Router::new().route(PROFILE.path(), PROFILE.route(save_profile));
+    let cases = [
+        // Unchecked checkbox, empty optional inputs, no radio and no selections.
+        (
+            "bio=Hi&email=a%40b.c&age=36&rating=&nickname=",
+            profile("Hi"),
+        ),
+        (
+            "bio=Hi&email=a%40b.c&age=36&rating=2.5&newsletter=true&nickname=Ada&role=2&tags=1&tags=3&days=fri&days=sat",
+            Profile {
+                rating: Some(2.5),
+                newsletter: true,
+                nickname: Some("Ada".into()),
+                role: Some(2),
+                tags: vec![1, 3],
+                days: vec!["fri".into(), "sat".into()],
+                ..profile("Hi")
+            },
+        ),
+    ];
+    for (body, expected) in cases {
+        let response = app
+            .clone()
+            .oneshot(request_to("/profile", body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{body}");
+        assert_eq!(
+            to_bytes(response.into_body(), 4096).await.unwrap(),
+            format!("{expected:?}"),
+        );
+    }
+    for body in [
+        "bio=Hi&email=a%40b.c&age=",
+        "bio=Hi&email=a%40b.c&age=36&newsletter=true&newsletter=false",
+        "bio=Hi&email=a%40b.c&age=36&newsletter=yes",
+        "bio=Hi&email=a%40b.c&age=36&tags=one",
+        "email=a%40b.c&age=36",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request_to("/profile", body))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}"
+        );
+    }
+    let mut json = request_to("/profile", "{}");
+    json.headers_mut()
+        .insert("content-type", "application/json".parse().unwrap());
+    let response = app.oneshot(json).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn read_queries_use_the_same_decoding_rules() {
+    #[allow(dead_code)] // Read through Debug.
+    #[derive(Debug, Deserialize, FormInput)]
+    struct Filter {
+        q: String,
+        open: bool,
+        #[serde(default)]
+        labels: Vec<String>,
+        limit: Option<u32>,
+    }
+    let action = ReadAction::<Filter>::new("filter", "/filter");
+    let app = Router::new().route(
+        action.path(),
+        action.route(|_: (), input: Filter, _| async move { format!("{input:?}") }),
+    );
+    for (query, expected) in [
+        (
+            "q=bug",
+            r#"Filter { q: "bug", open: false, labels: [], limit: None }"#,
+        ),
+        (
+            "q=bug&open=true&labels=ui&labels=api&limit=5",
+            r#"Filter { q: "bug", open: true, labels: ["ui", "api"], limit: Some(5) }"#,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/filter?{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{query}");
+        assert_eq!(
+            to_bytes(response.into_body(), 4096).await.unwrap(),
+            expected
+        );
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/filter?q=bug&limit=many")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+fn request_to(uri: &str, body: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("x-placebo-request", placebo::VERSION.to_string())
+        .body(Body::from(body.to_owned()))
+        .unwrap()
+}

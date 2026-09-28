@@ -102,8 +102,10 @@ nested or duplicate local keys are rejected.
 `fields!` requires every payload field exactly once, with the right value type.
 Missing/renamed fields, duplicate controls, the wrong form schema, and mismatched
 typed handlers fail compilation. Ordinary Maud handles layout; `@field` declares
-payload controls. Supported controls are text/search, hidden values, and typed
-selects. See [typed forms](docs/typed-forms.md) for serde support and restrictions.
+payload controls. Controls cover text-like inputs, textareas, numbers,
+checkboxes, radios, selects, multiple selections, and hidden values, with
+`Option` and `Vec` fields. See [typed forms](docs/typed-forms.md) for the
+control table, how absent/empty values decode, and restrictions.
 
 These guarantees depend on using the APIs together. Raw named inputs bypass the
 form checks; manually registering `post(save)` bypasses the action's handler

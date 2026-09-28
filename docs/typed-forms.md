@@ -144,6 +144,101 @@ let fields = fields! { SaveTitle {
 } };
 ```
 
+## Controls
+
+Each control constructor only accepts the field types it can submit correctly.
+
+| Field type | Controls |
+|---|---|
+| `String` / `Option<String>` | `text`, `search`, `email`, `url`, `tel`, `date`, `time`, `datetime_local`, `password`, `textarea`, plus `hidden`, `select`, `radios` |
+| integers, `f32`, `f64`, and `Option` of those | `number`, `hidden`, `select`, `radios` |
+| `bool` | `checkbox`, `hidden`, `select`, `radios` |
+| `Vec<T>` of a scalar | `multi_select`, `checkboxes` |
+
+```rust
+use placebo::{Control, FormInput, fields};
+use serde::Deserialize;
+
+#[derive(Deserialize, FormInput)]
+struct Profile {
+    bio: String,
+    age: Option<u32>,
+    newsletter: bool,
+    role: u8,
+    #[serde(default)]
+    days: Vec<String>,
+}
+
+let fields = fields! { Profile {
+    label for="bio" { "Bio" }
+    @field bio = Control::textarea("").id("bio").rows(4);
+    label for="age" { "Age" }
+    @field age = Control::number(None).id("age").min(0);
+    label { @field newsletter = Control::checkbox(false); " Newsletter" }
+    fieldset {
+        legend { "Role" }
+        @field role = Control::radios(2, [(1, "Owner"), (2, "Editor")]);
+    }
+    fieldset {
+        legend { "Available" }
+        @field days = Control::checkboxes(Vec::<String>::new(), [
+            ("sat".to_owned(), "Saturday"), ("sun".to_owned(), "Sunday"),
+        ]);
+    }
+} };
+```
+
+The typed adapters decode requests the way browsers submit them:
+
+- An unchecked checkbox submits nothing; an absent `bool` field is `false`.
+- An empty value, or an absent field, is `None` for every `Option` field,
+  including `Option<String>`. An empty required number is a decoding error.
+- `Vec` fields collect repeated values. With nothing selected the browser
+  submits nothing, so `Vec` fields need `#[serde(default)]`.
+- Any other repeated value is a decoding error, not a silent first/last choice.
+
+`radios` and `checkboxes` render one `<label>` per option inside a
+`radiogroup`/`group` element; `.id()`, `.class()` and `.described_by()` apply to
+that group. Put a `fieldset` and `legend` around it for an accessible name.
+Selects and required radios must have an option for their initial value, and
+every value selected in a multiple selection needs a matching option.
+Optional radios may start as `None` with nothing checked.
+
+Float `number` controls default to `step="any"`; `.min()`, `.max()` and `.step()`
+take the field's number type. `password()` always renders empty so a response
+never echoes a password into markup. Date and time controls submit strings in
+the browser's `YYYY-MM-DD`/`HH:MM` formats; parse and validate them in the handler.
+Attributes that don't apply to a control, such as `.rows()` on a text input,
+panic during rendering instead of being ignored.
+
+A `Vec` field without a serde default fails to compile:
+
+```compile_fail,E0080
+use placebo::FormInput;
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Filter { labels: Vec<String> }
+```
+
+So does a field type no control can submit:
+
+```compile_fail,E0277
+use placebo::FormInput;
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Save { due: std::time::SystemTime }
+```
+
+A control must match its field type:
+
+```compile_fail,E0308
+use placebo::{Control, FormInput, fields};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Save { count: u32 }
+let fields = fields! { Save { @field count = Control::checkbox(true); } };
+```
+
 ## Layout and limits
 
 Use ordinary Maud elements for layout and `data-placebo-local="draft"` to retain
@@ -158,15 +253,14 @@ renders. Declare shared variables with ordinary Rust `let` statements before
 `Input::fields().with_*().markup(...).finish()` builder remains available for
 programmatic construction and is what the macro uses internally.
 
-Supported controls are string text/search inputs, primitive hidden values, and
-typed selects. Every declared field is required, including fields marked
-`serde(default)`; defaults still apply to incoming requests. Per-field
+Every declared field needs a control, including fields marked `serde(default)`;
+defaults still apply to incoming requests. Per-field
 `serde(rename = "...")` supplies the wire name. Unsupported serde transforms
 such as flatten, skip, rename_all, and custom codecs are rejected.
 
 The implementation requires concrete, nonempty structs with named fields.
-Optional values, collections, generic payloads, file uploads, checkboxes, and
-custom value codecs are not covered yet. Macro expansion currently expects
+Generic payloads, file uploads, enum-valued fields, and custom value codecs
+are not covered yet. Macro expansion currently expects
 the dependency to be named `placebo`.
 
 These checks cover `@field`, the typed builder, and `action.route(handler)`.

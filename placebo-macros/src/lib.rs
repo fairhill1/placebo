@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
+use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, LitStr, parse_macro_input};
 
 mod fields;
@@ -65,6 +66,8 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let all_present = states.iter().map(|_| present.clone());
     let mut wire_names = std::collections::HashSet::new();
     let mut setters = Vec::new();
+    let mut table = Vec::new();
+    let mut checks = Vec::new();
 
     for (index, field) in fields.named.iter().enumerate() {
         let ident = field.ident.as_ref().unwrap();
@@ -72,6 +75,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         let rust_name = rust_name.trim_start_matches("r#");
         let setter = format_ident!("with_{rust_name}");
         let mut wire_name = rust_name.to_owned();
+        let mut has_default = false;
         for attr in field
             .attrs
             .iter()
@@ -82,6 +86,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                     wire_name = meta.value()?.parse::<LitStr>()?.value();
                     Ok(())
                 } else if meta.path.is_ident("default") {
+                    has_default = true;
                     if meta.input.peek(syn::Token![=]) { let _: LitStr = meta.value()?.parse()?; }
                     Ok(())
                 } else {
@@ -96,6 +101,15 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             ));
         }
         let ty = &field.ty;
+        table.push(quote_spanned! {ty.span()=>
+            (#wire_name, <#ty as ::placebo::FormValue>::ABSENT)
+        });
+        checks.push(quote_spanned! {ty.span()=>
+            const _: () = ::placebo::__private::require_default(
+                <#name as ::placebo::FormInput>::FIELDS[#index].1,
+                #has_default,
+            );
+        });
         let other_states: Vec<_> = states
             .iter()
             .enumerate()
@@ -138,6 +152,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
         impl ::placebo::FormInput for #name {
             type Builder = #builder;
+            const FIELDS: &'static [(&'static str, ::placebo::__private::Absent)] = &[#(#table),*];
             fn fields() -> Self::Builder {
                 #builder { body: ::core::default::Default::default(), state: ::core::marker::PhantomData }
             }
@@ -171,6 +186,8 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 next
             }
         }
+
+        #(#checks)*
 
         #(#setters)*
 

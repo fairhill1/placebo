@@ -11,9 +11,6 @@ members = ["placebo-macros"]
 [features]
 dev = ["dep:notify", "dep:tower-livereload", "dep:tokio", "dep:nix"]
 
-[lib]
-path = "src/placebo.rs"
-
 [dependencies]
 placebo-macros = { path = "placebo-macros" }
 axum = "0.8.9"

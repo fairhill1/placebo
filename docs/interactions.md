@@ -92,6 +92,45 @@ filter the person typed. Declare the results region and reply with
 `.also_refetch(&RESULTS)`: the browser runs the region's read form again with
 its current input, so a new record appears only if it matches.
 
+## Reads that start themselves
+
+A read binding can read without the person asking:
+
+```rust
+// A slow section, left out of the first render and filled in after it.
+LOAD_STATS.bind(STATS).on_load()
+// A value that changes on the server's own schedule.
+TICK.bind(CLOCK).every(1000)
+// The "load more" form at the end of a list, inside its own region.
+LOAD_MORE.bind(MORE).on_reveal().affects(ENTRIES)
+// Its handler: the next form, and the next entries appended to the list.
+more_binding().reply(more_form(next)).also_insert(entry(n), Position::End)
+```
+
+A trigger belongs to its form element. `on_load` reads once when the form is
+mounted, including forms that a reply inserts later. `on_reveal` reads once
+when the form comes within 200px of the viewport. A form inside its own region
+is replaced by the reply, so a "load more" form that renders the next one keeps
+loading while the end of the list is in view, and stops when the reply renders
+no form. `every(ms)` polls while its form and region are on the page: it waits
+for a slow read instead of cancelling it, pauses while the page is hidden, reads
+once when it is shown again, and stops when its region is removed.
+
+Reads may insert items into a `List` their binding declares with
+`.affects(LIST)`, but not move, remove, or replace anything else: a read shows
+data, it does not change what other parts of the page own. Inserted items keep
+the rules of the list: an item already there keeps its node.
+
+Without JavaScript, a triggered form is a plain GET form: give it a submit
+button ("Load more", "Show statistics") and have the read handler render the
+whole page for a request that is not an update, as the
+[triggers example](../examples/triggers.rs) does.
+
+Poll when the data changes on its own schedule (a clock, a queue fed by
+another system) or when holding a connection per page is not wanted. Push with
+a `Feed` when the changes come from writes in this application: each page gets
+each change once, when it happens, instead of asking every interval.
+
 ## Other components and navigation
 
 `.affects(&component)` and `.also_refresh(&component, contents)` refresh

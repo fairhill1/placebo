@@ -413,7 +413,8 @@ defaults still apply to incoming requests. Per-field
 are reserved for the fields Placebo adds to forms. Unsupported serde transforms
 such as flatten, skip, rename_all, and custom codecs are rejected.
 
-The implementation requires concrete, nonempty structs with named fields.
+The implementation requires concrete structs with named fields. A struct with
+no fields, such as `struct Tick {}`, suits a read that takes no input.
 Generic payloads, enums with data, and custom value codecs are not covered yet. Macro expansion currently expects
 the dependency to be named `placebo`.
 

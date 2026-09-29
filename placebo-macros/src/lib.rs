@@ -138,12 +138,6 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             "FormInput requires named fields",
         ));
     };
-    if fields.named.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.ident,
-            "FormInput requires at least one field",
-        ));
-    }
     let name = &input.ident;
     let visibility = &input.vis;
     let builder = format_ident!("{name}Fields");

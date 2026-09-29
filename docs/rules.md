@@ -15,10 +15,13 @@ These apply to people and coding agents alike.
   on it. A plain Axum route such as `post(save)` skips payload decoding and the
   mutation request check; the browser reports it as `unadapted-route`.
   Unrelated pages, assets, and JSON endpoints are ordinary Axum routes.
-- **Search:** use `ReadAction` with `.on_input(ms)` for live server search. Don't
-  rebuild it with `fetch`, `DOMParser`, or manual DOM replacement. Add
-  `.history()` to keep the query in the URL, and render the page from the same
-  query (`Input<Search>` in the page handler) so reloads and bookmarks work.
+- **Search and other reads:** use `ReadAction` with `.on_input(ms)` for live
+  server search, and `.on_load()`, `.on_reveal()`, or `.every(ms)` for reads that
+  start themselves. Don't rebuild them with `fetch`, `DOMParser`, or manual DOM
+  replacement. Add `.history()` to keep the query in the URL, and render the page
+  from the same query (`Input<Search>` in the page handler) so reloads and
+  bookmarks work. To extend a list, declare it with `.affects(LIST)` and reply
+  with `.also_insert(item, Position::End)`.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
   including the form and its feedback, never another mount. Contents may mount

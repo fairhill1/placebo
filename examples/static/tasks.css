@@ -12,8 +12,13 @@ main { max-width: 960px; }
 progress { width: 100%; height: 5px; border: 0; border-radius: 4px; display: block; accent-color: #66805c; }
 progress::-webkit-progress-bar { background: #e9ece2; border-radius: 4px; }
 progress::-webkit-progress-value { background: #66805c; border-radius: 4px; }
-.task-row { border-bottom: 1px solid #e4e7df; }
-.task-row:last-child { border-bottom: 0; }
+.task-row { border-bottom: 1px solid #e4e7df; display: flex; align-items: center; gap: 12px; }
+[data-placebo-item]:last-child .task-row { border-bottom: 0; }
+.task-row > [data-placebo-region]:first-child { flex: 1; min-width: 0; }
+.task-order { display: flex; gap: 4px; }
+.move { padding: 6px 10px; }
+.danger { color: #8a2f25; background: #f6e8e4; margin-top: 12px; }
+.danger:hover { background: #efd7d0; }
 .task-overview { display: flex; align-items: center; gap: 16px; padding: 21px 0; }
 .status-mark { font-size: 22px; color: #9aab90; width: 24px; flex-shrink: 0; text-align: center; }
 .status-mark[data-done="true"] { color: #527048; }

@@ -71,14 +71,13 @@ fn editor(item: &Item, feedback: &str) -> Markup {
     let title_id = format!("title-{}", item.id);
     let feedback_id = format!("feedback-{}", item.id);
     let fields = fields! { SaveTitle {
-        // IDs and versions belong to the server and must refresh on each reply.
+        // IDs and versions belong to the server and refresh on each reply.
         @field id = Control::hidden(item.id);
         @field version = Control::hidden(item.version);
-        div data-placebo-local="draft" {
-            label for=(title_id) { "Title" }
-            @field title = Control::text(&item.title)
-                .id(&title_id).described_by(&feedback_id);
-        }
+        // A reply never overwrites what someone typed and has not saved yet.
+        label for=(title_id) { "Title" }
+        @field title = Control::text(&item.title)
+            .id(&title_id).described_by(&feedback_id);
         p id=(feedback_id) role="status" { (feedback) }
         button type="submit" { "Save" }
     } };
@@ -138,10 +137,7 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Res
     // The version check and write happen under the same lock.
     item.title = title.to_owned();
     item.version += 1;
-    binding
-        .reply(editor(item, "Saved."))
-        .reset_local("draft")
-        .into_response()
+    binding.reply(editor(item, "Saved.")).into_response()
 }
 
 #[tokio::main]
@@ -193,26 +189,48 @@ These apply to people and coding agents alike.
   browser reports it as `unadapted-route`. Unrelated pages, assets, and JSON
   endpoints are ordinary Axum routes.
 - **Search:** use `ReadAction` with `.on_input(ms)` for live server search. Don't
-  rebuild it with `fetch`, `DOMParser`, or manual DOM replacement.
+  rebuild it with `fetch`, `DOMParser`, or manual DOM replacement. Add
+  `.history()` to keep the query in the URL, and render the page from the same
+  query (`Input<Search>` in the page handler) so reloads and bookmarks work.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
   including the form and its feedback, never another mount.
-- **Drafts:** wrap user-editable controls in `data-placebo-local="draft"`. Keep
-  record IDs, versions, and feedback outside it so every reply refreshes them.
-  Add `.reset_local("draft")` to a successful reply to show normalized values.
+- **Drafts:** typed controls keep what the person typed by themselves. A reply
+  replaces everything except controls with edits the server has not accepted;
+  after a successful save, the submitted controls show the saved values.
+  Render the submitted values in `invalid` and the saved record in `conflict`:
+  edited fields keep their edits and the others show the current data.
+  Use `data-placebo-local` only for controls that must stay together as one
+  unit or controls a behavior renders.
+- **Validation:** mark a rejected control with `.invalid(true)` and link its
+  message with `.described_by(id)`. Put feedback in a `role="status"` (or
+  `role="alert"`) element. An invalid reply moves focus to the first invalid
+  control, and the status element keeps its node so screen readers announce it.
+  Use `.required()` for fields the browser can check before submitting.
 - **Dialogs:** make the dialog the component root with `mount_dialog`, or keep
-  it outside the refreshed component. Listen for `placebo:applied` on `document`.
+  it outside the refreshed component. `Component::class` styles the root.
+  Listen for `placebo:applied` on `document`.
 - **Shared counts and summaries:** use `VersionedRegion`, mount it with
   `region.mount(revision, contents)`, declare it with `.affects(region)`, and
   reply with `.also_replace(region, revision, contents)`. Return the binding
   from one function that both the view's form and the handler's reply use. Increment the revision
-  with the data under the same lock or transaction. Use a plain `Region` for
-  read results and `.also_append(...)` collections.
+  with the data under the same lock or transaction.
+- **Lists:** use a `List` when items are added, removed, or reordered. Mount
+  each item with `LIST.item(key).mount(contents)`, declare `.affects(LIST)`,
+  and reply with `also_insert`, `also_move`, `also_remove`, or `also_order`.
+  Items keep their nodes, drafts, and focus. To show a new record in filtered
+  search results, declare the results region and reply with
+  `.also_refetch(&region)` instead of inserting into it.
+- **Other components and pages:** refresh another component with
+  `.affects(&component)` and `.also_refresh(&component, contents)`. After
+  creating or deleting a record, reply with `.navigate("/path")`.
 - **Verify in a browser:** compiling proves the Rust side agrees. Before calling
   a change done, run the app and exercise the changed flows: valid saves,
   invalid input, independent drafts, conflicts, and any dialog or search. Check
   the browser console: Placebo logs every failure as `[placebo:<code>]` with a
-  next step. Fix the cause rather than working around it.
+  next step. Fix the cause rather than working around it. When a write may
+  have committed but the page could not show it, the component gets
+  `data-placebo-stale`; show a way to reload.
 <!-- rules:end -->
 
 ## The application API
@@ -250,15 +268,19 @@ rejects dialogs nested inside replaceable component contents with
 This also applies to dialogs inside local subtrees. Opening/closing is still
 local application behavior; see [the dialog recipe](docs/interactions.md).
 
-**Keep drafts local; keep feedback and versions outside.** A matching
-`data-placebo-local="draft"` subtree retains its existing DOM, values, and
-listeners during a refresh. Incoming server markup inside it is ignored.
-`.reset_local("draft")` accepts normalized server values after a successful save
-only if the user has not edited that draft since submitting. Without that reset,
-the saved heading can change while the input retains its old value. Validation
-and conflict replies retain the draft: `invalid` and `conflict` return `Rejected`,
-which has no `reset_local`. Local keys are scoped to each component;
-nested or duplicate local keys are rejected.
+**Edits survive replies; everything else follows the server.** Each typed
+control is retained on its own. A control keeps its node, value, focus, and
+selection while it differs from the value the server last rendered, that is,
+while it holds an edit the server has not accepted. Every other control shows
+the reply's markup. After a successful save, the submitted controls show the
+saved (normalized) values, unless the person edited them again while the save
+was in flight. So render the submitted values in `invalid` and the saved record
+in `conflict`: in a conflict, the fields this person changed keep their edits
+and the fields they did not touch show what the other person saved. Saving
+again then cannot revert those. A kept control still takes the reply's
+`aria-invalid`, `aria-describedby`, `disabled`, `readonly`, and `required`.
+`data-placebo-local="key"` retains a whole subtree as one unit instead; keys
+are scoped to each component, and nested or duplicate keys are rejected.
 
 `fields!` requires every payload field exactly once, with the right value type.
 Missing/renamed fields, duplicate controls, the wrong form schema, and mismatched
@@ -284,10 +306,26 @@ the runtime prevents older responses from overwriting newer results. A read
 handler can take `HeaderMap` before `Input<Search>` to return a full page for a
 normal GET or an update for an enhanced request. See the [search example](examples/search.rs).
 
+Add `.history()` to a read binding to keep its query in the page URL. Each new
+query gets a history entry (keystrokes in one text field share one), Back and
+Forward put the entry's values back into the form and read again, and the page
+handler renders the same query on reload.
+
 For shared summaries/counts, declare a `VersionedRegion`, mount it with
 `counts.mount(revision, contents)`, declare `.affects(counts)`, and reply with
 `.also_replace(counts, revision, contents)`. A plain `Region` cannot be passed to
 `also_replace`; use plain regions for reads or `.also_append(...)` collections.
+
+For collections whose items are added, removed, or reordered, use a `List`:
+mount items with `LIST.item(key).mount(contents)`, declare `.affects(LIST)`, and
+reply with `also_insert(item, Position::End)`, `also_move(&item, Position::Before(other))`,
+`also_remove(&item)`, or `also_order(&LIST, items)`. Existing items keep their
+nodes, so drafts, open editors, focus, and behaviors inside them survive. A
+missing item or anchor is skipped and reported in the applied event instead of
+rejecting a reply whose write already committed. `also_refetch(&region)` runs a
+region's read form again with its current input, `also_refresh(&component, contents)`
+refreshes another declared component, and `navigate("/path")` goes to another
+page after a successful write.
 The server must increment the snapshot revision with each corresponding change.
 Build the form and the handler's replies from one function that returns the
 binding, so both declare the same regions; debug builds panic when a reply
@@ -422,8 +460,11 @@ servers and run in Chromium, Firefox, and WebKit; `npm test` uses Chromium, and
 ordering, remounts, independent instances, draft/focus preservation, validation,
 conflicts, static reload, Rust rebuild, compile-error recovery, and supervisor
 cleanup. Task tests additionally cover coordinated updates, reversed response
-delivery, guarded resets, append mounting, malformed batches, remounted extra
-targets, dialog focus, and behavior teardown/restart. The dev-loop test creates
+delivery, guarded refreshes, conflicts that show another tab's values in
+untouched fields, list inserts, moves, reorders, and deletes, cross-component
+refreshes, navigation, malformed batches, remounted extra targets, dialog and
+button focus, live-region identity, and behavior teardown/restart. Search tests
+cover history and refetching. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
@@ -433,8 +474,9 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 Saves without JavaScript (a save submitted before the runtime loads is refused
 with a page explaining that nothing was saved); file uploads and generated
 protocol definitions; richer state ownership;
-idempotency and recovery after uncertain mutations; nested components;
-navigation/history; streaming; general morphing; and an
+idempotency and recovery after uncertain mutations (a component whose write
+may have committed is only marked `data-placebo-stale`); nested components;
+revisions for components refreshed by other actions; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses
 Playwright's Chromium, Firefox, and WebKit builds on macOS. WebKit there
 approximates Safari; real Safari, mobile browsers, and other platforms are untested.
@@ -446,6 +488,3 @@ approximates Safari; real Safari, mobile browsers, and other platforms are untes
 - [Focus restoration](https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus)
 - [tower-livereload](https://docs.rs/tower-livereload/0.10.3/tower_livereload/)
 
-
-See the [corrected Issue Desk comparison](docs/comparison.md) for current evidence
-against Datastar: both repaired apps pass 14/14, with important scope limits.

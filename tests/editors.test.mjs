@@ -145,7 +145,7 @@ test("duplicate local keys reject a response before altering the live component"
   await page.route("**/actions/save-title", async route => {
     const response = await route.fetch();
     const update = await response.json();
-    update.html += '<div data-placebo-local="draft">duplicate</div>';
+    update.html = update.html.replace("</form>", '<input name="title" data-placebo-field="title"></form>');
     await route.fulfill({ response, body: JSON.stringify(update), contentType: "application/vnd.placebo.update+json" });
   });
   const heading = await page.locator(`${card(1)} h2`).textContent();
@@ -191,4 +191,40 @@ test("editors render at desktop and mobile sizes", async t => {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   if (process.env.PLACEBO_SCREENSHOTS) await page.screenshot({ path: "test-results/editors-mobile.png", fullPage: true });
+});
+
+test("submitting from the button keeps focus in the editor and moves it to the invalid field", async t => {
+  const page = await visit(t);
+  await page.evaluate(() => { window.status1 = document.querySelector("#feedback-1"); });
+  await page.locator("#title-1").fill("x");
+  await page.locator(`${card(1)} button[type=submit]`).focus();
+  await page.keyboard.press("Enter");
+  await applied(page, 1, "invalid");
+  assert.equal(await page.evaluate(() => document.activeElement.id), "title-1");
+  assert.equal(await page.locator("#title-1").getAttribute("aria-invalid"), "true");
+  // The status element is the same node, so screen readers announce the new text.
+  assert.ok(await page.evaluate(() => window.status1 === document.querySelector("#feedback-1")));
+  assert.match(await page.locator("#feedback-1").textContent(), /3 and 80/);
+
+  await page.locator("#title-1").fill("A valid title again");
+  await page.evaluate(() => { window.events = []; });
+  await page.locator(`${card(1)} button[type=submit]`).focus();
+  await page.keyboard.press("Enter");
+  await applied(page, 1);
+  assert.ok(await page.evaluate(() => document.activeElement.matches('[id="editor:1"] button[type=submit]')));
+  assert.equal(await page.locator("#title-1").getAttribute("aria-invalid"), null);
+  assert.ok(await page.evaluate(() => window.status1 === document.querySelector("#feedback-1")));
+});
+
+test("an untouched field shows the value another tab saved", async t => {
+  const first = await visit(t);
+  const second = await visit(t);
+  await second.locator("#delay-2").selectOption("600");
+  await save(first, 2, "Saved in the first tab");
+  await applied(first, 2);
+  // The second tab only changed the delay; the conflict shows the new title.
+  await second.locator("#title-2").press("Enter");
+  await applied(second, 2, "conflict");
+  assert.equal(await second.locator("#title-2").inputValue(), "Saved in the first tab");
+  assert.equal(await second.locator("#delay-2").inputValue(), "600");
 });

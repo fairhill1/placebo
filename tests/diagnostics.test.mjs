@@ -92,6 +92,27 @@ test("unknown behavior is visible once without enabling trace and can recover", 
   assert.equal(await page.locator("#forgotten-widget").textContent(), "Mounted after registration");
 });
 
+test("a behavior registered by a later module script is not reported as unknown", async t => {
+  const page = await fixture.page(t);
+  const logs = [];
+  page.on("console", message => { if (message.text().startsWith("[placebo:")) logs.push(message.text()); });
+  // Deferred module scripts run in order after parsing, while readyState is
+  // already "interactive". Holding the second one back opens the gap.
+  await page.route("**/race", route => route.fulfill({ contentType: "text/html", body: `<!doctype html>
+    <script type="module" src="/placebo.js"></script>
+    <script type="module" src="/late.js"></script>
+    <div id="late-widget" data-placebo-behavior="late"></div>` }));
+  await page.route("**/late.js", async route => {
+    await delay(300);
+    await route.fulfill({ contentType: "text/javascript", body: `import { behavior } from "/placebo.js";
+      behavior("late", node => { node.textContent = "Mounted"; });` });
+  });
+  await page.goto(`${fixture.origin}/race`);
+  await page.locator("#late-widget").filter({ hasText: "Mounted" }).waitFor();
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 50)));
+  assert.deepEqual(logs, []);
+});
+
 test("missing target explains that no request was started and names the affected region", async t => {
   const audit = await visit(t);
   await audit.page.evaluate(() => document.querySelector("#task-count").remove());
@@ -118,7 +139,7 @@ test("invalid form configuration retains useful preflight context", async t => {
   });
   const { detail } = await error(audit, "version-mismatch");
   assert.equal(detail.action, "save-task");
-  assert.equal(detail.expectedVersion, 3);
+  assert.equal(detail.expectedVersion, 4);
   assert.equal(detail.receivedVersion, 999);
   assert.equal(detail.requestState, "not-started");
 });
@@ -158,7 +179,7 @@ for (const [scenario, code, status, contentType, adapter = "save-task"] of [
       assert.match(detail.hint, /ACTION\.route\(handler\)/);
     }
     if (scenario === "version-mismatch") {
-      assert.equal(detail.expectedVersion, 3);
+      assert.equal(detail.expectedVersion, 4);
       assert.equal(detail.receivedVersion, 999);
     }
   });

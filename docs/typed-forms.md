@@ -15,10 +15,8 @@ const SAVE: MutationAction<SaveTitle> = MutationAction::new("save", "/save");
 let component = Component::new("editor", 42);
 let fields = fields! { SaveTitle {
     @field id = Control::hidden(42);
-    div data-placebo-local="draft" {
-        label for="title" { "Title" }
-        @field title = Control::text("A quiet workspace").id("title");
-    }
+    label for="title" { "Title" }
+    @field title = Control::text("A quiet workspace").id("title");
     button type="submit" { "Save" }
 } };
 let form = SAVE.bind(&component).form(fields);
@@ -207,7 +205,10 @@ The typed adapters decode requests the way browsers submit them:
 
 - An unchecked checkbox submits nothing; an absent `bool` field is `false`.
 - An empty value, or an absent field, is `None` for every `Option` field,
-  including `Option<String>`. An empty required number is a decoding error.
+  including `Option<String>`. An empty value for a number that is not an
+  `Option` would be a decoding error, so its `number` control renders
+  `required` and the browser asks for a value before submitting. Use
+  `Option` when the handler should answer an empty number with its own message.
 - `Vec` fields collect repeated values. With nothing selected the browser
   submits nothing, so `Vec` fields need `#[serde(default)]`.
 - Any other repeated value is a decoding error, not a silent first/last choice.
@@ -218,6 +219,14 @@ that group. Put a `fieldset` and `legend` around it for an accessible name.
 Selects and required radios must have an option for their initial value, and
 every value selected in a multiple selection needs a matching option.
 Optional radios may start as `None` with nothing checked.
+
+`.required()` renders `required` (on every button of a radio group), and
+`.max_length(n)` renders `maxlength` on text and textarea controls. After the
+server rejects a value, `.invalid(true)` renders `aria-invalid="true"`; link the
+message with `.described_by(id)`. An invalid reply focuses the first invalid
+control. Every control except `hidden` carries `data-placebo-field`, which lets
+the browser keep its unsaved edits across replies (see
+[what a reply keeps](interactions.md#what-a-reply-keeps)).
 
 Float `number` controls default to `step="any"`; `.min()`, `.max()` and `.step()`
 take the field's number type. `password()` always renders empty so a response
@@ -297,8 +306,8 @@ struct SaveTask { priority: Priority }
 
 ## Layout and limits
 
-Use ordinary Maud elements for layout and `data-placebo-local="draft"` to retain
-a subtree. Maud `@if`, `@match`, and loops work for surrounding content such as
+Use ordinary Maud elements for layout. Controls keep their own unsaved edits;
+`data-placebo-local="key"` retains a subtree as one unit when that is needed. Maud `@if`, `@match`, and loops work for surrounding content such as
 feedback. Required `@field` entries belong in unconditional markup, outside
 branches, loops, and Rust splices. To choose a control dynamically, put the Rust
 conditional in its value expression: `@field title = if editing { ... } else { ... };`.

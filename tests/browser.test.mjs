@@ -37,7 +37,7 @@ async function visit(t, { javaScriptEnabled = true, mockTransport = false } = {}
           request.done = true;
           const books = request.path.endsWith("books");
           request.resolve(new Response(JSON.stringify({
-            version: 3,
+            version: 4,
             action: books ? "search-books" : "search-places",
             target: books ? "book-results" : "place-results",
             operation: "replace-children",
@@ -272,4 +272,49 @@ test("IME composition cancels old work and sends only committed text", async t =
   await requested(page, "日本");
   await page.evaluate(() => window.deliver("日本"));
   await page.waitForFunction(() => document.querySelector("#book-results").textContent === "日本");
+});
+
+test("the Books search follows history: one entry per query, Back and reload restore it", async t => {
+  const page = await visit(t);
+  const books = () => page.locator("#book-results li").count();
+  const entries = await page.evaluate(() => history.length);
+  await page.locator("#books-query").fill("rust");
+  await page.waitForURL(/\?q=rust&/);
+  await page.waitForFunction(() => document.querySelectorAll("#book-results li").length === 2);
+  // Further keystrokes in the same field replace the entry the first one made.
+  await page.locator("#books-query").pressSequentially(" in");
+  await page.waitForURL(/\?q=rust\+in&/);
+  await page.waitForFunction(() => document.querySelectorAll("#book-results li").length === 1);
+  assert.equal(await page.evaluate(() => history.length), entries + 1);
+  await page.goBack();
+  await page.waitForFunction(() => document.querySelector("#books-query").value === "" &&
+    document.querySelectorAll("#book-results li").length === 4);
+  await page.goForward();
+  await page.waitForFunction(() => document.querySelector("#books-query").value === "rust in" &&
+    document.querySelectorAll("#book-results li").length === 1);
+  // The page renders the same query, so a reload or bookmark shows it too.
+  await page.reload();
+  assert.equal(await page.locator("#books-query").inputValue(), "rust in");
+  assert.equal(await books(), 1);
+  // The Places search does not follow history.
+  await page.locator("#places-query").fill("oslo");
+  await page.waitForFunction(() => document.querySelectorAll("#place-results li").length === 1);
+  assert.match(page.url(), /\?q=rust\+in&/);
+});
+
+// Runs last: it adds a book to the shared server state.
+test("adding a book reruns the Books search with its current filter and keeps focus on the button", async t => {
+  const page = await visit(t);
+  await page.locator("#books-query").fill("design");
+  await page.waitForFunction(() => document.querySelectorAll("#book-results li").length === 2);
+  await page.locator("#new-book").fill("Design Patterns");
+  // Submit from the keyboard: the button keeps focus while its node is replaced.
+  await page.locator('[id="add-book:1"] button').focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => document.querySelectorAll("#book-results li").length === 3);
+  const applied = await page.evaluate(() => window.events.find(e => e.type === "applied" && e.target === "add-book:1"));
+  assert.deepEqual(applied.refetched, ["book-results"]);
+  assert.equal(await page.locator("#new-book").inputValue(), "");
+  assert.equal(await page.locator("#add-feedback").textContent(), "Added.");
+  assert.ok(await page.evaluate(() => document.activeElement.matches('[id="add-book:1"] button')));
 });

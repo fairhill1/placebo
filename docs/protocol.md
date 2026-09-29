@@ -73,7 +73,9 @@ have a request in flight (reported in `skippedComponents` as `busy`); a
 nested component's root element type must not change. Local units and live
 regions belong to their nearest component. The incoming contents are inserted
 before kept nodes move into place, with `moveBefore` where supported; a moved
-open modal dialog is shown modally again elsewhere.
+open modal dialog is shown modally again elsewhere. A `details` element's open state and
+a popover's shown state carry over to the incoming element with the same id,
+in component refreshes and read replacements.
 
 A local unit is a typed control (`data-placebo-field`, keyed by its form's
 action path and field name) or an explicit `data-placebo-local` subtree, which

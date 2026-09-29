@@ -323,14 +323,40 @@ Unknown names are diagnosed after initialization; use `lazyBehavior()` to reserv
 intentional asynchronous registration. One behavior name is supported per
 element. See [diagnostics](diagnostics.md) for tracing and loading behavior.
 
-The example delegates open/close clicks and uses a native `<dialog>` for
-modality, keyboard behavior, and focus containment. The dialog and behavior
-root stay persistent. The edit dialogs contain a mounted form component. The
-add dialog uses `component.mount_dialog("add-heading", add_contents(...))`,
-which mounts the dialog itself as the component root. In both cases the native
-dialog node survives every reply. A row summary may replace its Edit button; delegation handles the new
-button, and close restores focus to the current trigger. There is no reactive
-expression language or global client state store in this experiment.
+The task example's behavior only carries application intent: close the
+editor after a save the page shows in full, and return focus to the current
+Edit button when a reply replaced the old one. Opening and closing are native.
+
+## Local UI state
+
+Browser-owned UI state starts with native HTML, which works before and
+without the runtime:
+
+- **Dialogs:** a `<button command="show-modal" commandfor="task:1">` opens a
+  modal dialog and `command="close"` closes it; Escape, the focus trap, and
+  returning focus come with `<dialog>`. Mount a dialog form with
+  `mount_dialog`, so its component id is the dialog's id and replies keep the
+  node, its open state, and its modality. A page rendered again for a rejected
+  native submission renders it `open`.
+- **Popovers:** `<button popovertarget="help-1">` and `<div popover id="help-1">`
+  for help text and menus.
+- **Disclosures:** `<details id="advanced-1">` for optional parts of a form.
+
+A reply that re-renders a `details` or popover with the same id keeps its open
+state: like a draft, it is the person's until they change it. To reset it from
+the server, render it with a new id. Without an id, the reply's markup decides.
+
+Buttons whose `commandfor` or `popovertarget` names no element, or an element
+of the wrong kind, do nothing in the browser. The runtime reports them once
+each as `missing-command-target` or `invalid-command`, with the button and the
+id.
+
+Use `behavior()` for what native features do not express: application intent
+such as closing a dialog after a successful save, focus decisions after a
+reply, or third-party widgets. Keep the behavior on an element that stays
+across replies (a list item or a component root), and read outcomes from
+`placebo:applied` on `document`. There is no reactive expression language or
+client state store; state that must survive a reload belongs on the server.
 
 ## Persistent dialog recipe
 
@@ -339,7 +365,10 @@ success. Include the heading, form and feedback each time:
 
 ```rust
 // Initial page: MountedComponent renders inside Maud's html!.
-html! { (component.mount_dialog("add-heading", add_contents("", ""))) }
+html! {
+    button type="button" command="show-modal" commandfor=(component.id()) { "+ Add task" }
+    (component.mount_dialog("add-heading", add_contents("", "")))
+}
 // Handler: Markup contents only. The dialog root is never in this fragment.
 binding.invalid(add_contents(&input.title, "Use 3–80 characters."))
 binding.reply(add_contents("", "Saved."))

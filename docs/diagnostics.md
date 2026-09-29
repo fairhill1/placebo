@@ -97,6 +97,14 @@ a successful save returned to `/`; keep the default `Referrer-Policy` or reply
 with `.navigate(path)`. The person still sees their values and the feedback in
 both cases.
 
+## Buttons that do nothing
+
+A `commandfor` or `popovertarget` button whose target is missing, or a command
+aimed at the wrong kind of element, is inert in the browser without any
+message. After the page loads, and after each change to the DOM, the runtime
+reports each such button once as `[placebo:missing-command-target]` or
+`[placebo:invalid-command]`, naming the button, the id, and the command.
+
 ## Live updates
 
 A feed's connection is traced as `placebo:push` with `push-connected`,

@@ -82,6 +82,7 @@ fn notes(checklist: &Checklist, feedback: &str) -> Markup {
         @field notes = Control::textarea(&checklist.notes).id("notes").rows(3);
         p role="status" { (feedback) }
         button type="submit" { "Save notes" }
+        button type="button" command="close" commandfor="notes:1" { "Close" }
     } };
     SAVE_NOTES.bind(&Component::new("notes", 1)).form(fields)
 }
@@ -106,6 +107,7 @@ fn checklist(checklist: &Checklist, feedback: &str) -> Markup {
                 li { (Component::new("entry", item.id).mount(entry(item, checklist.locked, ""))) }
             }
         }
+        button type="button" command="show-modal" commandfor="notes:1" { "Notes" }
         (Component::new("notes", 1).mount_dialog("notes-heading", notes(checklist, "")))
     }
 }

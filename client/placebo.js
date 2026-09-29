@@ -172,7 +172,7 @@ const hints = {
   "duplicate-local": "Give each retained subtree a unique key within its component. Two forms for the same action in one component cannot both render a field of the same name.",
   "local-shape": "Keep a retained local key on the same element type, or use a new key for a fresh subtree.",
   "nested-local": "Use separate local ownership boundaries; nested local subtrees are not supported.",
-  "nested-component": "Refresh separate component instances; nested component refreshes are not supported yet.",
+  "nested-component": "Mount a nested component the same way in every render (mount or mount_dialog), so its root element keeps its type.",
   "unstable-dialog": "Use component.mount_dialog(headingId, contents), or mount the component inside a persistent dialog. Replies must contain only the component contents.",
   "nested-region": "Keep shared snapshot regions free of other mounted regions.",
   "unknown-behavior": "Check the name and module import. Register with behavior() before mounting, or reserve an asynchronous import with lazyBehavior().",
@@ -182,7 +182,7 @@ const hints = {
   "unsupported-method": "Use a GET read binding or a POST mutation binding with its supported request policy.",
   "cross-origin-action": "Use a same-origin action URL.",
   "cross-origin-navigation": "Navigate replies to a path on this site; link to other sites from the page instead.",
-  "invalid-component": "Mount the mutation form inside the component it updates.",
+  "invalid-component": "Render the mutation form in the contents of the component it updates, not in a component nested inside it.",
   "unstable-source": "Keep a read form outside the region its response replaces.",
   "unsupported-file": "Give the payload an Upload field and render it with Control::file(); only mutation forms send files.",
   "upload-too-large": "The runtime checks file sizes against data-placebo-max-bytes before sending; render the input with Control::file(), or raise the field's Upload<MAX_BYTES>.",
@@ -398,7 +398,12 @@ function updateFragment(work, update) {
         // Its own request in flight will answer with state at least as new.
         if (pending.has(target)) return { skipComponent: { target: patch.target, reason: "busy" } };
         const prepared = prepareComponent(target, parseHTML(patch.html), "external");
-        return { commit: () => { prepared.commit(); settle(target); summary.refreshedComponents.push(patch.target); } };
+        return { commit: () => {
+          prepared.commit();
+          settle(target);
+          summary.refreshedComponents.push(patch.target, ...prepared.components.refreshed);
+          summary.skippedComponents.push(...prepared.components.skipped);
+        } };
       }
       case "insert-item": case "move-item": case "remove-item": case "order-items": {
         require(list, "invalid-patch", "Item updates address a mounted List.");
@@ -421,6 +426,8 @@ function updateFragment(work, update) {
   work.phase = "applying";
   primary.commit();
   settle(work.target);
+  summary.refreshedComponents.push(...(primary.components?.refreshed ?? []));
+  summary.skippedComponents.push(...(primary.components?.skipped ?? []));
   if (update.outcome === "invalid") focusInvalid(work, primary);
   if (work.historyMode && work.historyMode !== "none") updateHistory(work);
   for (const plan of plans) plan.commit?.();
@@ -516,14 +523,42 @@ function planItems(list, patch, reserve, summary) {
 }
 
 // moveBefore keeps focus, open dialogs, and iframes. insertBefore detaches the
-// node first, so restore focus there at least.
+// node first, so restore focus, and the modality of an open modal dialog.
 function moveInto(parent, node, before) {
   const focused = node.contains(document.activeElement) ? document.activeElement : null;
-  if (typeof parent.moveBefore === "function") {
-    try { parent.moveBefore(node, before); return; } catch { /* Fall back below. */ }
+  const selection = focused && typeof focused.selectionStart === "number"
+    ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
+  let moved = false;
+  if (typeof parent.moveBefore === "function" && parent.isConnected && node.isConnected) {
+    try { parent.moveBefore(node, before); moved = true; } catch { /* Fall back below. */ }
   }
-  parent.insertBefore(node, before);
-  if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  if (!moved) {
+    const modal = [node, ...node.querySelectorAll("dialog")].filter(dialog => dialog.matches("dialog:modal"));
+    parent.insertBefore(node, before);
+    // Removing the attribute and showing it again fires no close event.
+    for (const dialog of modal) { dialog.removeAttribute("open"); dialog.showModal(); }
+  }
+  // Some engines' moveBefore keeps the dialog but not focus.
+  if (focused?.isConnected && document.activeElement !== focused) {
+    focused.focus({ preventScroll: true });
+    if (selection) focused.setSelectionRange(...selection);
+  }
+}
+
+// Put the incoming contents into the target, with each kept node in place of
+// its incoming counterpart. The incoming contents are connected first, so a
+// kept node moves instead of leaving the document: focus and a modal dialog
+// inside it stay where moveBefore is supported, and are restored elsewhere.
+function graft(target, fragment, kept) {
+  const previous = Array.from(target.childNodes);
+  target.append(fragment);
+  const keptNodes = new Set();
+  for (const [old, next] of kept) {
+    moveInto(next.parentNode, old, next);
+    next.remove();
+    keptNodes.add(old);
+  }
+  for (const node of previous) if (node.parentNode === target && !keptNodes.has(node)) node.remove();
 }
 
 const FOCUSABLE = "a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex='-1'])";
@@ -541,11 +576,22 @@ function removeItem(node, hadFocus) {
   }
 }
 
+// A node belongs to its nearest component. Nested components own their own
+// contents: a refresh of the outer one refreshes each inner one separately.
+function owner(root) { return root.nodeType === Node.ELEMENT_NODE ? root : null; }
+function ownedBy(node, root) { return node.closest("[data-placebo-component]") === owner(root); }
+function childComponents(root) {
+  return new Map(Array.from(root.querySelectorAll("[data-placebo-component]"))
+    .filter(child => (child.parentElement?.closest("[data-placebo-component]") ?? null) === owner(root))
+    .map(child => [child.id, child]));
+}
+
 function locals(root) {
-  require(!root.querySelector("[data-placebo-component]"), "nested-component", "Nested component refresh is not supported yet.");
-  require(!root.querySelector("dialog"), "unstable-dialog", "A dialog inside replaceable component contents would lose its native state and listeners.");
+  require(!Array.from(root.querySelectorAll("dialog")).some(dialog => ownedBy(dialog, root)), "unstable-dialog",
+    "A dialog inside replaceable component contents would lose its native state and listeners.");
   const found = new Map();
   for (const element of root.querySelectorAll("[data-placebo-local],[data-placebo-field]")) {
+    if (!ownedBy(element, root)) continue;
     const explicit = element.hasAttribute("data-placebo-local");
     const outer = element.parentElement?.closest("[data-placebo-local]");
     const nested = outer && root.contains(outer);
@@ -628,13 +674,33 @@ function prepareComponent(target, fragment, mode, snapshots = null) {
       if (controls.length) preserved.push({ key, reason: unchanged ? "unsaved-edits" : "edited-since-submission" });
     }
   }
+  // A nested component keeps its node. It takes its incoming contents by the
+  // rule for a refresh from another action (edited controls stay), unless it
+  // has its own request in flight, whose reply carries its state.
+  const children = [], components = { refreshed: [], skipped: [] };
+  const currentChildren = childComponents(target);
+  for (const [id, next] of childComponents(fragment)) {
+    const old = currentChildren.get(id);
+    if (!old) continue;
+    require(old.localName === next.localName, "nested-component",
+      `Nested component '${id}' changed its root element from <${old.localName}> to <${next.localName}>.`, { relatedTarget: id });
+    if (pending.has(old)) {
+      components.skipped.push({ target: id, reason: "busy" });
+      children.push({ old, next });
+      continue;
+    }
+    const contents = document.createDocumentFragment();
+    contents.append(...next.childNodes);
+    const plan = prepareComponent(old, contents, "external");
+    components.refreshed.push(id, ...plan.components.refreshed);
+    components.skipped.push(...plan.components.skipped);
+    children.push({ old, next, plan });
+  }
   const live = pairLiveRegions(target, fragment);
-  const focused = document.activeElement;
-  const retainedFocus = Array.from(current).some(([key, node]) => ["keep", "same"].includes(plans.get(key)) && node.contains(focused));
-  const selection = retainedFocus && typeof focused.selectionStart === "number"
-    ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
-  return { refreshed, preserved, commit() {
-    const anchor = retainedFocus ? null : focusAnchor(target);
+  return { refreshed, preserved, components, commit() {
+    const focused = document.activeElement;
+    const anchor = focusAnchor(target);
+    const kept = [];
     for (const [key, next] of incoming) {
       const old = current.get(key);
       const plan = plans.get(key);
@@ -644,14 +710,15 @@ function prepareComponent(target, fragment, mode, snapshots = null) {
           else old.removeAttribute(name);
         }
       }
-      if (plan === "keep" || plan === "same") next.replaceWith(old);
+      if (plan === "keep" || plan === "same") kept.push([old, next]);
+    }
+    for (const { old, next, plan } of children) {
+      if (plan) { plan.commit(); settle(old); }
+      kept.push([old, next]);
     }
     keepLiveRegions(live);
-    target.replaceChildren(fragment);
-    if (retainedFocus && focused.isConnected) {
-      focused.focus({ preventScroll: true });
-      if (selection) focused.setSelectionRange(...selection);
-    } else restoreFocus(target, anchor);
+    graft(target, fragment, kept);
+    if (!(focused?.isConnected && target.contains(focused))) restoreFocus(target, anchor);
   } };
 }
 
@@ -673,7 +740,7 @@ const LIVE = "[aria-live],[role=status],[role=alert],[role=log],output";
 function pairLiveRegions(root, fragment) {
   const outermost = scope => Array.from(scope.querySelectorAll(LIVE)).filter(node => {
     const outer = node.parentElement?.closest(LIVE);
-    return !(outer && scope.contains(outer)) && !node.closest("[data-placebo-local],[data-placebo-field]") &&
+    return !(outer && scope.contains(outer)) && ownedBy(node, scope) && !node.closest("[data-placebo-local],[data-placebo-field]") &&
       !node.querySelector("[data-placebo-local],[data-placebo-field],[data-placebo-region]");
   });
   const current = outermost(root), incoming = outermost(fragment);
@@ -897,8 +964,10 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
       return;
     }
     if (config.operation === "refresh-component") {
-      require(target.hasAttribute("data-placebo-component") && target.contains(form),
-        "invalid-component", "A mutation form must belong to its target component.");
+      const nearest = form.closest("[data-placebo-component]");
+      require(target.hasAttribute("data-placebo-component") && nearest === target, "invalid-component", nearest && target.contains(nearest)
+        ? `This form is inside nested component '${nearest.id}' but targets '${target.id}'. A form belongs to its nearest component.`
+        : "A mutation form must belong to its target component.", { relatedTarget: nearest?.id ?? null });
     } else require(!target.contains(form), "unstable-source", "Place persistent read forms outside their replacement region.");
     const url = new URL(form.action, document.baseURI);
     const method = form.method.toUpperCase();

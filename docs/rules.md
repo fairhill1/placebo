@@ -21,7 +21,8 @@ These apply to people and coding agents alike.
   query (`Input<Search>` in the page handler) so reloads and bookmarks work.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
-  including the form and its feedback, never another mount.
+  including the form and its feedback, never another mount. Contents may mount
+  other components; each keeps its node and drafts when the outer one refreshes.
 - **Drafts:** typed controls keep what the person typed by themselves. A reply
   replaces everything except controls with edits the server has not accepted;
   after a successful save, the submitted controls show the saved values.

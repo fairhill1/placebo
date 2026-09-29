@@ -198,7 +198,8 @@ These apply to people and coding agents alike.
   query (`Input<Search>` in the page handler) so reloads and bookmarks work.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
-  including the form and its feedback, never another mount.
+  including the form and its feedback, never another mount. Contents may mount
+  other components; each keeps its node and drafts when the outer one refreshes.
 - **Drafts:** typed controls keep what the person typed by themselves. A reply
   replaces everything except controls with edits the server has not accepted;
   after a successful save, the submitted controls show the saved values.
@@ -261,8 +262,9 @@ and the complete [task example](examples/tasks.rs).
 **Mount on the page; reply with contents.** A refresh keeps the existing outer
 component element. Passing `component.mount(...)` into `reply`, `invalid`, or
 `conflict` now fails to compile: mounting returns `MountedComponent`, while replies
-accept `Markup`. Wrapping a mount in arbitrary `html!` erases that distinction;
-the browser still rejects nested components. All three responses should
+accept `Markup`. Contents may mount other components: a refresh keeps each
+nested component's node and refreshes it by its own rules (see
+[nested components](docs/interactions.md#nested-components)). All three responses should
 render the complete component contents, including the form and feedback;
 returning only an error paragraph would remove the form and its draft.
 
@@ -289,8 +291,10 @@ install it with `.layer(placebo::replays(store))`. See
 
 **Keep the dialog root persistent.** Use
 `component.mount_dialog("heading-id", contents)` to make the native dialog the
-component root, or put `component.mount(contents)` inside a dialog. The browser
-rejects dialogs nested inside replaceable component contents with
+component root, or put `component.mount(contents)` inside a dialog. A
+`mount_dialog` component may sit inside another component's contents; it keeps
+its node, open state, and modality when the outer one refreshes. The browser
+rejects other dialogs inside replaceable component contents with
 `unstable-dialog`, before sending a mutation or applying a malformed response.
 This also applies to dialogs inside local subtrees. Opening/closing is still
 local application behavior; see [the dialog recipe](docs/interactions.md).
@@ -423,6 +427,7 @@ cargo run --features dev --bin placebo -- dev --example search --features dev
 # Run an example directly, without the development supervisor:
 cargo run --example editors
 cargo run --example uploads  # File fields: http://127.0.0.1:4321
+cargo run --example nested   # Nested components: http://127.0.0.1:4322
 ```
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
@@ -498,7 +503,9 @@ cover history and refetching. Native tests submit saves, validation, conflicts,
 moves, and searches with JavaScript disabled or before the runtime loads. Replay
 tests lose responses after and before the write, retry, and submit twice.
 Upload tests send files through the runtime and natively, keep a chosen file
-across a rejected reply, and refuse oversized files in the browser and server. The dev-loop test creates
+across a rejected reply, and refuse oversized files in the browser and server.
+Nested tests refresh a component around busy, edited, removed, and dialog
+components. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
@@ -506,7 +513,6 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 ## Still open
 
 Generated protocol definitions; resumable or streamed uploads; richer state ownership;
-nested components;
 revisions for components refreshed by other actions; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses
 Playwright's Chromium, Firefox, and WebKit builds on macOS. WebKit there

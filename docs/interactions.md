@@ -69,9 +69,9 @@ reply.also_order(&LIST, ids.iter().map(|id| LIST.item(id)))
 ```
 
 Items keep their DOM nodes. Moving a row keeps an unsaved draft in its dialog,
-its behaviors, and focus (`moveBefore` where the browser has it; elsewhere the
-runtime refocuses the moved element, but an open modal dialog inside a moved
-item loses its modality). Removing an item with focus moves focus to a
+its behaviors, focus, and an open modal dialog (`moveBefore` where the browser
+has it; elsewhere the runtime refocuses the moved element and shows the dialog
+modally again, which fires `toggle` but not `close`). Removing an item with focus moves focus to a
 neighbouring item. A form inside an item can move or delete it: a list may
 contain the replies' other targets.
 
@@ -109,8 +109,41 @@ The browser captures every declared destination's actual DOM node when a form
 is scheduled. Remounting the same ID does not transfer response ownership.
 Targets must be distinct and cannot contain one another. Additional targets
 must be plain regions; replaceable shared snapshots cannot contain regions.
-A list or plain collection may contain components, but the experiment still
-rejects refreshing a component that contains other components.
+A list or plain collection may contain components, and a component may contain
+other components (below).
+
+## Nested components
+
+A component's contents may mount other components. Each one is its own
+component: it has its own id (`kind:key`, unique on the page), its own forms,
+local units, and requests, and replies, `also_refresh`, and pushes address it
+by that id. A node belongs to its nearest component.
+
+When the outer component refreshes, its reply renders the inner components'
+mounts again, and the browser matches them by id:
+
+- A nested component that is still there **keeps its node**, so its root
+  attributes, behaviors, focus, and an open or modal `mount_dialog` survive.
+  It takes its new contents by the rule for a refresh from another action:
+  controls with edits keep them, everything else shows the reply.
+- A nested component with its **own request in flight** keeps its contents
+  untouched; its own reply carries its state. The applied event reports it in
+  `skippedComponents` with reason `busy`.
+- A nested component the reply **leaves out is removed**. A request it had in
+  flight is discarded, with the `mutation-interrupted` warning if it was a write.
+- A new one is mounted like any other markup.
+
+The outer component's local units and live regions are only its own, so two
+nested components can render the same form without a `duplicate-local` clash.
+Refreshing a nested component never touches the outer one. A form belongs to
+its nearest component: a form inside a nested component that targets the outer
+one is rejected with `invalid-component` before sending, and a reply cannot
+also refresh a component inside its own target (`overlapping-targets`), since
+the target's contents already refresh it. A nested component must keep its
+root element (`mount` or `mount_dialog`) across renders, or the reply is
+rejected with `nested-component`. The
+[nested example](../examples/nested.rs) mounts entries and a notes dialog inside
+a checklist.
 
 All patch targets, operations, revisions, and local keys are checked before
 the first DOM change. Invalid batches leave the existing DOM intact and emit
@@ -215,10 +248,10 @@ binding.reply(add_contents("", "Saved."))
 ```
 
 `mount()` and `mount_dialog()` return `MountedComponent`, so passing a mount
-directly to `reply`, `invalid` or `conflict` fails to compile. Arbitrary Maud
-composition can erase that type distinction; nested component wrappers remain
-runtime errors. A dialog anywhere inside replaceable component contents,
-including local subtrees, produces `unstable-dialog`. The runtime checks the
+directly to `reply`, `invalid` or `conflict` fails to compile. A dialog inside
+replaceable component contents, including local subtrees, produces
+`unstable-dialog`, unless it is the root of a nested `mount_dialog` component,
+which keeps its node when the outer component refreshes. The runtime checks the
 mounted shape before sending and the incoming shape before applying any patches.
 Keep dialogs at the component root or outside the refreshed component.
 
@@ -240,6 +273,5 @@ backwards, and ordering snapshots alone cannot protect typing during a save.
 
 The behavior hook is sufficient for these dialogs without changing the HTML
 renderer. Forms now use `fields!` to keep Maud layout and typed controls in one
-block; the typed builder remains underneath for field-completion checks. Nested
-component refreshes, uncertain-write recovery, general reactive state,
-component revisions, and persistent storage remain separate work.
+block; the typed builder remains underneath for field-completion checks. General
+reactive state and persistent storage remain separate work.

@@ -549,3 +549,21 @@ test("moving a task without JavaScript redirects back to the page in its new ord
   await back;
   assert.deepEqual(await order(page), before);
 });
+
+test("an open edit dialog stays modal, with focus, when its row moves", async t => {
+  const page = await visit(t);
+  await edit(page, 2);
+  await page.locator("#title-2").fill("Typing while the row moves");
+  const moved = page.waitForFunction(() => window.events.some(e => e.type === "applied" && e.target === "task-order:2"));
+  await page.evaluate(() => document.querySelector('[id="task-order:2"] form').requestSubmit());
+  await moved;
+  assert.deepEqual(await page.evaluate(() => {
+    const dialog = document.querySelector('[data-task="2"] dialog');
+    return { modal: dialog.matches(":modal"), focused: document.activeElement === document.querySelector("#title-2"),
+      value: document.querySelector("#title-2").value };
+  }), { modal: true, focused: true, value: "Typing while the row moves" });
+  await page.keyboard.press("Escape");
+  // Put the order back for the other tests.
+  await page.evaluate(() => document.querySelector('[id="task-order:2"] form:last-of-type').requestSubmit());
+  await page.waitForFunction(() => window.events.filter(e => e.type === "applied" && e.target === "task-order:2").length === 2);
+});

@@ -43,19 +43,20 @@ enum Feedback<'a> {
     Conflict,
 }
 
-fn editor(item: &Item, draft: &str, feedback: Feedback<'_>) -> Markup {
+fn editor(item: &Item, draft: &str, delay_ms: u64, feedback: Feedback<'_>) -> Markup {
     let component = Component::new("editor", item.id);
     let input_id = format!("title-{}", item.id);
     let error_id = format!("feedback-{}", item.id);
     let fields = fields! { SaveTitle {
         @field id = Control::hidden(item.id);
         @field version = Control::hidden(item.version);
-        div data-placebo-local="draft" {
+        div {
             label for=(input_id) { "Title" }
-            @field title = Control::text(draft).id(&input_id).described_by(&error_id).autocomplete("off");
+            @field title = Control::text(draft).id(&input_id).described_by(&error_id).autocomplete("off")
+                .invalid(matches!(feedback, Feedback::Invalid(_)));
             .network {
                 label for=(format!("delay-{}", item.id)) { "Response delay" }
-                @field delay_ms = Control::select(0, [(0, "None"), (600, "600 ms")]).id(&format!("delay-{}", item.id));
+                @field delay_ms = Control::select(delay_ms, [(0, "None"), (600, "600 ms")]).id(&format!("delay-{}", item.id));
             }
         }
         p .feedback id=(error_id) role="status" aria-live="polite" {
@@ -107,7 +108,7 @@ async fn home(State(store): State<Store>) -> Markup {
                     }
                     .panels {
                         @for item in &items {
-                            (Component::new("editor", item.id).mount(editor(item, &item.title, Feedback::Idle)))
+                            (Component::new("editor", item.id).mount(editor(item, &item.title, 0, Feedback::Idle)))
                         }
                     }
                     details .trace {
@@ -136,6 +137,7 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Res
             .invalid(editor(
                 item,
                 &input.title,
+                input.delay_ms,
                 Feedback::Invalid("Use between 3 and 80 characters."),
             ))
             .into_response();
@@ -144,13 +146,20 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Res
     // covers one mounted instance; this protects against writes from other tabs.
     if input.version != item.version {
         return binding
-            .conflict(editor(item, &input.title, Feedback::Conflict))
+            // Render the saved record: the browser keeps the fields this
+            // person edited and shows the other tab's values in the rest.
+            .conflict(editor(
+                item,
+                &item.title,
+                input.delay_ms,
+                Feedback::Conflict,
+            ))
             .into_response();
     }
     item.title = title.to_owned();
     item.version += 1;
     binding
-        .reply(editor(item, &input.title, Feedback::Saved))
+        .reply(editor(item, &input.title, input.delay_ms, Feedback::Saved))
         .into_response()
 }
 

@@ -181,6 +181,9 @@ pub struct Control<T> {
     min: Option<String>,
     max: Option<String>,
     step: Option<String>,
+    required: bool,
+    max_length: Option<u32>,
+    invalid: bool,
     value: PhantomData<fn() -> T>,
 }
 
@@ -197,8 +200,45 @@ impl<T> Control<T> {
             min: None,
             max: None,
             step: None,
+            required: false,
+            max_length: None,
+            invalid: false,
             value: PhantomData,
         }
+    }
+
+    /// The browser refuses to submit the form while this control is empty.
+    /// For radios it applies to every button; a checkbox group cannot be required.
+    pub fn required(mut self) -> Self {
+        assert!(
+            !matches!(self.kind, Kind::Hidden(_) | Kind::Checkboxes(_)),
+            "required does not apply to hidden controls or checkbox groups"
+        );
+        self.required = true;
+        self
+    }
+
+    /// The most characters the browser lets someone type.
+    pub fn max_length(mut self, length: u32) -> Self {
+        assert!(
+            matches!(self.kind, Kind::Text(..) | Kind::TextArea(_)),
+            "max_length applies to text and textarea controls"
+        );
+        self.max_length = Some(length);
+        self
+    }
+
+    /// Mark the control `aria-invalid` when the server rejected its value.
+    /// Link the message with `described_by`. An invalid reply moves focus to
+    /// the first invalid control, and the mark follows the server even while
+    /// the control keeps its unsaved value.
+    pub fn invalid(mut self, invalid: bool) -> Self {
+        assert!(
+            !matches!(self.kind, Kind::Hidden(_)),
+            "a hidden control cannot be marked invalid"
+        );
+        self.invalid = invalid;
+        self
     }
 
     /// For grouped controls (radios and checkboxes), this applies to the group element.
@@ -258,51 +298,64 @@ impl<T> Control<T> {
             min,
             max,
             step,
+            required,
+            max_length,
+            invalid,
             ..
         } = self;
+        // Every visible control is its own retained unit, keyed by field name,
+        // so a reply keeps its unsaved edits and replaces everything around it.
+        let field = name;
+        let invalid = invalid.then_some("true");
         match kind {
             Kind::Hidden(value) => html! { input type="hidden" name=(name) value=(value); },
             Kind::Text(value, kind) => html! {
-                input type=(kind) name=(name) value=(value) id=[id] class=[class]
-                    aria-describedby=[described_by] autocomplete=[autocomplete] placeholder=[placeholder];
+                input type=(kind) name=(name) value=(value) id=[id] class=[class] required[required]
+                    maxlength=[max_length] aria-invalid=[invalid] aria-describedby=[described_by]
+                    autocomplete=[autocomplete] placeholder=[placeholder] data-placebo-field=(field);
             },
             // The parser drops one newline after <textarea>, so emit our own to keep a leading one.
             Kind::TextArea(value) => html! {
-                textarea name=(name) id=[id] class=[class] rows=[rows] aria-describedby=[described_by]
-                    autocomplete=[autocomplete] placeholder=[placeholder] { "\n" (value) }
+                textarea name=(name) id=[id] class=[class] rows=[rows] required[required] maxlength=[max_length]
+                    aria-invalid=[invalid] aria-describedby=[described_by] autocomplete=[autocomplete]
+                    placeholder=[placeholder] data-placebo-field=(field) { "\n" (value) }
             },
             Kind::Number(value) => html! {
                 input type="number" name=(name) value=(value) min=[min] max=[max] step=[step]
-                    id=[id] class=[class] aria-describedby=[described_by]
-                    autocomplete=[autocomplete] placeholder=[placeholder];
+                    id=[id] class=[class] required[required] aria-invalid=[invalid] aria-describedby=[described_by]
+                    autocomplete=[autocomplete] placeholder=[placeholder] data-placebo-field=(field);
             },
             Kind::Checkbox(checked) => html! {
                 input type="checkbox" name=(name) value="true" checked[checked] id=[id] class=[class]
-                    aria-describedby=[described_by];
+                    required[required] aria-invalid=[invalid] aria-describedby=[described_by] data-placebo-field=(field);
             },
             Kind::Select(options) => html! {
-                select name=(name) id=[id] class=[class] aria-describedby=[described_by] autocomplete=[autocomplete] {
+                select name=(name) id=[id] class=[class] required[required] aria-invalid=[invalid]
+                    aria-describedby=[described_by] autocomplete=[autocomplete] data-placebo-field=(field) {
                     @for (value, label, selected) in options {
                         option value=(value) selected[selected] { (label) }
                     }
                 }
             },
             Kind::MultiSelect(options) => html! {
-                select multiple name=(name) id=[id] class=[class] aria-describedby=[described_by] {
+                select multiple name=(name) id=[id] class=[class] required[required] aria-invalid=[invalid]
+                    aria-describedby=[described_by] data-placebo-field=(field) {
                     @for (value, label, selected) in options {
                         option value=(value) selected[selected] { (label) }
                     }
                 }
             },
             Kind::Radios(options) => html! {
-                div role="radiogroup" id=[id] class=[class] aria-describedby=[described_by] {
+                div role="radiogroup" id=[id] class=[class] aria-required=[required.then_some("true")]
+                    aria-invalid=[invalid] aria-describedby=[described_by] data-placebo-field=(field) {
                     @for (value, label, checked) in options {
-                        label { input type="radio" name=(name) value=(value) checked[checked]; " " (label) }
+                        label { input type="radio" name=(name) value=(value) checked[checked] required[required]; " " (label) }
                     }
                 }
             },
             Kind::Checkboxes(options) => html! {
-                div role="group" id=[id] class=[class] aria-describedby=[described_by] {
+                div role="group" id=[id] class=[class] aria-invalid=[invalid] aria-describedby=[described_by]
+                    data-placebo-field=(field) {
                     @for (value, label, checked) in options {
                         label { input type="checkbox" name=(name) value=(value) checked[checked]; " " (label) }
                     }
@@ -404,9 +457,12 @@ impl<T: TextValue> Control<T> {
 
 impl<T: NumberValue> Control<T> {
     /// Float fields default to `step="any"`; integer fields use the browser's step of 1.
+    /// A number that is not an `Option` is `required`: an empty submission
+    /// would fail decoding before the handler could answer with a message.
     pub fn number(value: T) -> Self {
         let mut control = Self::new(Kind::Number(value.encode()));
         control.step = T::STEP.map(Into::into);
+        control.required = !matches!(T::ABSENT, private::Absent::None);
         control
     }
     pub fn min(mut self, value: T::Number) -> Self {

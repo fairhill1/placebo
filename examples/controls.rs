@@ -48,7 +48,7 @@ fn editor(saved: &SaveProfile, draft: &SaveProfile, feedback: Option<&str>) -> M
     let component = Component::new("profile", 1);
     let d = draft.clone();
     let fields = fields! { SaveProfile {
-        div data-placebo-local="draft" {
+        div {
             label for="name" { "Name" }
             @field name = Control::text(d.name).id("name").autocomplete("name");
             label for="email" { "Email" }
@@ -118,7 +118,6 @@ async fn save(State(store): State<Store>, Input(mut input): Input<SaveProfile>) 
     *saved = input;
     binding
         .reply(editor(&saved, &saved, Some("Saved.")))
-        .reset_local("draft")
         .into_response()
 }
 

@@ -1,4 +1,5 @@
-//! A small task list: coordinated fragments, revisioned summaries, and dialogs.
+//! A small task list: coordinated fragments, revisioned summaries, dialogs,
+//! and a keyed list whose rows can be added, deleted, and reordered.
 use axum::{
     Router,
     extract::State,
@@ -8,10 +9,10 @@ use axum::{
 };
 use maud::{DOCTYPE, Markup, html};
 use placebo::{
-    Component, Control, FormInput, Input, MutationAction, MutationBinding, Region, VersionedRegion,
-    fields,
+    Component, Control, FormEnum, FormInput, Input, List, MutationAction, MutationBinding,
+    Position, VersionedRegion, fields,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -19,10 +20,13 @@ use std::{
 };
 mod support;
 
-const LIST: Region = Region::new("tasks");
+const LIST: List = List::new("tasks");
 const SUMMARY: VersionedRegion = VersionedRegion::new("task-count");
 const ADD: MutationAction<AddTask> = MutationAction::new("add-task", "/actions/add-task");
 const SAVE: MutationAction<SaveTask> = MutationAction::new("save-task", "/actions/save-task");
+const DELETE: MutationAction<DeleteTask> =
+    MutationAction::new("delete-task", "/actions/delete-task");
+const MOVE: MutationAction<MoveTask> = MutationAction::new("move-task", "/actions/move-task");
 
 #[derive(Deserialize, FormInput)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +44,26 @@ struct SaveTask {
     delay_ms: u64,
 }
 
+#[derive(Deserialize, FormInput)]
+#[serde(deny_unknown_fields)]
+struct DeleteTask {
+    id: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, FormEnum)]
+#[serde(rename_all = "lowercase")]
+enum Direction {
+    Up,
+    Down,
+}
+
+#[derive(Deserialize, FormInput)]
+#[serde(deny_unknown_fields)]
+struct MoveTask {
+    id: u64,
+    direction: Direction,
+}
+
 struct Task {
     id: u64,
     title: String,
@@ -48,8 +72,15 @@ struct Task {
 }
 struct Tasks {
     items: BTreeMap<u64, Task>,
+    order: Vec<u64>,
     revision: u64,
     next_id: u64,
+}
+
+impl Tasks {
+    fn in_order(&self) -> impl Iterator<Item = &Task> {
+        self.order.iter().map(|id| &self.items[id])
+    }
 }
 type Store = Arc<Mutex<Tasks>>;
 
@@ -63,6 +94,17 @@ fn save_binding(task: &Task) -> MutationBinding<SaveTask> {
     SAVE.bind(&Component::new("task", task.id))
         .affects(row_summary(task))
         .affects(SUMMARY)
+}
+
+fn delete_binding(id: u64) -> MutationBinding<DeleteTask> {
+    DELETE
+        .bind(&Component::new("task", id))
+        .affects(LIST)
+        .affects(SUMMARY)
+}
+
+fn move_binding(id: u64) -> MutationBinding<MoveTask> {
+    MOVE.bind(&Component::new("task-order", id)).affects(LIST)
 }
 
 fn add_binding() -> MutationBinding<AddTask> {
@@ -98,13 +140,11 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
     let fields = fields! { SaveTask {
         @field id = Control::hidden(task.id);
         @field version = Control::hidden(task.version);
-        div data-placebo-local="draft" {
-            label for=(title_id) { "Task title" }
-            @field title = Control::text(draft).id(&title_id).described_by(&feedback_id).autocomplete("off");
-            .field {
-                label for=(format!("done-{}", task.id)) { "Status" }
-                @field done = Control::select(done, [(false, "To do"), (true, "Complete")]).id(&format!("done-{}", task.id));
-            }
+        label for=(title_id) { "Task title" }
+        @field title = Control::text(draft).id(&title_id).described_by(&feedback_id).autocomplete("off");
+        .field {
+            label for=(format!("done-{}", task.id)) { "Status" }
+            @field done = Control::select(done, [(false, "To do"), (true, "Complete")]).id(&format!("done-{}", task.id));
         }
         .network {
             label for=(format!("delay-{}", task.id)) { "Simulate a slow save" }
@@ -116,14 +156,37 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
             button .secondary type="button" data-dialog-close { "Cancel" }
         }
     } };
-    save_binding(task).form(fields)
+    let delete = fields! { DeleteTask {
+        @field id = Control::hidden(task.id);
+        button .danger type="submit" { "Delete task" }
+    } };
+    html! {
+        (save_binding(task).form(fields))
+        (delete_binding(task.id).form(delete))
+    }
 }
 
-fn row(task: &Task) -> Markup {
-    let component = Component::new("task", task.id);
+fn order_controls(id: u64) -> Markup {
+    let button = |direction: Direction, label: &str, name: &str| {
+        let fields = fields! { MoveTask {
+            @field id = Control::hidden(id);
+            @field direction = Control::hidden(direction);
+            button .secondary .move type="submit" aria-label=(format!("{name} task {id}")) { (label) }
+        } };
+        move_binding(id).form(fields)
+    };
     html! {
+        (button(Direction::Up, "↑", "Move up"))
+        (button(Direction::Down, "↓", "Move down"))
+    }
+}
+
+fn row(task: &Task) -> placebo::MountedItem {
+    let component = Component::new("task", task.id);
+    LIST.item(task.id).mount(html! {
         article .task-row data-placebo-behavior="dialog" data-owner=(component.id()) data-task=(task.id) {
             (row_summary(task).mount(task.version, summary(task)))
+            (Component::new("task-order", task.id).class("task-order").mount(order_controls(task.id)))
             dialog aria-labelledby=(format!("dialog-title-{}", task.id)) {
                 .dialog-heading {
                     .eyebrow { "TASK " (format!("{:02}", task.id)) }
@@ -133,15 +196,13 @@ fn row(task: &Task) -> Markup {
                 (component.mount(edit_form(task, &task.title, task.done, "Use 3–80 characters.")))
             }
         }
-    }
+    })
 }
 
 fn add_form(draft: &str, feedback: &str) -> Markup {
     let fields = fields! { AddTask {
-        div data-placebo-local="draft" {
-            label for="new-title" { "Task title" }
-            @field title = Control::text(draft).id("new-title").described_by("new-feedback").autocomplete("off");
-        }
+        label for="new-title" { "Task title" }
+        @field title = Control::text(draft).id("new-title").described_by("new-feedback").autocomplete("off");
         p #new-feedback .feedback role="status" aria-live="polite" { (feedback) }
         .form-actions {
             button type="submit" { span .idle-label { "Add task" } span .busy-label { "Adding…" } }
@@ -188,7 +249,7 @@ async fn home(State(store): State<Store>) -> Markup {
                             }
                         }
                         (SUMMARY.mount(tasks.revision, count(&tasks)))
-                        (LIST.mount(html! { @for task in tasks.items.values() { (row(task)) } }))
+                        (LIST.mount(html! { @for task in tasks.in_order() { (row(task)) } }))
                     }
                     p .hint { "Tip: Cancel keeps an unfinished edit. Save accepts the cleaned-up title unless you’ve already started typing something newer." }
                     details .trace { summary { "Interaction trace" } p { "Follow requests and applied updates while you try the list." } ol #trace role="log" aria-label="Interaction events" {} }
@@ -222,11 +283,11 @@ async fn add(State(store): State<Store>, Input(input): Input<AddTask>) -> Respon
     };
     let new_row = row(&task);
     tasks.items.insert(id, task);
+    tasks.order.push(id);
     tasks.revision += 1;
     binding
         .reply(add_form("", "Ready for the next task."))
-        .reset_local("draft")
-        .also_append(LIST, new_row)
+        .also_insert(new_row, Position::End)
         .also_replace(SUMMARY, tasks.revision, count(&tasks))
         .into_response()
 }
@@ -249,7 +310,8 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTask>) -> Resp
             .into_response();
     };
     if input.version != task.version {
-        let response = binding.conflict(edit_form(task, &input.title, input.done,
+        // The saved task: fields this person edited keep their edits.
+        let response = binding.conflict(edit_form(task, &task.title, task.done,
             "This task changed elsewhere. Your draft is safe. Review the current task in the list before saving again."))
             .also_replace(row_summary(task), task.version, summary(task));
         return response
@@ -266,11 +328,51 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTask>) -> Resp
             task.done,
             "Saved. Any newer draft is still yours to edit.",
         ))
-        .reset_local("draft")
         .also_replace(row_summary(task), task.version, summary(task));
     tasks.revision += 1;
     response
         .also_replace(SUMMARY, tasks.revision, count(&tasks))
+        .into_response()
+}
+
+async fn delete(State(store): State<Store>, Input(input): Input<DeleteTask>) -> Response {
+    let mut tasks = store.lock().unwrap();
+    let binding = delete_binding(input.id);
+    // Deleting twice, from two tabs, removes a row that is already gone.
+    if tasks.items.remove(&input.id).is_some() {
+        tasks.order.retain(|id| *id != input.id);
+        tasks.revision += 1;
+    }
+    binding
+        .reply(html! { p { "Deleted." } })
+        .also_remove(&LIST.item(input.id))
+        .also_replace(SUMMARY, tasks.revision, count(&tasks))
+        .into_response()
+}
+
+async fn move_task(State(store): State<Store>, Input(input): Input<MoveTask>) -> Response {
+    let mut tasks = store.lock().unwrap();
+    let binding = move_binding(input.id);
+    let Some(from) = tasks.order.iter().position(|id| *id == input.id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let to = match input.direction {
+        Direction::Up => from.saturating_sub(1),
+        Direction::Down => (from + 1).min(tasks.order.len() - 1),
+    };
+    let reply = binding.reply(order_controls(input.id));
+    if from == to {
+        return reply.into_response();
+    }
+    tasks.order.swap(from, to);
+    // Placing it next to its new neighbour is enough; also_order(&LIST, ...)
+    // would send the whole order instead.
+    let position = match input.direction {
+        Direction::Up => Position::Before(LIST.item(tasks.order[to + 1])),
+        Direction::Down => Position::After(LIST.item(tasks.order[to - 1])),
+    };
+    reply
+        .also_move(&LIST.item(input.id), position)
         .into_response()
 }
 
@@ -300,6 +402,7 @@ async fn main() {
         .into_iter()
         .map(|task| (task.id, task))
         .collect(),
+        order: vec![1, 2, 3],
         revision: 1,
         next_id: 4,
     }));
@@ -307,6 +410,8 @@ async fn main() {
         .route("/", get(home))
         .route(ADD.path(), ADD.route(add))
         .route(SAVE.path(), SAVE.route(save))
+        .route(DELETE.path(), DELETE.route(delete))
+        .route(MOVE.path(), MOVE.route(move_task))
         .route("/placebo.js", get(placebo::runtime))
         .route(
             "/tasks.js",

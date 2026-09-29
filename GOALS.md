@@ -155,12 +155,7 @@ debugging effort still need evaluation. No comparative developer-experience
 result against Datastar or the other comparison stacks has been established.
 
 The broader authoring model is still being evaluated. Nested component
-refreshes, navigation, and recovery after uncertain writes remain open work.
-The examples do not yet establish that Placebo makes a complete production
-application simpler than the comparison stack.
-
-
-A [corrected Issue Desk comparison](docs/comparison.md) now passes the same 14
-browser scenarios with both typed Placebo and supported Datastar APIs. This is
-behavioral parity on one task, not a blind authoring or overall DX result.
-The original weak-agent Datastar failures do not establish a stack limitation.
+refreshes, revisions for components refreshed by other actions, and recovery
+after uncertain writes remain open. The examples do not yet establish that
+Placebo makes a complete production application simpler than the comparison
+stack.

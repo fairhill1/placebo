@@ -17,8 +17,10 @@ behavior("dialog", root => {
       root.querySelector("[data-dialog-open]")?.focus({ preventScroll: true });
     }
   }, options);
+  // Close after a save the page now shows in full; stay open while the
+  // person is already writing something newer.
   document.addEventListener("placebo:applied", ({ detail }) => {
-    if (detail.target === root.dataset.owner && detail.outcome === "applied" && detail.resetLocal.includes("draft")) dialog.close();
+    if (detail.target === root.dataset.owner && detail.outcome === "applied" && !detail.preservedLocal.length) dialog.close();
   }, options);
   return () => {
     listeners.abort();

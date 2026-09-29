@@ -259,26 +259,55 @@ fn profile_form() -> String {
 fn every_control_renders_its_generated_name_and_initial_value() {
     let form = profile_form();
     assert!(form.contains(
-        "<textarea name=\"bio\" rows=\"4\" placeholder=\"About you\">\n\nfirst line &lt;b&gt;</textarea>"
+        "<textarea name=\"bio\" rows=\"4\" placeholder=\"About you\" data-placebo-field=\"bio\">\n\nfirst line &lt;b&gt;</textarea>"
     ));
     assert!(form.contains(
-        "<input type=\"email\" name=\"email\" value=\"ada@example.com\" autocomplete=\"email\">"
+        "<input type=\"email\" name=\"email\" value=\"ada@example.com\" autocomplete=\"email\" data-placebo-field=\"email\">"
     ));
     assert!(
-        form.contains("<input type=\"number\" name=\"age\" value=\"36\" min=\"0\" max=\"150\">")
+        form.contains("<input type=\"number\" name=\"age\" value=\"36\" min=\"0\" max=\"150\" required data-placebo-field=\"age\">")
     );
-    assert!(form.contains("<input type=\"number\" name=\"rating\" value=\"4.5\" step=\"0.5\">"));
+    assert!(form.contains("<input type=\"number\" name=\"rating\" value=\"4.5\" step=\"0.5\" data-placebo-field=\"rating\">"));
     assert!(form.contains(
-        "<input type=\"checkbox\" name=\"newsletter\" value=\"true\" checked id=\"newsletter\">"
+        "<input type=\"checkbox\" name=\"newsletter\" value=\"true\" checked id=\"newsletter\" data-placebo-field=\"newsletter\">"
     ));
-    assert!(form.contains("<input type=\"text\" name=\"nickname\" value=\"\">"));
-    assert!(form.contains("<div role=\"radiogroup\" id=\"role\"><label><input type=\"radio\" name=\"role\" value=\"1\"> Owner</label>"));
+    assert!(form.contains(
+        "<input type=\"text\" name=\"nickname\" value=\"\" data-placebo-field=\"nickname\">"
+    ));
+    assert!(form.contains("<div role=\"radiogroup\" id=\"role\" data-placebo-field=\"role\"><label><input type=\"radio\" name=\"role\" value=\"1\"> Owner</label>"));
     assert!(!form.contains("name=\"role\" value=\"1\" checked"));
-    assert!(form.contains("<select multiple name=\"tags\"><option value=\"1\">One</option><option value=\"2\" selected>Two</option>"));
+    assert!(form.contains("<select multiple name=\"tags\" data-placebo-field=\"tags\"><option value=\"1\">One</option><option value=\"2\" selected>Two</option>"));
     assert!(
         form.contains("<input type=\"checkbox\" name=\"days\" value=\"sat\" checked> Saturday")
     );
     assert_eq!(form.matches("name=\"days\"").count(), 2);
+}
+
+#[test]
+fn validation_attributes_render_on_the_control() {
+    #[allow(dead_code)]
+    #[derive(Deserialize, FormInput)]
+    struct Film {
+        title: String,
+        kind: u8,
+    }
+    let fields = fields! { Film {
+        @field title = Control::text("").required().max_length(80).invalid(true).described_by("title-error");
+        @field kind = Control::radios(1, [(1, "Feature"), (2, "Short")]).required().invalid(false);
+    } };
+    let form = MutationAction::<Film>::new("film", "/film")
+        .bind(&Component::new("film", 1))
+        .form(fields)
+        .into_string();
+    assert!(form.contains(
+        "<input type=\"text\" name=\"title\" value=\"\" required maxlength=\"80\" aria-invalid=\"true\" aria-describedby=\"title-error\" data-placebo-field=\"title\">"
+    ));
+    assert!(
+        form.contains(
+            "<div role=\"radiogroup\" aria-required=\"true\" data-placebo-field=\"kind\">"
+        )
+    );
+    assert!(form.contains("value=\"1\" checked required>"));
 }
 
 #[test]
@@ -298,9 +327,9 @@ fn float_numbers_accept_fractions_and_passwords_are_never_echoed() {
         .form(fields)
         .into_string();
     assert!(form.contains(
-        "<input type=\"password\" name=\"password\" value=\"\" autocomplete=\"current-password\">"
+        "<input type=\"password\" name=\"password\" value=\"\" autocomplete=\"current-password\" data-placebo-field=\"password\">"
     ));
-    assert!(form.contains("<input type=\"number\" name=\"weight\" value=\"1.25\" step=\"any\">"));
+    assert!(form.contains("<input type=\"number\" name=\"weight\" value=\"1.25\" step=\"any\" required data-placebo-field=\"weight\">"));
 }
 
 #[test]

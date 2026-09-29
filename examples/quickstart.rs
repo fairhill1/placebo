@@ -33,14 +33,13 @@ fn editor(item: &Item, feedback: &str) -> Markup {
     let title_id = format!("title-{}", item.id);
     let feedback_id = format!("feedback-{}", item.id);
     let fields = fields! { SaveTitle {
-        // IDs and versions belong to the server and must refresh on each reply.
+        // IDs and versions belong to the server and refresh on each reply.
         @field id = Control::hidden(item.id);
         @field version = Control::hidden(item.version);
-        div data-placebo-local="draft" {
-            label for=(title_id) { "Title" }
-            @field title = Control::text(&item.title)
-                .id(&title_id).described_by(&feedback_id);
-        }
+        // A reply never overwrites what someone typed and has not saved yet.
+        label for=(title_id) { "Title" }
+        @field title = Control::text(&item.title)
+            .id(&title_id).described_by(&feedback_id);
         p id=(feedback_id) role="status" { (feedback) }
         button type="submit" { "Save" }
     } };
@@ -100,10 +99,7 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTitle>) -> Res
     // The version check and write happen under the same lock.
     item.title = title.to_owned();
     item.version += 1;
-    binding
-        .reply(editor(item, "Saved."))
-        .reset_local("draft")
-        .into_response()
+    binding.reply(editor(item, "Saved.")).into_response()
 }
 
 #[tokio::main]

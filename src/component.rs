@@ -17,6 +17,7 @@ use crate::{
 /// UI addressing, not authorization to modify the record with that key.
 pub struct Component {
     id: String,
+    class: Option<String>,
 }
 
 /// An initial component mount, renderable inside `html!`, not reply contents.
@@ -53,7 +54,15 @@ impl Component {
         );
         Self {
             id: format!("{kind}:{key}"),
+            class: None,
         }
+    }
+
+    /// A class for the mounted root element, such as a kit's `modal`. It is
+    /// part of the mount only; replies never touch the root's attributes.
+    pub fn class(mut self, class: &str) -> Self {
+        self.class = Some(class.into());
+        self
     }
 
     pub fn id(&self) -> &str {
@@ -62,7 +71,7 @@ impl Component {
 
     pub fn mount(&self, content: Markup) -> MountedComponent {
         MountedComponent(
-            html! { div id=(self.id()) data-placebo-region data-placebo-component { (content) } },
+            html! { div id=(self.id()) class=[&self.class] data-placebo-region data-placebo-component { (content) } },
         )
     }
 
@@ -74,14 +83,16 @@ impl Component {
     pub fn mount_dialog(&self, labelled_by: &str, content: Markup) -> MountedComponent {
         assert!(!labelled_by.is_empty(), "a dialog needs a heading id");
         MountedComponent(html! {
-            dialog id=(self.id()) aria-labelledby=(labelled_by) data-placebo-region data-placebo-component { (content) }
+            dialog id=(self.id()) class=[&self.class] aria-labelledby=(labelled_by) data-placebo-region data-placebo-component { (content) }
         })
     }
 
-    /// This entire subtree belongs to the browser after initial rendering.
-    /// Matching keys retain the existing DOM node; fresh server content under
-    /// that key is ignored. Keep validation messages and record versions outside.
-    /// Keys are local to one mounted component. Nested local subtrees are rejected.
+    /// Retain this subtree as one unit. Typed `@field` controls are already
+    /// retained one by one, so use this only to group controls that must stay
+    /// together, or for form controls a behavior renders. The subtree keeps its
+    /// node while any control in it has edits the server has not accepted; a
+    /// subtree without form controls is always kept. Keys are local to one
+    /// mounted component. Nested local subtrees are rejected.
     pub fn local(&self, key: &str, content: Markup) -> Markup {
         assert!(!key.is_empty(), "local state needs a key");
         html! { div data-placebo-local=(key) { (content) } }
@@ -196,6 +207,7 @@ impl<I: FormInput> MutationBinding<I> {
             policy: "exclusive",
             operation: "refresh-component",
             input_delay_ms: None,
+            history: false,
             effects: self.effects.iter().map(String::as_str).collect(),
         };
         let config = serde_json::to_string(&config).expect("configuration serializes");

@@ -39,7 +39,7 @@ pub use component::{
 #[cfg(all(feature = "dev", debug_assertions))]
 pub mod dev;
 
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 pub const UPDATE_TYPE: &str = "application/vnd.placebo.update+json";
 pub const RUNTIME: &str = include_str!("../client/placebo.js");
 
@@ -132,17 +132,145 @@ impl VersionedRegion {
     }
 }
 
+/// A keyed collection whose items can be inserted, moved, and removed without
+/// replacing the others. Items keep their DOM nodes, so drafts, focus, and
+/// behaviors inside them survive every list update.
+///
+/// ```
+/// use placebo::{List, Position};
+/// use maud::html;
+/// const TASKS: List = List::new("tasks");
+/// let page = TASKS.mount(html! {
+///     @for id in [1, 2] { (TASKS.item(id).mount(html! { "Task " (id) })) }
+/// });
+/// assert!(page.into_string().contains("id=\"tasks/2\" data-placebo-item"));
+/// let _ = Position::Before(TASKS.item(2));
+/// ```
+#[derive(Clone, Debug)]
+pub struct List(Region);
+
+impl List {
+    pub const fn new(id: &'static str) -> Self {
+        Self(Region::new(id))
+    }
+
+    pub fn keyed(kind: &str, key: impl std::fmt::Display) -> Self {
+        Self(Region::keyed(kind, key))
+    }
+
+    pub fn id(&self) -> &str {
+        self.0.id()
+    }
+
+    /// Mount the list with its initial items, rendered with [`Item::mount`].
+    pub fn mount(&self, items: Markup) -> Markup {
+        html! { div id=(self.id()) data-placebo-region data-placebo-list { (items) } }
+    }
+
+    /// The item with this key. Its element id is `{list}/{key}`.
+    pub fn item(&self, key: impl std::fmt::Display) -> Item {
+        let key = key.to_string();
+        assert!(
+            !key.is_empty() && !key.chars().any(char::is_whitespace),
+            "an item key must be nonempty and contain no whitespace"
+        );
+        Item {
+            list: self.id().to_owned(),
+            id: format!("{}/{key}", self.id()),
+        }
+    }
+}
+
+/// One item of a [`List`], addressed by its key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    list: String,
+    id: String,
+}
+
+impl Item {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn mount(&self, content: impl maud::Render) -> MountedItem {
+        MountedItem {
+            item: self.clone(),
+            markup: html! { div id=(self.id) data-placebo-item { (content) } },
+        }
+    }
+}
+
+/// A rendered item, for a list's initial markup or `Applied::also_insert`.
+pub struct MountedItem {
+    item: Item,
+    markup: Markup,
+}
+
+impl maud::Render for MountedItem {
+    fn render_to(&self, buffer: &mut String) {
+        self.markup.render_to(buffer);
+    }
+}
+
+/// Where `also_insert` and `also_move` place an item. An anchor that is no
+/// longer in the browser's list places the item at the end, and the applied
+/// event reports it in `misplacedItems`.
+#[derive(Clone, Debug)]
+pub enum Position {
+    Start,
+    End,
+    Before(Item),
+    After(Item),
+}
+
+impl Position {
+    fn wire(&self, list: &str) -> WirePosition {
+        let (at, item) = match self {
+            Self::Start => ("start", None),
+            Self::End => ("end", None),
+            Self::Before(item) => ("before", Some(item)),
+            Self::After(item) => ("after", Some(item)),
+        };
+        if let Some(item) = item {
+            assert_eq!(
+                item.list, list,
+                "a position anchor must be an item of the same list"
+            );
+        }
+        WirePosition {
+            at,
+            item: item.map(|item| item.id.clone()),
+        }
+    }
+}
+
 mod sealed {
     pub trait RegionTarget {}
     impl RegionTarget for super::Region {}
     impl RegionTarget for super::VersionedRegion {}
+    impl RegionTarget for super::List {}
+    impl RegionTarget for &super::Component {}
 }
 
-/// A destination accepted by `MutationBinding::affects`: either a plain
-/// [`Region`] for appends, or a [`VersionedRegion`] for shared snapshots.
+/// A destination accepted by `MutationBinding::affects`: a plain [`Region`]
+/// for appends and refetches, a [`VersionedRegion`] for shared snapshots, a
+/// [`List`] for item updates, or another [`Component`] to refresh.
 /// The operation-specific reply methods retain their stricter target types.
 pub trait RegionTarget: sealed::RegionTarget {
     fn id(&self) -> &str;
+}
+
+impl RegionTarget for List {
+    fn id(&self) -> &str {
+        self.id()
+    }
+}
+
+impl RegionTarget for &Component {
+    fn id(&self) -> &str {
+        Component::id(self)
+    }
 }
 
 impl RegionTarget for Region {
@@ -239,6 +367,7 @@ impl<I: FormInput> ReadAction<I> {
             action: self,
             target,
             input_delay_ms: None,
+            history: false,
         }
     }
 
@@ -261,6 +390,7 @@ pub struct ReadBinding<I: FormInput> {
     action: ReadAction<I>,
     target: Region,
     input_delay_ms: Option<u32>,
+    history: bool,
 }
 
 impl<I: FormInput> Clone for ReadBinding<I> {
@@ -269,6 +399,7 @@ impl<I: FormInput> Clone for ReadBinding<I> {
             action: self.action,
             target: self.target.clone(),
             input_delay_ms: self.input_delay_ms,
+            history: self.history,
         }
     }
 }
@@ -281,6 +412,17 @@ impl<I: FormInput> ReadBinding<I> {
         self
     }
 
+    /// Keep the page URL in step with this form. Each result puts the form's
+    /// query on the current page's path: typing replaces the history entry,
+    /// a submit pushes a new one, and Back or Forward puts that entry's values
+    /// back into the form and reads again. Render the page from the same query,
+    /// for example with `Input<I>` in the page handler, so reloads and
+    /// bookmarks show the same results.
+    pub const fn history(mut self) -> Self {
+        self.history = true;
+        self
+    }
+
     pub fn form(&self, fields: FormFields<I>) -> Markup {
         let content = fields.into_markup();
         let config = Config {
@@ -290,6 +432,7 @@ impl<I: FormInput> ReadBinding<I> {
             policy: "latest",
             operation: "replace-children",
             input_delay_ms: self.input_delay_ms,
+            history: self.history,
             effects: Vec::new(),
         };
         let config = serde_json::to_string(&config).expect("static configuration serializes");
@@ -317,6 +460,8 @@ struct Config<'a> {
     policy: &'static str,
     operation: &'static str,
     input_delay_ms: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    history: bool,
     effects: Vec<&'a str>,
 }
 
@@ -329,8 +474,8 @@ struct Envelope {
     operation: &'static str,
     html: String,
     outcome: &'static str,
-    reset_local: Vec<String>,
     patches: Vec<Patch>,
+    navigate: Option<String>,
     #[serde(skip)]
     status: StatusCode,
 }
@@ -355,8 +500,8 @@ impl Envelope {
                 StatusCode::CONFLICT => "conflict",
                 _ => "applied",
             },
-            reset_local: Vec::new(),
             patches: Vec::new(),
+            navigate: None,
         }
     }
 }
@@ -395,22 +540,15 @@ impl IntoResponse for ReadUpdate {
 }
 
 /// A successful mutation reply, from `MutationBinding::reply`. Only a
-/// successful write can reset drafts or append new instances.
+/// successful write can add, move, or remove items, refresh other components,
+/// or navigate. Controls the user submitted take the reply's values unless
+/// they were edited again while the request was in flight.
 pub struct Applied {
     envelope: Envelope,
     effects: Vec<String>,
 }
 
 impl Applied {
-    /// Accept incoming local markup only if it has not changed since submission.
-    /// Newer browser edits win.
-    pub fn reset_local(mut self, key: &str) -> Self {
-        let resets = &mut self.envelope.reset_local;
-        assert!(!key.is_empty() && !resets.iter().any(|k| k == key));
-        resets.push(key.into());
-        self
-    }
-
     /// Refresh a declared shared region only when its server revision is newer.
     /// `VersionedRegion::mount` requires the corresponding initial revision.
     pub fn also_replace(mut self, region: VersionedRegion, revision: u64, content: Markup) -> Self {
@@ -420,14 +558,101 @@ impl Applied {
 
     /// Append new content without replacing existing component instances.
     /// Delivery is not retried; existing/duplicate ids cause rejection.
-    pub fn also_append(mut self, region: Region, content: impl maud::Render) -> Self {
+    pub fn also_append(self, region: Region, content: impl maud::Render) -> Self {
         declared(&self.effects, region.id());
-        self.envelope.patches.push(Patch {
-            target: region.id().into(),
-            operation: "append-children",
-            revision: None,
-            html: content.render().into_string(),
-        });
+        self.push(Patch {
+            html: Some(content.render().into_string()),
+            ..Patch::new(region.id(), "append-children")
+        })
+    }
+
+    /// Insert a new item into its declared list. An item whose id is already on
+    /// the page rejects the update; move existing items with `also_move`.
+    pub fn also_insert(self, item: MountedItem, at: Position) -> Self {
+        declared(&self.effects, &item.item.list);
+        let position = at.wire(&item.item.list);
+        let patch = Patch {
+            item: Some(item.item.id),
+            position: Some(position),
+            html: Some(item.markup.into_string()),
+            ..Patch::new(&item.item.list, "insert-item")
+        };
+        self.push(patch)
+    }
+
+    /// Move an existing item. A missing item is skipped and reported.
+    pub fn also_move(self, item: &Item, to: Position) -> Self {
+        declared(&self.effects, &item.list);
+        self.push(Patch {
+            item: Some(item.id.clone()),
+            position: Some(to.wire(&item.list)),
+            ..Patch::new(&item.list, "move-item")
+        })
+    }
+
+    /// Remove an item, including any components inside it. Removing an item
+    /// that is already gone is not an error. Focus inside it moves to a neighbour.
+    pub fn also_remove(self, item: &Item) -> Self {
+        declared(&self.effects, &item.list);
+        self.push(Patch {
+            item: Some(item.id.clone()),
+            ..Patch::new(&item.list, "remove-item")
+        })
+    }
+
+    /// Reorder existing items: the listed ones first, in this order, then any
+    /// the browser has that the server did not list.
+    pub fn also_order(self, list: &List, items: impl IntoIterator<Item = Item>) -> Self {
+        declared(&self.effects, list.id());
+        let items = items
+            .into_iter()
+            .map(|item| {
+                assert_eq!(
+                    item.list,
+                    list.id(),
+                    "ordered items must belong to the list"
+                );
+                item.id
+            })
+            .collect();
+        self.push(Patch {
+            items: Some(items),
+            ..Patch::new(list.id(), "order-items")
+        })
+    }
+
+    /// Refresh another declared component, such as an editor this write
+    /// locked. Its controls follow the same rules as a rejected reply: edited
+    /// ones are kept. Skipped while that component has its own request in flight.
+    pub fn also_refresh(self, component: &Component, content: Markup) -> Self {
+        declared(&self.effects, component.id());
+        self.push(Patch {
+            html: Some(content.into_string()),
+            ..Patch::new(component.id(), "refresh-component")
+        })
+    }
+
+    /// Run the read form bound to a declared region again, with the browser's
+    /// current input, so the result respects its filters and sort order.
+    pub fn also_refetch(self, region: &Region) -> Self {
+        declared(&self.effects, region.id());
+        self.push(Patch::new(region.id(), "rerun-read"))
+    }
+
+    /// Navigate to a same-site path after applying the reply, for example to a
+    /// record that was just created or away from one that was deleted.
+    pub fn navigate(mut self, path: impl Into<String>) -> Self {
+        let path = path.into();
+        assert!(
+            path.starts_with('/') && !path.starts_with("//"),
+            "navigate to a path on this site, starting with a single '/'"
+        );
+        self.envelope.navigate = Some(path);
+        self
+    }
+
+    fn push(mut self, patch: Patch) -> Self {
+        self.envelope.patches.push(patch);
         self
     }
 }
@@ -439,7 +664,8 @@ impl IntoResponse for Applied {
 }
 
 /// A validation or conflict reply, from `MutationBinding::invalid` or
-/// `conflict`. It can refresh shared snapshots, but keeps drafts and adds nothing.
+/// `conflict`. It can refresh shared snapshots. Controls with edits keep them;
+/// untouched controls show the reply's values. It adds, removes, and navigates nothing.
 ///
 /// ```compile_fail
 /// use placebo::{Component, FormInput, MutationAction};
@@ -447,7 +673,7 @@ impl IntoResponse for Applied {
 /// #[derive(serde::Deserialize, FormInput)]
 /// struct Save { title: String }
 /// MutationAction::<Save>::new("save", "/save").bind(&Component::new("editor", 1))
-///     .invalid(html! {}).reset_local("draft");
+///     .invalid(html! {}).navigate("/");
 /// ```
 pub struct Rejected {
     envelope: Envelope,
@@ -477,10 +703,9 @@ fn replace(
 ) {
     declared(effects, region.id());
     envelope.patches.push(Patch {
-        target: region.id().into(),
-        operation: "replace-children",
         revision: Some(revision.to_string()),
-        html: content.into_string(),
+        html: Some(content.into_string()),
+        ..Patch::new(region.id(), "replace-children")
     });
 }
 
@@ -498,8 +723,37 @@ fn declared(effects: &[String], id: &str) {
 struct Patch {
     target: String,
     operation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
-    html: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    html: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<WirePosition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    items: Option<Vec<String>>,
+}
+
+impl Patch {
+    fn new(target: &str, operation: &'static str) -> Self {
+        Self {
+            target: target.into(),
+            operation,
+            revision: None,
+            html: None,
+            item: None,
+            position: None,
+            items: None,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct WirePosition {
+    at: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item: Option<String>,
 }
 
 /// Serve the exact browser half embedded in this crate, with no independent
@@ -565,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinated_updates_keep_exact_server_revisions_and_explicit_resets() {
+    fn coordinated_updates_keep_exact_server_revisions() {
         let component = Component::new("editor", 42);
         let summary = VersionedRegion::keyed("summary", 42);
         let list = Region::new("list");
@@ -580,14 +834,13 @@ mod tests {
         let update = serde_json::to_value(
             binding
                 .reply(html! { p { "Saved" } })
-                .reset_local("draft")
                 .also_replace(summary.clone(), u64::MAX, html! { p { "<new>" } })
                 .also_append(list, html! { p { "Next" } })
                 .envelope,
         )
         .unwrap();
         assert_eq!(update["target"], component.id());
-        assert_eq!(update["reset_local"], serde_json::json!(["draft"]));
+        assert_eq!(update["navigate"], serde_json::Value::Null);
         assert_eq!(update["patches"][0]["target"], summary.id());
         assert_eq!(update["patches"][0]["revision"], u64::MAX.to_string());
         assert_eq!(update["patches"][0]["html"], "<p>&lt;new&gt;</p>");
@@ -598,6 +851,80 @@ mod tests {
                 .into_string()
                 .contains(&u64::MAX.to_string())
         );
+    }
+
+    #[test]
+    fn list_updates_address_items_and_other_targets_by_id() {
+        let tasks = List::new("tasks");
+        let other = Component::new("order", 1);
+        let results = Region::new("results");
+        let binding = MutationAction::<Search>::new("save", "/save")
+            .bind(&Component::new("editor", 1))
+            .affects(tasks.clone())
+            .affects(&other)
+            .affects(results.clone());
+        let update = serde_json::to_value(
+            binding
+                .reply(html! {})
+                .also_insert(
+                    tasks.item(3).mount(html! { "Three" }),
+                    Position::Before(tasks.item(1)),
+                )
+                .also_move(&tasks.item(2), Position::Start)
+                .also_remove(&tasks.item(1))
+                .also_order(&tasks, [tasks.item(2), tasks.item(3)])
+                .also_refresh(&other, html! { "Order" })
+                .also_refetch(&results)
+                .navigate("/tasks/3")
+                .envelope,
+        )
+        .unwrap();
+        let patches = &update["patches"];
+        assert_eq!(patches[0]["operation"], "insert-item");
+        assert_eq!(patches[0]["item"], "tasks/3");
+        assert_eq!(
+            patches[0]["position"],
+            serde_json::json!({ "at": "before", "item": "tasks/1" })
+        );
+        assert_eq!(
+            patches[0]["html"],
+            "<div id=\"tasks/3\" data-placebo-item>Three</div>"
+        );
+        assert_eq!(patches[1]["position"], serde_json::json!({ "at": "start" }));
+        assert_eq!(
+            patches[2],
+            serde_json::json!({ "target": "tasks", "operation": "remove-item", "item": "tasks/1" })
+        );
+        assert_eq!(
+            patches[3]["items"],
+            serde_json::json!(["tasks/2", "tasks/3"])
+        );
+        assert_eq!(patches[4]["target"], "order:1");
+        assert_eq!(
+            patches[5],
+            serde_json::json!({ "target": "results", "operation": "rerun-read" })
+        );
+        assert_eq!(update["navigate"], "/tasks/3");
+    }
+
+    #[test]
+    #[should_panic(expected = "same list")]
+    fn positions_anchor_to_the_same_list() {
+        let tasks = List::new("tasks");
+        MutationAction::<Search>::new("save", "/save")
+            .bind(&Component::new("editor", 1))
+            .affects(tasks.clone())
+            .reply(html! {})
+            .also_move(&tasks.item(1), Position::After(List::new("other").item(2)));
+    }
+
+    #[test]
+    #[should_panic(expected = "single '/'")]
+    fn replies_navigate_only_within_the_site() {
+        MutationAction::<Search>::new("save", "/save")
+            .bind(&Component::new("editor", 1))
+            .reply(html! {})
+            .navigate("//example.com/");
     }
 
     #[test]

@@ -164,6 +164,8 @@ impl<const N: usize> FileValue for Vec<Upload<N>> {
 
 /// Text fields together may take this much besides the files.
 const TEXT_BYTES: usize = 1024 * 1024;
+/// Room for boundaries and part headers in a whole multipart body.
+const FRAMING_BYTES: usize = 256 * 1024;
 
 /// Read a multipart body: text fields as pairs, and the files of the declared
 /// file fields within their limits. `fields` maps each file field to its limit.
@@ -171,13 +173,27 @@ pub(crate) async fn read(
     headers: &HeaderMap,
     body: Body,
     fields: &[(&'static str, usize)],
-) -> Result<(Vec<(String, String)>, Vec<File>), Response> {
+) -> Result<(Vec<(String, String)>, Vec<File>), Box<Response>> {
     let boundary = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| multer::parse_boundary(value).ok())
         .ok_or_else(|| malformed("the multipart boundary is missing"))?;
-    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+    // The whole body is bounded too, so many small parts cannot grow without
+    // limit. The files' limits, the text limit, and the framing add up to it.
+    let whole = fields
+        .iter()
+        .fold(TEXT_BYTES + FRAMING_BYTES, |total, (_, limit)| {
+            total.saturating_add(*limit)
+        });
+    let constraints = multer::Constraints::new()
+        .size_limit(multer::SizeLimit::new().whole_stream(whole as u64));
+    let mut multipart =
+        multer::Multipart::with_constraints(body.into_data_stream(), boundary, constraints);
+    let read_error = |error: multer::Error| match error {
+        multer::Error::StreamSizeExceeded { .. } => body_too_large(whole),
+        error => malformed(&error.to_string()),
+    };
     let mut pairs = Vec::new();
     let mut files = Vec::new();
     let mut text_bytes = 0;
@@ -185,7 +201,7 @@ pub(crate) async fn read(
     while let Some(mut field) = multipart
         .next_field()
         .await
-        .map_err(|error| malformed(&error.to_string()))?
+        .map_err(read_error)?
     {
         let name = field.name().unwrap_or_default().to_owned();
         let upload = fields.iter().position(|(field, _)| *field == name);
@@ -194,7 +210,7 @@ pub(crate) async fn read(
                 return Err(malformed(&format!("field '{name}' expects a file")));
             }
             let mut value = Vec::new();
-            while let Some(chunk) = field.chunk().await.map_err(|e| malformed(&e.to_string()))? {
+            while let Some(chunk) = field.chunk().await.map_err(read_error)? {
                 text_bytes += chunk.len();
                 if text_bytes > TEXT_BYTES {
                     return Err(malformed("the text fields are too large"));
@@ -212,7 +228,7 @@ pub(crate) async fn read(
         let limit = fields[index].1;
         let content_type = field.content_type().map(ToString::to_string);
         let mut bytes = Vec::new();
-        while let Some(chunk) = field.chunk().await.map_err(|e| malformed(&e.to_string()))? {
+        while let Some(chunk) = field.chunk().await.map_err(read_error)? {
             used[index] += chunk.len();
             if used[index] > limit {
                 return Err(too_large(&name, &file_name, limit));
@@ -241,12 +257,32 @@ fn file_name(name: &str) -> String {
         .to_owned()
 }
 
-fn malformed(reason: &str) -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        format!("Failed to read multipart form body: {reason}"),
+fn malformed(reason: &str) -> Box<Response> {
+    Box::new(
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("Failed to read multipart form body: {reason}"),
+        )
+            .into_response(),
     )
-        .into_response()
+}
+
+/// A multipart body over its whole limit, refused before the handler ran.
+fn body_too_large(limit: usize) -> Box<Response> {
+    let mut response = (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!(
+            "Failed to read multipart form body: it is larger than {}, the most this form's \
+             fields accept together",
+            readable_size(limit)
+        ),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        "x-placebo-upload-limit",
+        axum::http::HeaderValue::from(limit),
+    );
+    Box::new(response)
 }
 
 fn readable_size(bytes: usize) -> String {
@@ -259,7 +295,7 @@ fn readable_size(bytes: usize) -> String {
 
 /// A file over its field's limit. The runtime checks sizes before sending, so
 /// this mostly answers native submissions: say what happened and what to do.
-fn too_large(field: &str, file: &str, limit: usize) -> Response {
+fn too_large(field: &str, file: &str, limit: usize) -> Box<Response> {
     let limit_text = readable_size(limit);
     #[cfg(debug_assertions)]
     eprintln!(
@@ -290,5 +326,5 @@ fn too_large(field: &str, file: &str, limit: usize) -> Response {
         "x-placebo-upload-limit",
         axum::http::HeaderValue::from(limit),
     );
-    response
+    Box::new(response)
 }

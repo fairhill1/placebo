@@ -117,7 +117,7 @@ is replaced by the reply, so a "load more" form that renders the next one keeps
 loading while the end of the list is in view, and stops when the reply renders
 no form. `every(ms)` polls while its form and region are on the page: it waits
 for a slow read instead of cancelling it, pauses while the page is hidden, reads
-once when it is shown again, and stops when its region is removed.
+once when it is shown again, and stops for good when its region is removed.
 
 Reads may insert items into a `List` their binding declares with
 `.affects(LIST)`, but not move, remove, or replace anything else: a read shows

@@ -23,6 +23,8 @@ use crate::{UPDATE_TYPE, native::NativeReply};
 pub(crate) const KEY: &str = "placebo-key";
 /// Marks a response that the server replayed, or could not decide.
 pub(crate) const REPLAY_HEADER: &str = "x-placebo-replay";
+/// Sent by the runtime on a retry: milliseconds since the first attempt.
+pub(crate) const RETRY_HEADER: &str = "x-placebo-retry";
 
 /// How long a repeated submission waits for the first one to finish.
 const WAIT: Duration = Duration::from_secs(5);
@@ -54,6 +56,14 @@ pub trait ReplayStore: Send + Sync + 'static {
     /// Forget `id`: its handler answered with something that is not a reply,
     /// such as an error status, so a retry should run it again.
     fn release<'a>(&'a self, id: &'a str) -> StoreFuture<'a, ()>;
+    /// How long an id claimed now is sure to be remembered. A retry whose
+    /// first attempt is older than this, and whose id the store no longer
+    /// has, is answered as unknown instead of running again: the first
+    /// attempt may have written. `None`, the default, means ids are kept
+    /// until the application expires them; return that expiry if there is one.
+    fn window(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// What [`ReplayStore::claim`] found.
@@ -67,10 +77,12 @@ pub enum Claim {
     Recorded(Recorded),
 }
 
-/// A recorded reply: its HTTP status and update body.
+/// A recorded reply: its HTTP status, the headers the handler added (such as
+/// `Set-Cookie`), and its update body.
 #[derive(Clone, Debug)]
 pub struct Recorded {
     pub status: u16,
+    pub headers: Vec<(String, String)>,
     pub body: String,
 }
 
@@ -101,7 +113,9 @@ pub(crate) fn store(extensions: &axum::http::Extensions) -> Arc<dyn ReplayStore>
 
 /// An in-memory [`ReplayStore`] for one server process. Entries expire after
 /// `ttl`, and the oldest go first beyond `capacity`. The default keeps ten
-/// minutes and 10,000 replies.
+/// minutes and 10,000 replies. Its [`window`](ReplayStore::window) shrinks
+/// when entries leave early for capacity, so a retry it can no longer vouch
+/// for is reported as unknown.
 pub struct MemoryReplays {
     ttl: Duration,
     capacity: usize,
@@ -112,13 +126,16 @@ pub struct MemoryReplays {
 struct Entries {
     replies: HashMap<String, Option<Recorded>>,
     order: VecDeque<(Instant, String)>,
+    /// When the newest entry evicted for capacity was claimed. Ids claimed
+    /// then or earlier may be gone before their `ttl`.
+    evicted_through: Option<Instant>,
 }
 
 impl Entries {
-    fn evict_oldest(&mut self) {
-        if let Some((_, id)) = self.order.pop_front() {
-            self.replies.remove(&id);
-        }
+    fn evict_oldest(&mut self) -> Option<Instant> {
+        let (at, id) = self.order.pop_front()?;
+        self.replies.remove(&id);
+        Some(at)
     }
 }
 
@@ -156,7 +173,9 @@ impl ReplayStore for MemoryReplays {
                 Some(None) => Claim::Pending,
                 None => {
                     while entries.order.len() >= self.capacity {
-                        entries.evict_oldest();
+                        if let Some(at) = entries.evict_oldest() {
+                            entries.evicted_through = Some(at);
+                        }
                     }
                     entries.replies.insert(id.to_owned(), None);
                     entries.order.push_back((now, id.to_owned()));
@@ -183,6 +202,14 @@ impl ReplayStore for MemoryReplays {
             Ok(())
         })
     }
+
+    fn window(&self) -> Option<Duration> {
+        let evicted_through = self.entries.lock().unwrap().evicted_through;
+        Some(match evicted_through {
+            Some(at) => self.ttl.min(at.elapsed()),
+            None => self.ttl,
+        })
+    }
 }
 
 /// A fresh, unguessable key for one rendered form: 128 bits of SipHash, with
@@ -200,11 +227,14 @@ pub(crate) fn new_key() -> String {
     format!("{:016x}{:016x}", half(1), half(2))
 }
 
-/// A submission's replay id: its key, and a fingerprint of the path, the
-/// submitted body, and the credentials. A replay is only served to the same
-/// submission from the same person; the same key with other values is a new
-/// submission, for example a form edited again after the Back button.
-pub(crate) fn submission_id(key: &str, path: &str, headers: &HeaderMap, parts: &[&[u8]]) -> String {
+/// A submission's replay id: its key, and a fingerprint of the path and the
+/// submitted body. The same key with other values is a new submission, for
+/// example a form edited again after the Back button. Credentials are left
+/// out: cookies change between an attempt and its retry (a refreshed session,
+/// an analytics cookie), which would make the retry write again. The key is
+/// what keeps replies apart, since each rendered form and each runtime
+/// submission gets its own.
+pub(crate) fn submission_id(key: &str, path: &str, parts: &[&[u8]]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |bytes: &[u8]| {
         for byte in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
@@ -213,35 +243,69 @@ pub(crate) fn submission_id(key: &str, path: &str, headers: &HeaderMap, parts: &
         }
     };
     feed(path.as_bytes());
-    for name in [header::COOKIE, header::AUTHORIZATION] {
-        for value in headers.get_all(&name) {
-            feed(value.as_bytes());
-        }
-    }
     for part in parts {
         feed(part);
     }
     format!("{key}-{hash:016x}")
 }
 
-/// Claim a submission, waiting a little for a pending one to finish. `Err`
-/// is the response to send instead of running the handler.
-pub(crate) async fn claim(store: &dyn ReplayStore, id: &str) -> Result<(), Response> {
+/// Claim a submission, waiting a little for a pending one to finish. `retry`
+/// is the age of the first attempt when the runtime retries one. `Err` is the
+/// response to send instead of running the handler.
+pub(crate) async fn claim(
+    store: &dyn ReplayStore,
+    id: &str,
+    retry: Option<Duration>,
+) -> Result<(), Box<Response>> {
     let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         match store.claim(id).await {
-            Ok(Claim::New) => return Ok(()),
-            Ok(Claim::Recorded(reply)) => return Err(replayed(reply)),
+            Ok(Claim::New) => break,
+            Ok(Claim::Recorded(reply)) => return Err(Box::new(replayed(reply))),
             Ok(Claim::Pending) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(POLL).await
             }
-            Ok(Claim::Pending) => return Err(pending()),
+            Ok(Claim::Pending) => return Err(Box::new(pending())),
             Err(error) => {
                 eprintln!("[placebo:replay-store] Could not claim a submission: {error}");
-                return Err(unavailable());
+                return Err(Box::new(unavailable()));
             }
         }
     }
+    // A retry the store has no record of either never arrived, or arrived
+    // longer ago than the store remembers. Only the first is safe to run.
+    if let (Some(age), Some(window)) = (retry, store.window())
+        && age >= window
+    {
+        if let Err(error) = store.release(id).await {
+            eprintln!("[placebo:replay-store] Could not release a submission: {error}");
+        }
+        return Err(Box::new(unknown(age, window)));
+    }
+    Ok(())
+}
+
+/// The response headers a replay repeats: those the handler added, not the
+/// update's own.
+pub(crate) fn recorded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            !matches!(
+                *name,
+                &header::CONTENT_TYPE | &header::CONTENT_LENGTH | &header::CACHE_CONTROL
+            ) && !name.as_str().starts_with("x-placebo-")
+        })
+        .filter_map(|(name, value)| match value.to_str() {
+            Ok(value) => Some((name.as_str().to_owned(), value.to_owned())),
+            Err(_) => {
+                eprintln!(
+                    "[placebo:replay-store] Header '{name}' is not text, so a replay will not repeat it."
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 /// The recorded reply, again. It becomes a navigation for a native submission.
@@ -264,6 +328,14 @@ fn replayed(reply: Recorded) -> Response {
         reply.body,
     )
         .into_response();
+    for (name, value) in reply.headers {
+        if let (Ok(name), Ok(value)) = (
+            header::HeaderName::try_from(name),
+            HeaderValue::try_from(value),
+        ) {
+            response.headers_mut().append(name, value);
+        }
+    }
     if let Some(native) = native {
         response.extensions_mut().insert(native);
     }
@@ -306,6 +378,24 @@ fn pending() -> Response {
         "Still saving",
         "This form was already sent and the server has not finished with it. \
          Wait a moment and reload the page to see whether it was saved.",
+    )
+}
+
+/// A retry of an attempt older than the store remembers: it may have written,
+/// and running it again could write twice.
+fn unknown(age: Duration, window: Duration) -> Response {
+    eprintln!(
+        "[placebo:replay-unknown] A retry of an attempt from {}s ago was not run: the replay \
+         store remembers submissions for {}s. Keep replies longer if retries this late are expected.",
+        age.as_secs(),
+        window.as_secs()
+    );
+    page(
+        StatusCode::CONFLICT,
+        "unknown",
+        "Your changes may already be saved",
+        "This form was sent a while ago and the server no longer knows whether it \
+         was saved, so it did not save it again. Reload the page to see the current state.",
     )
 }
 

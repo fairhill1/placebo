@@ -3,7 +3,7 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::State,
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, header::SET_COOKIE},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -53,13 +53,19 @@ async fn add(State(store): State<Store>, Input(input): Input<Add>) -> Response {
     store.runs.fetch_add(1, Ordering::SeqCst);
     let binding = ADD.bind(&Component::new("composer", 1));
     match input.title.as_str() {
-        "x" => return binding.invalid(composer("Too short.")).into_response(),
+        "x" => {
+            return (
+                [(SET_COOKIE, "rejected=1")],
+                binding.invalid(composer("Too short.")),
+            )
+                .into_response();
+        }
         "missing" => return StatusCode::NOT_FOUND.into_response(),
         "slow" => tokio::time::sleep(Duration::from_millis(150)).await,
         _ => {}
     }
     store.items.lock().unwrap().push(input.title);
-    binding.reply(composer("Added.")).into_response()
+    ([(SET_COOKIE, "added=1")], binding.reply(composer("Added."))).into_response()
 }
 
 fn app(store: Store) -> Router {
@@ -95,6 +101,14 @@ fn post(title: &str, key: &str, native: bool, cookie: &str) -> Request<Body> {
         .extend_pairs([("title", title), ("placebo-key", key)])
         .finish();
     request.body(Body::from(body)).unwrap()
+}
+
+/// The runtime's retry of an attempt first sent `ms` ago.
+fn retried(mut request: Request<Body>, ms: u64) -> Request<Body> {
+    request
+        .headers_mut()
+        .insert("x-placebo-retry", ms.to_string().parse().unwrap());
+    request
 }
 
 async fn text(response: Response) -> String {
@@ -144,15 +158,11 @@ async fn a_repeated_submission_replays_the_recorded_reply() {
 }
 
 #[tokio::test]
-async fn other_values_or_another_session_are_new_submissions() {
+async fn other_values_are_new_submissions_but_changed_cookies_are_not() {
     let store = Store::default();
     let app = app(store.clone());
     let key = rendered_key(&app).await;
-    for (title, cookie) in [
-        ("One", "session=a"),
-        ("Two", "session=a"),
-        ("One", "session=b"),
-    ] {
+    for (title, cookie) in [("One", "session=a"), ("Two", "session=a")] {
         let response = app
             .clone()
             .oneshot(post(title, &key, false, cookie))
@@ -160,7 +170,127 @@ async fn other_values_or_another_session_are_new_submissions() {
             .unwrap();
         assert!(!response.headers().contains_key("x-placebo-replay"));
     }
+    assert_eq!(store.runs.load(Ordering::SeqCst), 2);
+    // A cookie that changed between an attempt and its retry, such as a
+    // refreshed session or an analytics cookie, does not make it run again.
+    let response = app
+        .clone()
+        .oneshot(post("One", &key, false, "session=a; _ga=2"))
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["x-placebo-replay"], "replayed");
+    assert_eq!(store.runs.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn headers_the_handler_adds_survive_native_replies_and_replays() {
+    let store = Store::default();
+    let app = placebo::native_forms(app(store.clone()));
+    let key = rendered_key(&app).await;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(post("Native", &key, true, ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()[SET_COOKIE], "added=1");
+    }
+    // The page rendered again for a rejected submission keeps them too.
+    let key = rendered_key(&app).await;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(post("x", &key, true, ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.headers()[SET_COOKIE], "rejected=1");
+        assert!(text(response).await.contains("Too short."));
+    }
+    let key = rendered_key(&app).await;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(post("Runtime", &key, false, ""))
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[SET_COOKIE], "added=1");
+    }
     assert_eq!(store.runs.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn a_submission_whose_browser_disconnected_still_finishes() {
+    let store = Store::default();
+    let app = app(store.clone());
+    let key = rendered_key(&app).await;
+    // The browser gives up while the handler is still running.
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(30),
+        app.clone().oneshot(post("slow", &key, false, "")),
+    )
+    .await;
+    assert!(dropped.is_err());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(*store.items.lock().unwrap(), ["slow"]);
+    // Its reply was recorded, so the retry replays it.
+    let response = app
+        .clone()
+        .oneshot(retried(post("slow", &key, false, ""), 400))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-placebo-replay"], "replayed");
+    assert_eq!(store.runs.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_retry_older_than_the_store_remembers_is_not_run() {
+    let store = Store::default();
+    let app = app(store.clone()).layer(placebo::replays(MemoryReplays::new(
+        Duration::from_secs(60),
+        1,
+    )));
+    // A retry whose first attempt never arrived runs.
+    let key = rendered_key(&app).await;
+    let response = app
+        .clone()
+        .oneshot(retried(post("Never arrived", &key, false, ""), 0))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    // One older than the store's time-to-live may have written.
+    let key = rendered_key(&app).await;
+    let response = app
+        .clone()
+        .oneshot(retried(post("Too late", &key, false, ""), 61_000))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.headers()["x-placebo-replay"], "unknown");
+    // With room for one reply, a second submission pushes out the first. A
+    // retry of the first is no longer vouched for, however recent.
+    let first = rendered_key(&app).await;
+    app.clone()
+        .oneshot(post("First", &first, false, ""))
+        .await
+        .unwrap();
+    let second = rendered_key(&app).await;
+    app.clone()
+        .oneshot(post("Second", &second, false, ""))
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(retried(post("First", &first, false, ""), 1_000))
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["x-placebo-replay"], "unknown");
+    assert_eq!(
+        *store.items.lock().unwrap(),
+        ["Never arrived", "First", "Second"]
+    );
 }
 
 #[tokio::test]
@@ -311,6 +441,7 @@ impl ReplayStore for Shared {
 async fn the_memory_store_forgets_expired_and_excess_replies() {
     let reply = || Recorded {
         status: 200,
+        headers: Vec::new(),
         body: "{}".into(),
     };
     let store = MemoryReplays::new(Duration::from_secs(600), 2);

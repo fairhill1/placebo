@@ -25,8 +25,10 @@ test("a lost response marks the form stale, and adding again replays instead of 
   const rows = await page.locator(".task-row").count();
   let lose = true;
   const bodies = [];
+  const retries = [];
   await page.route("**/actions/add-task", async route => {
     bodies.push(route.request().postData());
+    retries.push(route.request().headers()["x-placebo-retry"]);
     const response = await route.fetch();
     if (lose) { lose = false; await route.abort("failed"); } else await route.fulfill({ response });
   });
@@ -42,6 +44,8 @@ test("a lost response marks the form stale, and adding again replays instead of 
   await page.waitForFunction(() => window.events.some(e => e.type === "applied" && e.target === "composer:new"));
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1], bodies[0], "the retry resends the first attempt unchanged");
+  assert.equal(retries[0], undefined);
+  assert.match(retries[1], /^\d+$/, "the retry says how old its first attempt is");
   const events = await page.evaluate(() => window.events);
   const retry = events.find(e => e.type === "scheduled" && e.retry);
   assert.equal(retry.retryOf, events.find(e => e.type === "error").requestId);
@@ -110,5 +114,38 @@ test("an attempt the server has not finished is diagnosed and stays stale", asyn
   const detail = await page.evaluate(() => window.events.find(e => e.code === "replay-pending"));
   assert.equal(detail.writeState, "unknown");
   assert.match(detail.hint, /submit again/);
+  assert.equal(await page.locator('[id="composer:new"]').getAttribute("data-placebo-stale"), "");
+});
+
+test("each new submission sends its own key, not the one in the markup", async t => {
+  // Markup rendered once for several pages, such as a pushed row, carries the
+  // same key everywhere. Sending it would replay one page's reply to another.
+  const page = await visit(t);
+  const bodies = [];
+  await page.route("**/actions/add-task", route => { bodies.push(route.request().postData()); return route.continue(); });
+  for (const [index, title] of ["First of two", "Second of two"].entries()) {
+    await addDialog(page, title);
+    const rendered = await page.locator('[id="composer:new"] input[name="placebo-key"]').inputValue();
+    await page.locator("#new-title").press("Enter");
+    await page.waitForFunction(count => window.events.filter(e => e.type === "applied" && e.target === "composer:new").length === count, index + 1);
+    const sent = new URLSearchParams(bodies.at(-1)).get("placebo-key");
+    assert.match(sent, /^[0-9a-f]{32}$/);
+    assert.notEqual(sent, rendered);
+  }
+  assert.notEqual(new URLSearchParams(bodies[0]).get("placebo-key"), new URLSearchParams(bodies[1]).get("placebo-key"));
+});
+
+test("a retry older than the server remembers is diagnosed and stays stale", async t => {
+  const page = await visit(t);
+  await page.route("**/actions/add-task", route => route.fulfill({
+    status: 409, contentType: "text/html",
+    headers: { "x-placebo-replay": "unknown", "x-placebo-action": "add-task" }, body: "Your changes may already be saved",
+  }));
+  await addDialog(page, "Sent long ago");
+  await page.locator("#new-title").press("Enter");
+  await errorCode(page, "replay-unknown");
+  const detail = await page.evaluate(() => window.events.find(e => e.code === "replay-unknown"));
+  assert.equal(detail.writeState, "unknown");
+  assert.match(detail.hint, /Reload/);
   assert.equal(await page.locator('[id="composer:new"]').getAttribute("data-placebo-stale"), "");
 });

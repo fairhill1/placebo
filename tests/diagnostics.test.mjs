@@ -256,6 +256,7 @@ test("unmounting a dispatched mutation warns by default even with trace disabled
   const audit = await visit(t);
   await audit.page.locator('[data-task="1"] [data-dialog-open]').click();
   await audit.page.locator("#delay-1").selectOption("700");
+  const version = await audit.page.locator('[id="task:1"] input[name="version"]').inputValue();
   const request = audit.page.waitForRequest("**/actions/save-task");
   await audit.page.locator("#title-1").press("Enter");
   await request;
@@ -265,6 +266,16 @@ test("unmounting a dispatched mutation warns by default even with trace disabled
   assert.equal(log.detail.writeState, "unknown");
   assert.equal(log.detail.reason, "unmounted");
   assert.match(log.text, /cannot undo a write/);
+  // The server finishes the write even though the page gave up on it. Let it
+  // finish before the next test reads task 1.
+  const saved = () => audit.page.evaluate(async () => {
+    const page = new DOMParser().parseFromString(await (await fetch("/")).text(), "text/html");
+    return page.querySelector('[id="task:1"] input[name="version"]').value;
+  });
+  for (const start = Date.now(); await saved() === version; ) {
+    assert.ok(Date.now() - start < 5000, "the interrupted save finishes on the server");
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
 });
 
 for (const phase of ["setup", "cleanup"]) {

@@ -284,7 +284,9 @@ runtime. Reads are GET forms and navigate natively. See the
 key. If a response is lost, the component gets `data-placebo-stale`, and
 submitting its form again resends the same request: the server replays the reply
 it recorded instead of saving twice, or saves for the first time if the first
-attempt never arrived. A form submitted twice without JavaScript saves once too.
+attempt never arrived. A form submitted twice without JavaScript saves once too,
+and a handler runs to its end even if the browser disconnects. A retry older than
+the store remembers is refused as unknown rather than saved again.
 Replies are recorded in memory by default. With several server processes, or
 writes that must survive a restart, implement `ReplayStore` on your database and
 install it with `.layer(placebo::replays(store))`. See

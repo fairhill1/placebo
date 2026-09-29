@@ -73,7 +73,9 @@ reply it recorded instead of writing again, or runs the write for the first time
 if the first attempt never arrived. The retry is traced as `scheduled` with
 `retry` and `retryOf`, and `applied` reports `replayed`. `replay-pending` means
 the server has the first attempt but not its result (it is still running, or
-stopped); wait and submit again, or reload. See [idempotent retries](protocol.md#idempotent-retries).
+stopped); wait and submit again, or reload. `replay-unknown` means the first
+attempt is older than the server's replay store remembers, so it may have
+written; reload to see current data. See [idempotent retries](protocol.md#idempotent-retries).
 
 A redirect is reported as `redirected`, not as a network failure. The usual
 cause is authentication middleware sending an expired session to a login page,

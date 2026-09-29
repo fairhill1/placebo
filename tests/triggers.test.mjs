@@ -50,6 +50,8 @@ test("polling stops quietly when its region is removed", async t => {
   await page.evaluate(() => document.getElementById("clock").remove());
   await page.waitForFunction(() => window.events.some(e => e.type === "discarded" && e.reason === "target-unmounted"));
   const sent = requests(page, "/clock");
+  // Later changes to the page do not start it again while its form stays.
+  await page.evaluate(() => document.body.append(document.createElement("div")));
   await page.waitForTimeout(1500);
   assert.equal(sent.length, 0);
   assert.equal(await page.evaluate(() => window.events.filter(e => e.type === "error").length), 0);

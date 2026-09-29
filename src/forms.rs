@@ -726,12 +726,20 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.split(';').next())
             .map(|mime| mime.trim().to_ascii_lowercase());
-        let multipart = mime.as_deref() == Some("multipart/form-data");
+        // Only a payload with file fields reads multipart, which has its own
+        // size limits; every other body stays under axum's body limit.
+        let files_expected = I::FIELDS.iter().any(|field| field.upload.is_some());
+        let multipart = files_expected && mime.as_deref() == Some("multipart/form-data");
         if !multipart && mime.as_deref() != Some("application/x-www-form-urlencoded") {
             return Err((
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "Expected request with `Content-Type: application/x-www-form-urlencoded` \
-                 or `multipart/form-data`",
+                if files_expected {
+                    "Expected request with `Content-Type: application/x-www-form-urlencoded` \
+                     or `multipart/form-data`"
+                } else {
+                    "Expected request with `Content-Type: application/x-www-form-urlencoded`; \
+                     this payload has no file fields"
+                },
             )
                 .into_response());
         }
@@ -743,7 +751,9 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
                 .iter()
                 .filter_map(|field| field.upload.map(|limit| (field.name, limit)))
                 .collect();
-            crate::upload::read(&headers, request.into_body(), &uploads).await?
+            crate::upload::read(&headers, request.into_body(), &uploads)
+                .await
+                .map_err(|response| *response)?
         } else {
             let body = Bytes::from_request(request, state)
                 .await
@@ -770,8 +780,14 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
             for file in &files {
                 parts.extend([file.name.as_bytes(), file.file_name.as_bytes(), &file.bytes]);
             }
-            let id = crate::replay::submission_id(key, &path, &headers, &parts);
-            crate::native::claim(store, id).await?;
+            let id = crate::replay::submission_id(key, &path, &parts);
+            let retry = headers
+                .get(crate::replay::RETRY_HEADER)
+                .and_then(|value| value.to_str().ok()?.parse().ok())
+                .map(std::time::Duration::from_millis);
+            crate::native::claim(store, id, retry)
+                .await
+                .map_err(|response| *response)?;
         }
         let decoded = crate::upload::with_files(files, |tokens| {
             let pairs = pairs

@@ -22,7 +22,13 @@ struct Required {
     file: Upload,
 }
 
+#[derive(Debug, Deserialize, FormInput)]
+struct Note {
+    note: String,
+}
+
 const ATTACH: MutationAction<Attach> = MutationAction::new("attach", "/attach");
+const NOTE: MutationAction<Note> = MutationAction::new("note", "/note");
 const REQUIRED: MutationAction<Required> = MutationAction::new("required", "/required");
 
 async fn attach(Input(input): Input<Attach>) -> String {
@@ -47,10 +53,15 @@ async fn required(Input(input): Input<Required>) -> String {
     input.file.file_name().to_owned()
 }
 
+async fn note(Input(input): Input<Note>) -> String {
+    input.note
+}
+
 fn app() -> Router {
     Router::new()
         .route(ATTACH.path(), ATTACH.route(attach))
         .route(REQUIRED.path(), REQUIRED.route(required))
+        .route(NOTE.path(), NOTE.route(note))
 }
 
 /// A multipart body: `(name, Some((file name, content)))` is a file part.
@@ -172,6 +183,24 @@ async fn files_and_text_must_arrive_in_their_own_fields() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn only_payloads_with_file_fields_read_multipart() {
+    let (status, body) = send(multipart("/note", &[("note", None, "Hi")])).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(body.contains("no file fields"), "{body}");
+}
+
+#[tokio::test]
+async fn a_multipart_body_is_limited_as_a_whole() {
+    // Many empty parts stay under the text limit but not under the body's:
+    // the files' limits, the text limit, and room for framing.
+    let mut parts = vec![("n", None, ""); 30_000];
+    parts.insert(0, ("note", None, "Hi"));
+    let (status, body) = send(multipart("/attach", &parts)).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert!(body.contains("the most this form's fields accept together"), "{body}");
 }
 
 #[test]

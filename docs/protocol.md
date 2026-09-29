@@ -20,7 +20,11 @@ A mutation form whose payload has an `Upload` field has
 inputs carry `data-placebo-max-bytes`; the runtime refuses to send files over
 it, and the server answers 413 with `X-Placebo-Upload-Limit` before the handler
 runs. A file part must belong to a declared file field, and text parts to the
-others; an empty, unnamed file part is an absent file.
+others; an empty, unnamed file part is an absent file. The whole multipart body
+is limited to its file fields' limits plus 1 MiB of text and 256 KiB of
+framing, and answers 413 beyond that. Only a payload with a file field reads
+multipart; any other answers 415, so its body stays under axum's
+`DefaultBodyLimit`.
 
 A POST without `X-Placebo-Request` is a native form submission: the browser
 sent the form itself, before the runtime loaded or without JavaScript. It runs
@@ -132,7 +136,8 @@ Triggers belong to the form element and end when it is removed. A poll is
 skipped (`ignored`, reason `busy`) while the region's previous read is in
 flight, is paused while `document.visibilityState` is `hidden` (`deferred`,
 reason `page-hidden`) and reads once when the page is shown, and stops when its
-region is gone after a first read (`discarded`, reason `target-unmounted`).
+region is gone after a first read (`discarded`, reason `target-unmounted`). It
+does not start again while its form stays on the page.
 `placebo:scheduled` carries `source`: `user`, `load`, `reveal`, `interval`,
 `history`, or `refetch`. A triggered form without `on_input` may sit inside
 its own region; its reply replaces it. A read binding may declare lists in
@@ -185,13 +190,19 @@ by another element is still `duplicate-append`.
 
 ## Idempotent retries
 
-Every mutation form renders a hidden `placebo-key` with a fresh 128-bit key.
-The adapter claims the submission in the application's `ReplayStore` (by
-default an in-memory store for ten minutes) before the handler runs, under an
-id made of the key and a hash of the path, the body, and the `Cookie` and
-`Authorization` headers. The same key with another body is a new submission.
-A reply (`reply`, `invalid`, or `conflict`) is recorded under the id; any other
-response releases it. A repeated submission gets the recorded reply with
+Every mutation form renders a hidden `placebo-key` with a fresh 128-bit key,
+which a submission without JavaScript sends. The runtime sends a fresh key of
+its own with each new submission instead, since markup rendered once for
+several pages (a pushed update) carries one key for all of them. The adapter
+claims the submission in the application's `ReplayStore` (by default an
+in-memory store for ten minutes) before the handler runs, under an id made of
+the key and a hash of the path and the body. The same key with another body is
+a new submission. Cookies are not part of the id: they change between an
+attempt and its retry (a refreshed session, an analytics cookie). A reply
+(`reply`, `invalid`, or `conflict`) is recorded under the id with its status,
+body, and the headers the handler added, such as `Set-Cookie`; any other
+response releases it. The handler runs to its end even if the browser
+disconnects, so its reply is recorded for the retry. A repeated submission gets the recorded reply with
 `X-Placebo-Replay: replayed` and its handler does not run; natively it becomes
 the same redirect or page. A repeat that arrives while the first is still
 running waits up to five seconds for it. If the first has still not finished,
@@ -199,6 +210,15 @@ or stopped after claiming, the answer is 409 with `X-Placebo-Replay: pending`
 (the runtime reports `replay-pending`), because running the handler again could
 write twice. A store failure answers 503 with `X-Placebo-Replay: unavailable`
 without running the handler.
+
+A runtime retry sends `X-Placebo-Retry` with the milliseconds since its first
+attempt. If the store has no record of the id and the first attempt is older
+than the store's `window()` (for `MemoryReplays`, its time-to-live, or less
+after replies were pushed out for capacity), the first attempt may have written
+and been forgotten. The answer is 409 with `X-Placebo-Replay: unknown` (the
+runtime reports `replay-unknown`) without running the handler. A store that
+expires ids returns that expiry from `window()`; the default, `None`, trusts
+that ids are kept.
 
 The runtime remembers a stale component's uncertain request. Submitting the
 same form again resends that request unchanged, body and key, and reuses its

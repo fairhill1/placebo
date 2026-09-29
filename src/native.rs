@@ -12,7 +12,16 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
-use std::{any::TypeId, cell::RefCell, collections::HashMap, sync::Arc};
+use std::{
+    any::TypeId,
+    cell::RefCell,
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll, ready},
+    time::Duration,
+};
 use tower::ServiceExt;
 
 use crate::replay::{self, Recorded, ReplayStore};
@@ -77,20 +86,56 @@ pub(crate) async fn run(native: bool, request: Request, next: Next) -> Response 
             .flatten(),
         ..Submission::default()
     };
-    let (response, submission) = SUBMISSION
-        .scope(RefCell::new(submission), async {
-            let response = next.run(request).await;
-            (response, SUBMISSION.with(RefCell::take))
-        })
-        .await;
-    let response = match submission.claimed {
-        Some((id, store)) => record(&*store, &id, response).await,
-        None => response,
+    let work = async move {
+        let (response, submission) = SUBMISSION
+            .scope(RefCell::new(submission), async {
+                let response = next.run(request).await;
+                (response, SUBMISSION.with(RefCell::take))
+            })
+            .await;
+        let response = match submission.claimed {
+            Some((id, store)) => record(&*store, &id, response).await,
+            None => response,
+        };
+        (response, submission.back)
     };
+    let (response, back) = Finish(Some(Box::pin(work))).await;
     if native {
-        respond(submission.back, pages, response)
+        respond(back, pages, response)
     } else {
         response
+    }
+}
+
+/// Runs a mutation to its end. The handler runs in the request's task while
+/// the browser waits. If the request is dropped, for example because the
+/// browser disconnected, the rest runs on a task of its own: a handler
+/// stopped halfway could have written without recording its reply, leaving
+/// its retry with an unknown outcome.
+struct Finish<F: Future + Send + 'static>(Option<Pin<Box<F>>>);
+
+impl<F: Future + Send + 'static> Future for Finish<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        let work = self.0.as_mut().expect("a mutation polled after it finished");
+        let output = ready!(work.as_mut().poll(cx));
+        self.0 = None;
+        Poll::Ready(output)
+    }
+}
+
+impl<F: Future + Send + 'static> Drop for Finish<F> {
+    fn drop(&mut self) {
+        // A handler that panicked cannot be resumed.
+        if let Some(work) = self.0.take()
+            && !std::thread::panicking()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                work.await;
+            });
+        }
     }
 }
 
@@ -110,6 +155,7 @@ async fn record(store: &dyn ReplayStore, id: &str, response: Response) -> Respon
     };
     let reply = Recorded {
         status: parts.status.as_u16(),
+        headers: replay::recorded_headers(&parts.headers),
         body: String::from_utf8_lossy(&body).into_owned(),
     };
     if let Err(error) = store.record(id, reply).await {
@@ -119,13 +165,18 @@ async fn record(store: &dyn ReplayStore, id: &str, response: Response) -> Respon
     Response::from_parts(parts, Body::from(body))
 }
 
-/// Claim this submission's replay id before its handler runs. `Err` is the
+/// Claim this submission's replay id before its handler runs. `retry` is the
+/// age of the first attempt when the runtime retries one. `Err` is the
 /// response to send instead: a recorded reply, or an explanation.
-pub(crate) async fn claim(store: Arc<dyn ReplayStore>, id: String) -> Result<(), Response> {
+pub(crate) async fn claim(
+    store: Arc<dyn ReplayStore>,
+    id: String,
+    retry: Option<Duration>,
+) -> Result<(), Box<Response>> {
     if SUBMISSION.try_with(|_| ()).is_err() {
         return Ok(());
     }
-    replay::claim(&*store, &id).await?;
+    replay::claim(&*store, &id, retry).await?;
     SUBMISSION.with(|submission| submission.borrow_mut().claimed = Some((id, store)));
     Ok(())
 }
@@ -228,7 +279,9 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
             );
             "/".to_owned()
         });
-        return see_other(&location);
+        let mut redirect = see_other(&location);
+        carry_headers(response.headers(), redirect.headers_mut());
+        return redirect;
     }
     let path = match back {
         Some(path) => path,
@@ -239,7 +292,9 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
                  render its page again: the browser sent no same-origin Referer. It gets a page \
                  with only the component."
             );
-            return fallback_page(status, &reply);
+            let mut page = fallback_page(status, &reply);
+            carry_headers(response.headers(), page.headers_mut());
+            return page;
         }
     };
     if !pages {
@@ -251,13 +306,38 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
             reply.target
         );
     }
-    let mut response = fallback_page(status, &reply);
-    response.extensions_mut().insert(NativePage {
+    let mut page = fallback_page(status, &reply);
+    carry_headers(response.headers(), page.headers_mut());
+    page.extensions_mut().insert(NativePage {
         target: reply.target,
         html: reply.html,
         path,
     });
-    response
+    page
+}
+
+/// Keep the headers a handler added, such as `Set-Cookie` after a login, when
+/// its reply becomes a redirect or a page. The body's own headers stay behind.
+/// A header the page already has keeps the page's value, except cookies,
+/// which both may set.
+fn carry_headers(from: &HeaderMap, to: &mut HeaderMap) {
+    for name in from.keys() {
+        let body_header = matches!(
+            *name,
+            header::CONTENT_TYPE
+                | header::CONTENT_LENGTH
+                | header::CONTENT_ENCODING
+                | header::TRANSFER_ENCODING
+                | header::CACHE_CONTROL
+                | header::LOCATION
+        );
+        if body_header || (name != header::SET_COOKIE && to.contains_key(name)) {
+            continue;
+        }
+        for value in from.get_all(name) {
+            to.append(name.clone(), value.clone());
+        }
+    }
 }
 
 fn see_other(location: &str) -> Response {
@@ -389,5 +469,6 @@ async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> R
     parts
         .headers
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    carry_headers(response.headers(), &mut parts.headers);
     Response::from_parts(parts, body)
 }

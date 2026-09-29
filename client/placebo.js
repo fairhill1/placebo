@@ -2,6 +2,7 @@
 // Scheduling belongs to the actual mounted target node, not its reusable id.
 const VERSION = 5;
 const UPDATE_TYPE = "application/vnd.placebo.update+json";
+const KEY_FIELD = "placebo-key";
 const pending = new Map();
 // Per component: a mutation sent whose outcome is unknown. Submitting the
 // same form again resends it unchanged, with its idempotency key.
@@ -189,6 +190,7 @@ const hints = {
   "network-error": "Check Network and server logs. The write may have committed: submit the form again to retry it safely. The retry resends the same request with its idempotency key, so the server replays its recorded reply instead of writing twice.",
   "replay-pending": "The first attempt is still running, or stopped after possibly writing. Wait and submit again, or reload to see current data.",
   "replay-unavailable": "The server's replay store failed, so nothing was saved by this attempt. Check the server logs, then submit again.",
+  "replay-unknown": "The first attempt is older than the server's replay store remembers, so it may have written. Reload to see current data before submitting again. To allow later retries, keep replies longer in the ReplayStore.",
   "redirected": "Sign in again, in another tab to keep this page's input, then resubmit. If the action's handler redirects, return a Placebo update instead.",
   "response-mismatch": "Build the reply from the same action and component instance as the initiating form.",
   "invalid-update": "Check the reply operation, HTML, and patch declarations against the initiating binding.",
@@ -987,12 +989,15 @@ async function send(work) {
   if (!isCurrent(work)) return;
   work.phase = "request";
   work.sent = true;
+  work.sentAt = performance.now();
   emit("request", work);
   try {
     const response = await fetch(work.url, {
       method: work.method,
       headers: { Accept: UPDATE_TYPE, "X-Placebo-Request-Id": work.requestId,
-        ...(work.method === "POST" ? { "X-Placebo-Request": String(VERSION) } : {}) },
+        ...(work.method === "POST" ? { "X-Placebo-Request": String(VERSION) } : {}),
+        // The server runs a retry only if it would still remember the first attempt.
+        ...(work.retryOf ? { "X-Placebo-Retry": String(Math.ceil(work.sentAt - work.firstSentAt)) } : {}) },
       body: work.body,
       credentials: "same-origin",
       // "error" would report a login redirect as a network failure. A manual
@@ -1020,6 +1025,7 @@ async function send(work) {
     require(replay !== "pending", "replay-pending",
       "The server has an earlier attempt of this submission that has not finished, so it did not run it again.");
     require(replay !== "unavailable", "replay-unavailable", "The server could not check for an earlier attempt, so it did not run this one.");
+    require(replay !== "unknown", "replay-unknown", "The server no longer knows whether the first attempt of this submission was saved, so it did not run it again.");
     work.replayed = replay === "replayed";
     if (response.status === 413) {
       work.notSaved = true;
@@ -1059,10 +1065,9 @@ async function send(work) {
 function markStale(work) {
   if (work.method !== "POST" || !work.sent || work.applied || !work.target?.isConnected) return;
   work.target.setAttribute("data-placebo-stale", "");
-  const earlier = uncertain.get(work.target);
-  // A retry keeps the first attempt's snapshot of the controls.
+  // A retry keeps the first attempt's snapshot of the controls, id, and time.
   uncertain.set(work.target, { form: work.form, body: work.body, locals: work.locals,
-    requestId: earlier?.requestId ?? work.requestId });
+    requestId: work.retryOf ?? work.requestId, firstSentAt: work.firstSentAt ?? work.sentAt });
 }
 
 // The component shows server state again, so an earlier attempt is settled.
@@ -1109,6 +1114,9 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
       localSnapshots = retry.locals;
     } else {
       const data = new FormData(form, submitter);
+      // Each new submission gets its own key. Markup rendered once for many
+      // pages, such as a pushed update, carries the same key everywhere.
+      if (method === "POST" && data.has(KEY_FIELD)) data.set(KEY_FIELD, freshKey());
       if (method === "POST" && form.enctype === "multipart/form-data") {
         if (!checkUploads(form, work)) return;
         body = data;
@@ -1126,6 +1134,7 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
     if (previous) cancel(previous, "superseded");
     work = { ...work, config, form, target, effects, locals: localSnapshots, url, method, phase: "scheduled",
       body, controller: new AbortController(),
+      ...(retry?.form === form ? { retryOf: retry.requestId, firstSentAt: retry.firstSentAt } : {}),
       previousBusy: target.getAttribute("aria-busy"), timer: null,
       historyMode: config.history && source === "user" ? "update" : "none", historyTrigger: input ? trigger : null };
     pending.set(target, work);
@@ -1137,6 +1146,10 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
   } catch (error) {
     report(work, error, "invalid-action");
   }
+}
+
+function freshKey() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function readableSize(bytes) {
@@ -1434,9 +1447,16 @@ function syncTriggers() {
 }
 
 function stopTrigger(form, state) {
+  haltTrigger(form, state);
+  triggered.delete(form);
+}
+
+// Ends a trigger while its form stays on the page. The form keeps its entry,
+// so later DOM changes do not register and start it again.
+function haltTrigger(form, state) {
   clearTimeout(state.timer);
   revealer?.unobserve(form);
-  triggered.delete(form);
+  state.halted = true;
 }
 
 function fire(form, state, source) {
@@ -1444,7 +1464,7 @@ function fire(form, state, source) {
     const target = document.getElementById(state.config.target);
     // Polling ends with its region; a region that was never there is an error.
     if (!target && state.ran) {
-      stopTrigger(form, state);
+      haltTrigger(form, state);
       emit("discarded", null, triggerContext(state, { reason: "target-unmounted", phase: "interval-stopped" }));
       return;
     }
@@ -1461,7 +1481,7 @@ function fire(form, state, source) {
 function armInterval(form, state) {
   clearTimeout(state.timer);
   state.timer = setTimeout(() => {
-    if (triggered.get(form) !== state) return;
+    if (triggered.get(form) !== state || state.halted) return;
     // Paused until the page is shown again, then read once.
     if (document.visibilityState === "hidden") {
       state.overdue = true;
@@ -1469,17 +1489,17 @@ function armInterval(form, state) {
       return;
     }
     fire(form, state, "interval");
-    if (triggered.get(form) === state) armInterval(form, state);
+    if (triggered.get(form) === state && !state.halted) armInterval(form, state);
   }, state.config.every_ms);
 }
 
 function onVisibilityChange() {
   if (document.visibilityState !== "visible") return;
   for (const [form, state] of triggered) {
-    if (!state.overdue) continue;
+    if (!state.overdue || state.halted) continue;
     state.overdue = false;
     fire(form, state, "interval");
-    if (triggered.get(form) === state) armInterval(form, state);
+    if (triggered.get(form) === state && !state.halted) armInterval(form, state);
   }
 }
 

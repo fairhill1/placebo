@@ -68,8 +68,9 @@ Payload fields cannot use names starting with `placebo-`.
 mounted with `data-placebo-revision` orders its refreshes: the reply to its own
 form applies unless its revision is older than the mounted one (then only the
 patches apply, and the primary is reported in `skippedComponents` as
-`not-newer`); a `refresh-component` patch, a nested component refreshed by
-its outer component, or a push applies only when strictly newer. Applying one
+`not-newer`); a `refresh-component` patch or a push applies only when
+strictly newer, and a nested component refreshed by its outer component when
+at least as new (it may show state that depends on the outer one). Applying one
 sets the mounted revision. A refresh without a revision for a versioned
 component is rejected with `missing-revision`.
 
@@ -190,7 +191,12 @@ connection logs the warning `push-disconnected` once; a stream the browser
 gives up on logs `push-closed`.
 
 An `insert-item` for an item already in the list keeps that item and reports
-it in `existingItems`, since a reply and a push can both insert it. An id used
+it in `existingItems`, since a reply and a push can both insert it. A reply's
+`insert-item`, `move-item`, or `remove-item` for an item a pushed batch
+changed after the request was sent is skipped and reported in
+`supersededItems`: the stream orders list changes. A resync neither removes
+nor inserts items pushed while it read the page, and keeps items a read
+inserted. An id used
 by another element is still `duplicate-append`.
 
 ## Idempotent retries
@@ -237,7 +243,7 @@ Details contain action/target names and outcome, reason, or error code where
 applicable. `applied` also carries `refreshedLocal`, `preservedLocal` (each
 with a `reason`), `skippedRegions`, `refreshedComponents`, `skippedComponents`,
 `deferredComponents`, `missingTargets`, `missingItems`, `misplacedItems`,
-`existingItems`, `refetched`, `skippedReads`, `replayed`, and `navigate`. The example's interaction trace displays them.
+`existingItems`, `supersededItems`, `refetched`, `skippedReads`, `replayed`, and `navigate`. The example's interaction trace displays them.
 
 Unexpected failures log actionable console errors by default. Enable execution
 tracing from the browser console with `(await import('/placebo.js')).trace(true)`;

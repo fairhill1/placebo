@@ -175,7 +175,10 @@ mounts again, and the browser matches them by id:
 - A nested component that is still there **keeps its node**, so its root
   attributes, behaviors, focus, and an open or modal `mount_dialog` survive.
   It takes its new contents by the rule for a refresh from another action:
-  controls with edits keep them, everything else shows the reply.
+  controls with edits keep them, everything else shows the reply. A versioned
+  one takes them only when the reply's revision for it is at least the one
+  it shows, so a push that already showed newer state is not undone
+  (`skippedComponents`, reason `not-newer`).
 - A nested component with its **own request in flight** keeps its contents
   untouched; its own reply carries its state. The applied event reports it in
   `skippedComponents` with reason `busy`.
@@ -187,11 +190,14 @@ The outer component's local units and live regions are only its own, so two
 nested components can render the same form without a `duplicate-local` clash.
 Refreshing a nested component never touches the outer one. A form belongs to
 its nearest component: a form inside a nested component that targets the outer
-one is rejected with `invalid-component` before sending, and a reply cannot
-also refresh a component inside its own target (`overlapping-targets`), since
-the target's contents already refresh it. A nested component must keep its
-root element (`mount` or `mount_dialog`) across renders, or the reply is
-rejected with `nested-component`. The
+one is rejected with `invalid-component` before sending. A binding cannot
+declare a component inside its own target, or one around it
+(`overlapping-targets`, also before sending): the target's contents already
+refresh the inner one, and the outer one would replace the target; declare a
+versioned region for what the outer component shows instead. A nested
+component must keep its root element (`mount` or `mount_dialog`) across
+renders, or the reply is rejected with `nested-component`, and cannot sit
+inside a `data-placebo-local` subtree (`local-component`). The
 [nested example](../examples/nested.rs) mounts entries and a notes dialog inside
 a checklist.
 
@@ -237,6 +243,12 @@ and then applies only if it is still newer. An insert of an item that is
 already there keeps the item (reported in `existingItems`). Declared targets
 that this page does not show are skipped (`missingTargets`).
 
+List items have no revisions; the feed's stream orders them. A reply changes
+an item only if no push has changed that item since its request was sent: a
+slow reply cannot bring back an item a push removed, or remove one a push
+brought back (reported in `supersededItems`). The push of the reply's own
+write carries its change.
+
 The mount records the feed's position, so updates published after the page
 was read are replayed when it connects. Render it under the lock or
 transaction the page reads its data with, and publish under the write's lock,
@@ -245,7 +257,9 @@ browser reconnects with its last event id and the feed replays what the page
 missed from its last 256 updates. If they are gone, or the server restarted,
 the feed tells the page to resync: the runtime reads the page again and takes
 each declared target's state from it by the same rules (newer revisions only,
-list items inserted, removed, and ordered to match).
+list items inserted, removed, and ordered to match). Items pushed while it
+read the page, and items a read inserted ("load more"), are beyond what it
+read and stay.
 
 A feed broadcasts to every subscriber, with markup rendered once for all of
 them. For data only some people may see, or markup that depends on the viewer

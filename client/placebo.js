@@ -226,6 +226,7 @@ const hints = {
   "duplicate-local": "Give each retained subtree a unique key within its component. Two forms for the same action in one component cannot both render a field of the same name.",
   "local-shape": "Keep a retained local key on the same element type, or use a new key for a fresh subtree.",
   "nested-local": "Use separate local ownership boundaries; nested local subtrees are not supported.",
+  "local-component": "Mount the nested component outside the data-placebo-local subtree; a nested component keeps its own node and state already.",
   "nested-component": "Mount a nested component the same way in every render (mount or mount_dialog), so its root element keeps its type.",
   "unstable-dialog": "Use component.mount_dialog(headingId, contents), or mount the component inside a persistent dialog. Replies must contain only the component contents.",
   "nested-region": "Keep shared snapshot regions free of other mounted regions.",
@@ -386,7 +387,7 @@ function batch(primaryTarget = null, primaryFragment = null) {
   let primaryIds;
   return {
     summary: { refreshedComponents: [], skippedComponents: [], deferredComponents: [], missingTargets: [],
-      missingItems: [], misplacedItems: [], existingItems: [], refetched: [], skippedReads: [] },
+      missingItems: [], misplacedItems: [], existingItems: [], supersededItems: [], refetched: [], skippedReads: [] },
     replace(target) {
       require(!replaced.some(other => other === target || other.contains(target) || target.contains(other)) &&
         !containers.some(container => target.contains(container)),
@@ -426,7 +427,7 @@ function componentBusy(target) {
 
 // Plan one patch against the live DOM without changing it. `push` updates
 // come from a feed: a busy component defers them instead of skipping them.
-function planPatch(patch, target, context, { primaryId = null, push = false } = {}) {
+function planPatch(patch, target, context, { primaryId = null, push = false, since = null, read = false } = {}) {
   const { summary } = context;
   const component = target.hasAttribute("data-placebo-component");
   const list = target.hasAttribute("data-placebo-list");
@@ -489,7 +490,7 @@ function planPatch(patch, target, context, { primaryId = null, push = false } = 
     case "insert-item": case "move-item": case "remove-item": case "order-items": {
       require(list, "invalid-patch", "Item updates address a mounted List.");
       context.contain(target);
-      return planItems(target, patch, context.reserve, summary);
+      return planItems(target, patch, context.reserve, summary, { pushed: Boolean(push), since, read });
     }
     case "rerun-read": {
       require(!push && !component && !list && !target.hasAttribute("data-placebo-revision"), "invalid-patch", "Only a read region can be fetched again.");
@@ -538,7 +539,8 @@ function updateFragment(work, update) {
     const target = targetFor(patch.target);
     require(target === work.effects.get(patch.target), "remounted-target", `Additional target '${patch.target}' was remounted during this request.`,
       { relatedTarget: patch.target });
-    return planPatch(patch, target, context, { primaryId: work.config.target });
+    return planPatch(patch, target, context, { primaryId: work.config.target, since: work.firstSentAt ?? work.sentAt,
+      read: work.method === "GET" });
   });
   // Every target, fragment, and local has been checked before any live mutation.
   work.phase = "applying";
@@ -573,10 +575,25 @@ function readFormsFor(id) {
 
 const POSITIONS = ["start", "end", "before", "after"];
 
+// A feed's stream is the order of a list's changes. A reply shows the state
+// when its request ran, so it leaves alone an item a push has changed since
+// the request was sent (reported in `supersededItems`); the push, or the push
+// of this request's own write, has the newer state. Only the times of pushes
+// that a request still in flight might predate are kept.
+const pushedItems = new Map();
+const readItems = new WeakSet();
+function pushedSince(id, since) { return since != null && (pushedItems.get(id) ?? -Infinity) > since; }
+function recordPushed(id) {
+  pushedItems.set(id, performance.now());
+  if (pushedItems.size <= 512) return;
+  const oldest = Math.min(performance.now() - 600000, ...Array.from(pending.values(), work => work.firstSentAt ?? work.sentAt ?? Infinity));
+  for (const [item, at] of pushedItems) if (at < oldest) pushedItems.delete(item);
+}
+
 // Items are resolved when the batch is applied. A missing item or anchor is
 // skipped or placed at the end and reported, rather than rejecting a reply
 // whose write has already committed.
-function planItems(list, patch, reserve, summary) {
+function planItems(list, patch, reserve, summary, { pushed = false, since = null, read = false } = {}) {
   const itemId = value => typeof value === "string" && value.length > 0;
   const position = patch.position;
   if (patch.operation === "insert-item" || patch.operation === "move-item") {
@@ -586,6 +603,13 @@ function planItems(list, patch, reserve, summary) {
   const find = id => {
     const node = document.getElementById(id);
     return node?.parentElement === list && node.hasAttribute("data-placebo-item") ? node : null;
+  };
+  // A reply's change to an item a push changed since its request was sent.
+  const superseded = () => {
+    if (pushed) { recordPushed(patch.item); return false; }
+    if (!pushedSince(patch.item, since)) return false;
+    summary.supersededItems.push(patch.item);
+    return true;
   };
   const place = (node, id) => {
     let anchor = null;
@@ -610,13 +634,18 @@ function planItems(list, patch, reserve, summary) {
       const existing = Boolean(find(patch.item));
       if (!existing) reserve(content);
       return { commit() {
+        if (superseded()) return;
         if (find(patch.item)) summary.existingItems.push(patch.item);
-        else place(node, patch.item);
+        else {
+          place(node, patch.item);
+          if (read) readItems.add(node);
+        }
       } };
     }
     case "move-item":
       require(itemId(patch.item), "invalid-patch", "A moved item needs an id.");
       return { commit() {
+        if (superseded()) return;
         const node = find(patch.item);
         if (node) place(node, patch.item);
         else summary.missingItems.push(patch.item);
@@ -626,6 +655,7 @@ function planItems(list, patch, reserve, summary) {
       // Earlier parts of the batch may replace the focused element first.
       const hadFocus = Boolean(find(patch.item)?.contains(document.activeElement));
       return { commit() {
+        if (superseded()) return;
         const node = find(patch.item);
         if (node) removeItem(node, hadFocus);
         else summary.missingItems.push(patch.item);
@@ -750,6 +780,8 @@ function locals(root) {
     // A typed control inside an explicit local belongs to that local.
     if (!explicit && nested) continue;
     require(!nested, "nested-local", "Local subtrees cannot be nested.");
+    require(!explicit || !element.querySelector("[data-placebo-component]"), "local-component",
+      `Local '${element.dataset.placeboLocal}' contains nested component '${element.querySelector("[data-placebo-component]")?.id}'.`);
     const key = explicit ? element.dataset.placeboLocal : fieldKey(element);
     require(key && !found.has(key), "duplicate-local", `Local key '${key}' must be unique within its component.`);
     found.set(key, element);
@@ -841,9 +873,18 @@ function prepareComponent(target, fragment, mode, snapshots = null) {
       children.push({ old, next });
       continue;
     }
+    // A versioned nested component takes only contents at least as new as
+    // its own: a push or reply may already show later state.
+    const nextRevision = next.dataset.placeboRevision;
+    if (!componentRevision(old, nextRevision, false)) {
+      components.skipped.push({ target: id, reason: "not-newer", revision: nextRevision, currentRevision: old.dataset.placeboRevision });
+      children.push({ old, next });
+      continue;
+    }
     const contents = document.createDocumentFragment();
     contents.append(...next.childNodes);
     const plan = prepareComponent(old, contents, "external");
+    plan.revision = nextRevision;
     components.refreshed.push(id, ...plan.components.refreshed);
     components.skipped.push(...plan.components.skipped);
     children.push({ old, next, plan });
@@ -865,7 +906,11 @@ function prepareComponent(target, fragment, mode, snapshots = null) {
       if (plan === "keep" || plan === "same") kept.push([old, next]);
     }
     for (const { old, next, plan } of children) {
-      if (plan) { plan.commit(); settle(old); }
+      if (plan) {
+        plan.commit();
+        if (plan.revision != null) old.dataset.placeboRevision = plan.revision;
+        settle(old);
+      }
       kept.push([old, next]);
     }
     const disclosures = keepDisclosures(target);
@@ -1117,6 +1162,17 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
     if (input && config.input_delay_ms === null) return;
     const target = targetFor(config.target);
     const effects = new Map(config.effects.map(id => [id, targetFor(id)]));
+    // A reply's targets cannot contain one another. Refuse before sending, so
+    // no write happens that the reply could not show.
+    // A List may contain what it moves or removes.
+    const regions = [target, ...effects.values()];
+    const overlaps = (outer, inner) => outer !== inner && outer.contains(inner) && !outer.hasAttribute("data-placebo-list");
+    for (const [id, effect] of effects) {
+      const other = regions.find(region => overlaps(region, effect) || overlaps(effect, region));
+      require(!other, "overlapping-targets", other === target
+        ? `'${id}' ${effect.contains(target) ? "contains" : "is inside"} this form's target '${target.id}', which the reply already refreshes.`
+        : `Declared targets '${id}' and '${other?.id}' overlap.`, { relatedTarget: id });
+    }
     const previous = pending.get(target);
     if (previous?.config.policy === "exclusive") {
       emit("ignored", work, { reason: "busy", activeRequestId: previous.requestId });
@@ -1388,6 +1444,7 @@ function flushDeferredPush(target) {
 // and take the declared targets' newer state from it, with the same rules.
 async function resyncFeed(feed, extra) {
   emit("push", null, { ...extra, phase: "push-resync" });
+  const started = performance.now();
   let fresh;
   try {
     const response = await fetch(location.href, { headers: { Accept: "text/html" }, credentials: "same-origin" });
@@ -1399,10 +1456,13 @@ async function resyncFeed(feed, extra) {
     return;
   }
   if (!feeds.has(feed.element)) return;
-  applyPush(feed, { version: VERSION, feed: feed.config.feed, patches: resyncPatches(feed.config, fresh) }, extra, "resync");
+  applyPush(feed, { version: VERSION, feed: feed.config.feed, patches: resyncPatches(feed.config, fresh, started) }, extra, "resync");
 }
 
-function resyncPatches(config, fresh) {
+// The page read again is the state when it was read. Items pushed while it
+// loaded are newer, and items a read loaded ("load more") lie beyond it, so
+// neither is removed or inserted by it.
+function resyncPatches(config, fresh, started) {
   const ids = new Set(config.targets);
   for (const kind of config.kinds) {
     for (const node of document.querySelectorAll(`[data-placebo-region][id^="${CSS.escape(kind)}:"]`)) ids.add(node.id);
@@ -1413,13 +1473,18 @@ function resyncPatches(config, fresh) {
     if (!current || !next) continue;
     if (current.hasAttribute("data-placebo-list")) {
       const itemsOf = list => Array.from(list.children).filter(node => node.hasAttribute("data-placebo-item") && node.id);
-      const shown = new Set(itemsOf(current).map(node => node.id));
+      const shownNodes = itemsOf(current);
+      const shown = new Set(shownNodes.map(node => node.id));
       const wanted = itemsOf(next);
       const wantedIds = new Set(wanted.map(node => node.id));
-      for (const item of shown) if (!wantedIds.has(item)) items.push({ target: id, operation: "remove-item", item });
+      for (const node of shownNodes) {
+        if (!wantedIds.has(node.id) && !readItems.has(node) && !pushedSince(node.id, started)) {
+          items.push({ target: id, operation: "remove-item", item: node.id });
+        }
+      }
       let previous = null;
       for (const node of wanted) {
-        if (!shown.has(node.id)) items.push({ target: id, operation: "insert-item", item: node.id, html: node.outerHTML,
+        if (!shown.has(node.id) && !pushedSince(node.id, started)) items.push({ target: id, operation: "insert-item", item: node.id, html: node.outerHTML,
           position: previous ? { at: "after", item: previous } : { at: "start" } });
         previous = node.id;
       }

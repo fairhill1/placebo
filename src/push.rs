@@ -56,8 +56,9 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 /// use [`Feeds`]: a feed per user or per document. Guard a feed's route like
 /// any other route. Updates are ordered against
 /// replies by revision: a versioned region or a versioned component (see
-/// [`Component::revision`]) takes an update only when it is newer. List item
-/// operations are not versioned; they apply leniently, as in replies.
+/// [`Component::revision`]) takes an update only when it is newer. List items
+/// are ordered by the stream: a reply leaves an item a push changed after its
+/// request was sent.
 ///
 /// A page that reconnects gets the updates it missed from the feed's recent
 /// updates. If they are gone, or the server restarted, it reads the page again

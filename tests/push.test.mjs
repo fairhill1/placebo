@@ -79,8 +79,9 @@ test("adding, moving, and deleting in one tab change the other tab's list", asyn
   await second.waitForFunction(() => Array.from(document.querySelectorAll(".task-title")).some(n => n.textContent === "Pushed to the other tab"));
   const id = await second.locator(".task-row", { hasText: "Pushed to the other tab" }).getAttribute("data-task");
   assert.deepEqual(await order(second), await order(first));
-  // The adding tab got the insert twice, from its reply and the push.
-  await first.waitForFunction(() => window.events.some(e => e.type === "applied" && e.existingItems?.length));
+  // The adding tab got the insert twice, from its reply and the push. The
+  // second finds it there, or, from a reply after the push, leaves it to it.
+  await first.waitForFunction(() => window.events.some(e => e.type === "applied" && (e.existingItems?.length || e.supersededItems?.length)));
   await first.keyboard.press("Escape");
   await first.locator(`${row(id)} button[aria-label="Move up task ${id}"]`).click();
   await second.waitForFunction(id => {
@@ -170,4 +171,62 @@ test("a feed route that is missing is reported, and a push for an undeclared tar
     body: `event: update\nid: x-1\ndata: ${JSON.stringify({ version: 5, feed: "tasks-live", patches: [{ target: "add-task", operation: "replace-children", revision: "9", html: "" }] })}\nretry: 60000\n\n` }));
   await page.evaluate(() => { const feed = document.getElementById("tasks-live"); feed.replaceWith(feed.cloneNode()); });
   await page.waitForFunction(() => window.events.some(e => e.code === "undeclared-push"));
+});
+
+test("a slow reply does not bring back an item a push removed meanwhile", async t => {
+  const first = await visit(t);
+  const second = await visit(t);
+  // Hold the adding tab's reply until the other tab has deleted the task.
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await first.route("**/actions/add-task", async route => {
+    const response = await route.fetch();
+    await held;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  await first.locator("#add-task").click();
+  await first.locator("#new-title").fill("Deleted before the reply");
+  await first.locator("#new-title").press("Enter");
+  const added = second.locator(".task-row", { hasText: "Deleted before the reply" });
+  await added.waitFor();
+  const id = await added.getAttribute("data-task");
+  await first.locator(row(id)).waitFor();
+  await second.locator(`${row(id)} [data-dialog-open]`).click();
+  await second.locator(`${row(id)} button.danger`).click();
+  await first.locator(row(id)).waitFor({ state: "detached" });
+  release();
+  await first.waitForFunction(() => window.events.some(e => e.type === "applied" && e.action === "add-task"));
+  const event = await first.evaluate(() => window.events.find(e => e.type === "applied" && e.action === "add-task"));
+  assert.deepEqual(event.supersededItems, [`tasks/${id}`]);
+  assert.equal(await first.locator(row(id)).count(), 0);
+});
+
+test("a resync keeps an item pushed while it read the page", async t => {
+  const page = await fixture.page(t);
+  // The page's feed position is gone, so it resyncs on connecting. Its read
+  // of the page is answered only after another tab adds a task. (Routes run
+  // newest first: the first load gets the stale position.)
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route(`${fixture.origin}/`, async route => {
+    const response = await route.fetch();
+    await held;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  await page.route(`${fixture.origin}/`, async route => {
+    const response = await route.fetch();
+    const body = (await response.text()).replace(/after=[0-9a-f]+-\d+/, "after=gone-1");
+    await route.fulfill({ response, body });
+  }, { times: 1 });
+  await page.goto(fixture.origin);
+  await page.waitForFunction(() => window.events.some(e => e.type === "push" && e.phase === "push-resync"));
+  const other = await visit(t);
+  await other.locator("#add-task").click();
+  await other.locator("#new-title").fill("Pushed during the resync");
+  await other.locator("#new-title").press("Enter");
+  const added = page.locator(".task-row", { hasText: "Pushed during the resync" });
+  await added.waitFor();
+  release();
+  await page.waitForFunction(() => window.events.some(e => e.type === "applied" && e.source === "resync"));
+  assert.equal(await added.count(), 1);
 });

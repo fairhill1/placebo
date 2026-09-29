@@ -128,3 +128,63 @@ test("a nested component that changes its root element rejects the whole reply",
   assert.equal(await page.locator("#list-name").textContent(), name);
   assert.equal(await page.locator('[id="checklist:1"]').getAttribute("data-placebo-stale"), "");
 });
+
+// Rewrite the checklist's next reply, for markup the example does not render.
+async function rewriteListReply(page, rewrite) {
+  await page.route("**/actions/save-list", async route => {
+    const response = await route.fetch();
+    const update = await response.json();
+    update.html = rewrite(update.html);
+    await route.fulfill({ response, body: JSON.stringify(update) });
+  }, { times: 1 });
+}
+
+test("a checklist refresh leaves a nested entry that shows newer state than it brings", async t => {
+  const page = await visit(t);
+  // Entry 1 shows revision 5, as if a push had refreshed it; the checklist's
+  // reply brings revision 3 for it and 6 for entry 2.
+  await page.evaluate(() => {
+    for (const [id, revision] of [["entry:1", "5"], ["entry:2", "5"]]) {
+      const entry = document.getElementById(id);
+      entry.dataset.placeboRevision = revision;
+      entry.querySelector(".feedback").textContent = "Newer";
+    }
+  });
+  await rewriteListReply(page, html => html
+    .replace('id="entry:1"', 'id="entry:1" data-placebo-revision="3"')
+    .replace('id="entry:2"', 'id="entry:2" data-placebo-revision="6"'));
+  await saveList(page, { name: "Revised" });
+  await applied(page, "checklist:1");
+  const event = await lastApplied(page, "checklist:1");
+  assert.deepEqual(event.skippedComponents, [{ target: "entry:1", reason: "not-newer", revision: "3", currentRevision: "5" }]);
+  assert.equal(await page.locator('[id="entry:1"] .feedback').textContent(), "Newer");
+  assert.equal(await page.locator('[id="entry:2"] .feedback').textContent(), "");
+  assert.equal(await page.locator('[id="entry:2"]').getAttribute("data-placebo-revision"), "6");
+});
+
+test("a local subtree that wraps a nested component is rejected before any change", async t => {
+  const page = await visit(t);
+  await rewriteListReply(page, html => html.replace('<ul id="entries">', '<div data-placebo-local="wrap"><ul id="entries">')
+    .replace("</ul>", "</ul></div>"));
+  await saveList(page, { name: "Wrapped" });
+  await page.waitForFunction(() => window.events.some(e => e.type === "error" && e.code === "local-component"));
+  const error = await page.evaluate(() => window.events.find(e => e.code === "local-component"));
+  assert.match(error.message, /Local 'wrap' contains nested component 'entry:1'/);
+  assert.equal(await page.locator('[id="entry:1"]').count(), 1);
+});
+
+test("a form whose reply would refresh the component around it is refused before sending", async t => {
+  const page = await visit(t);
+  const sent = [];
+  page.on("request", request => { if (request.url().includes("/actions/save-entry")) sent.push(request.url()); });
+  await page.evaluate(() => {
+    const form = document.querySelector('[id="entry:1"] form');
+    form.dataset.placebo = JSON.stringify({ ...JSON.parse(form.dataset.placebo), effects: ["checklist:1"] });
+    form.requestSubmit();
+  });
+  await page.waitForFunction(() => window.events.some(e => e.type === "error" && e.code === "overlapping-targets"));
+  const error = await page.evaluate(() => window.events.find(e => e.code === "overlapping-targets"));
+  assert.match(error.message, /'checklist:1' contains this form's target 'entry:1'/);
+  assert.equal(error.requestState, "not-started");
+  assert.deepEqual(sent, []);
+});

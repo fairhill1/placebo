@@ -97,6 +97,20 @@ a successful save returned to `/`; keep the default `Referrer-Policy` or reply
 with `.navigate(path)`. The person still sees their values and the feedback in
 both cases.
 
+## Live updates
+
+A feed's connection is traced as `placebo:push` with `push-connected`,
+`push-reconnected`, or `push-resync`. A dropped connection logs one
+`[placebo:push-disconnected]` warning; the browser reconnects by itself and the
+feed replays what the page missed, or the page resyncs by reading itself again.
+A stream the browser gives up on (a missing route, an error status, another
+content type) logs `[placebo:push-closed]`: updates published from then on do
+not reach the page. An update for a target the feed did not declare is
+rejected with `undeclared-push`. Skipped work is not an error: pushed batches
+emit `placebo:applied` with `source: "push"`, listing snapshots and components
+that were not newer, components deferred while busy, and targets this page
+does not show.
+
 ## Files too large
 
 A chosen file over its field's `Upload<MAX_BYTES>` is a person's mistake, not a

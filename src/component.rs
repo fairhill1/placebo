@@ -18,6 +18,7 @@ use crate::{
 pub struct Component {
     id: String,
     class: Option<String>,
+    revision: Option<u64>,
 }
 
 /// An initial component mount, renderable inside `html!`, not reply contents.
@@ -55,6 +56,7 @@ impl Component {
         Self {
             id: format!("{kind}:{key}"),
             class: None,
+            revision: None,
         }
     }
 
@@ -65,14 +67,30 @@ impl Component {
         self
     }
 
+    /// The server revision of the data these contents show, such as the
+    /// record's version. A versioned component orders every refresh by it: a
+    /// reply to its own form applies unless it is older than what the page
+    /// shows, and a refresh from another action or a push applies only when
+    /// newer. Give it to every mount and binding of a component that other
+    /// actions or a [`crate::Feed`] refresh, taken from the record the contents
+    /// render (after the write, for a successful reply).
+    pub fn revision(mut self, revision: u64) -> Self {
+        self.revision = Some(revision);
+        self
+    }
+
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub(crate) fn revision_value(&self) -> Option<u64> {
+        self.revision
     }
 
     pub fn mount(&self, content: Markup) -> MountedComponent {
         let content = native::mounted_contents(self.id()).unwrap_or(content);
         MountedComponent(
-            html! { div id=(self.id()) class=[&self.class] data-placebo-region data-placebo-component { (content) } },
+            html! { div id=(self.id()) class=[&self.class] data-placebo-region data-placebo-component data-placebo-revision=[self.revision] { (content) } },
         )
     }
 
@@ -90,7 +108,7 @@ impl Component {
             None => (content, false),
         };
         MountedComponent(html! {
-            dialog id=(self.id()) class=[&self.class] open[open] aria-labelledby=(labelled_by) data-placebo-region data-placebo-component { (content) }
+            dialog id=(self.id()) class=[&self.class] open[open] aria-labelledby=(labelled_by) data-placebo-region data-placebo-component data-placebo-revision=[self.revision] { (content) }
         })
     }
 
@@ -141,6 +159,7 @@ impl<I: FormInput> MutationAction<I> {
         MutationBinding {
             action: self,
             target: component.id().to_owned(),
+            revision: component.revision,
             effects: Vec::new(),
         }
     }
@@ -196,6 +215,7 @@ async fn require_mutation(request: Request, next: Next) -> Response {
 pub struct MutationBinding<I: FormInput> {
     action: MutationAction<I>,
     target: String,
+    revision: Option<u64>,
     effects: Vec<String>,
 }
 
@@ -258,13 +278,15 @@ impl<I: FormInput> MutationBinding<I> {
     }
 
     fn envelope(&self, status: StatusCode, content: Markup) -> Envelope {
-        Envelope::new(
+        let mut envelope = Envelope::new(
             self.action.name,
             &self.target,
             "refresh-component",
             status,
             content,
-        )
+        );
+        envelope.revision = self.revision.map(|revision| revision.to_string());
+        envelope
     }
 }
 

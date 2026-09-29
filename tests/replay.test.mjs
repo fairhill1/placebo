@@ -8,7 +8,7 @@ const fixture = serverFixture("tasks");
 const row = id => `[data-task="${id}"]`;
 
 async function visit(t) {
-  const page = await fixture.page(t);
+  const page = await fixture.page(t, { feeds: false });
   await page.goto(fixture.origin);
   return page;
 }

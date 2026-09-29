@@ -28,7 +28,7 @@ test("a body stream failure is distinguished from malformed JSON", async t => {
 });
 
 async function visit(t, { trace = false } = {}) {
-  const page = await fixture.page(t);
+  const page = await fixture.page(t, { feeds: false });
   const logs = [], captures = [];
   page.on("console", message => {
     if (!message.text().startsWith("[placebo:")) return;

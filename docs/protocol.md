@@ -49,11 +49,21 @@ Payload fields cannot use names starting with `placebo-`.
   "target": "editor:42",
   "operation": "refresh-component",
   "html": "<article>Server-rendered component contents</article>",
+  "revision": "7",
   "outcome": "applied",
   "patches": [],
   "navigate": null
 }
 ```
+
+`revision` is present when the target component is versioned. A component
+mounted with `data-placebo-revision` orders its refreshes: the reply to its own
+form applies unless its revision is older than the mounted one (then only the
+patches apply, and the primary is reported in `skippedComponents` as
+`not-newer`); a `refresh-component` patch, a nested component refreshed by
+its outer component, or a push applies only when strictly newer. Applying one
+sets the mounted revision. A refresh without a revision for a versioned
+component is rejected with `missing-revision`.
 
 `replace-children` replaces a read region's contents. `refresh-component`
 replaces component contents while retaining matching local units. Both keep
@@ -92,7 +102,7 @@ Mutation bindings declare extra targets with `affects(target)`. Patches:
 | `move-item` | list | `item`, `position` |
 | `remove-item` | list | `item` |
 | `order-items` | list | `items`: listed items first, others after in current order |
-| `refresh-component` | another component | `html`; skipped while it has a request in flight |
+| `refresh-component` | another component | `html`, `revision` if versioned; skipped while it has a request in flight, or unless newer |
 | `rerun-read` | read region | none; reruns every read form bound to it |
 
 A position is `{"at": "start" | "end"}` or `{"at": "before" | "after", "item": id}`.
@@ -119,6 +129,44 @@ Validation/conflict HTML is applied intentionally. Other failures leave the
 current UI intact and emit a diagnostic. Nothing is retried automatically, and
 aborting a POST cannot undo a committed write.
 
+## Feeds
+
+`Feed::mount` renders a hidden element with `data-placebo-feed`:
+
+```json
+{"version": 5, "feed": "tasks-live", "url": "/live/tasks?after=3f2a9c1b7d4e-41",
+ "targets": ["tasks", "task-count"], "kinds": ["task-summary", "task"]}
+```
+
+The runtime opens an `EventSource` for each mounted feed element and closes it
+when the element goes. The stream sends `update` events whose data is
+`{"version": 5, "feed": id, "patches": [...]}`, with the patches of the table
+above except `append-children` and `rerun-read`, and an event id
+`<instance>-<sequence>`. A patch target must be declared, by id or by its kind
+(the part before `:`), or the whole update is rejected with `undeclared-push`.
+A target the page does not show is skipped and reported in `missingTargets`.
+A pushed refresh of a component with a request in flight, or with an IME
+composition in progress, is deferred (`deferredComponents`) and applied after
+that request settles if still newer.
+
+A connection resumes after `Last-Event-ID`, or else after the mount's `after`
+position. The feed replays its recent updates after that position (the last
+256). If it cannot (another instance, or too old), or a subscriber falls
+behind, it sends a `resync` event: the runtime GETs the current page URL with
+`Accept: text/html` and, for each declared target (and each element on the page
+of a declared kind), applies the fetched version as a push would: versioned
+regions and components when newer, and for a list, removes items the fetched
+list lacks, inserts new ones after their fetched predecessor, and orders items
+to match. `placebo:push` events report `push-connected`, `push-reconnected`,
+and `push-resync`; pushed batches emit `placebo:applied` with `source` set to
+`push`, `push-deferred`, or `resync` and the feed id as `target`. A dropped
+connection logs the warning `push-disconnected` once; a stream the browser
+gives up on logs `push-closed`.
+
+An `insert-item` for an item already in the list keeps that item and reports
+it in `existingItems`, since a reply and a push can both insert it. An id used
+by another element is still `duplicate-append`.
+
 ## Idempotent retries
 
 Every mutation form renders a hidden `placebo-key` with a fresh 128-bit key.
@@ -143,11 +191,12 @@ submission. `placebo:scheduled` carries `retry: true` and `retryOf`, and
 `placebo:applied` carries `replayed`.
 
 The runtime emits `placebo:scheduled`, `request`, `applied`, `discarded`,
-`deferred`, `ignored`, `warning`, and `error` events (each prefixed with `placebo:`).
+`deferred`, `ignored`, `push`, `warning`, and `error` events (each prefixed with `placebo:`).
 Details contain action/target names and outcome, reason, or error code where
 applicable. `applied` also carries `refreshedLocal`, `preservedLocal` (each
 with a `reason`), `skippedRegions`, `refreshedComponents`, `skippedComponents`,
-`missingItems`, `misplacedItems`, `refetched`, `skippedReads`, and `navigate`. The example's interaction trace displays them.
+`deferredComponents`, `missingTargets`, `missingItems`, `misplacedItems`,
+`existingItems`, `refetched`, `skippedReads`, `replayed`, and `navigate`. The example's interaction trace displays them.
 
 Unexpected failures log actionable console errors by default. Enable execution
 tracing from the browser console with `(await import('/placebo.js')).trace(true)`;

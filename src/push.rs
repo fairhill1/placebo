@@ -1,0 +1,436 @@
+//! Server push. A [`Feed`] sends the same updates a mutation reply can make
+//! (versioned region replacements, component refreshes, and list item
+//! operations) to every page that mounts it, over Server-Sent Events.
+use axum::{
+    extract::Request,
+    http::header,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::MethodRouter,
+};
+use futures_util::stream;
+use maud::{Markup, html};
+use serde::Serialize;
+use std::{
+    collections::VecDeque,
+    convert::Infallible,
+    sync::{Arc, Mutex},
+};
+use tokio::sync::broadcast;
+
+use crate::{Component, Item, List, MountedItem, Patch, Position, VERSION, VersionedRegion};
+
+/// How many recent updates a feed keeps for pages that reconnect.
+const RECENT: usize = 256;
+
+/// A stream of updates for the pages that mount it. Declare what it may
+/// update, mount it on the page, register its route, and publish with
+/// [`Feed::push`]:
+///
+/// ```
+/// use axum::{Router, routing::get};
+/// use maud::html;
+/// use placebo::{Feed, VersionedRegion};
+///
+/// const COUNT: VersionedRegion = VersionedRegion::new("count");
+/// let live = Feed::new("live", "/live").affects(COUNT);
+///
+/// // The page: the region and the feed's mount.
+/// let page = html! { (COUNT.mount(1, html! { "1 task" })) (live.mount()) };
+/// // The route that streams it.
+/// let app: Router = Router::new().route(live.path(), live.route());
+/// // A handler, after a write, under the same lock as its revision.
+/// live.push().replace(COUNT, 2, html! { "2 tasks" }).send();
+/// ```
+///
+/// Every page receives every update; put per-user data in separate feeds and
+/// guard a feed's route like any other route. Updates are ordered against
+/// replies by revision: a versioned region or a versioned component (see
+/// [`Component::revision`]) takes an update only when it is newer. List item
+/// operations are not versioned; they apply leniently, as in replies.
+///
+/// A page that reconnects gets the updates it missed from the feed's recent
+/// updates. If they are gone, or the server restarted, it reads the page again
+/// and takes the declared targets' newer state from it.
+#[derive(Clone)]
+pub struct Feed(Arc<Inner>);
+
+struct Inner {
+    id: &'static str,
+    path: &'static str,
+    instance: String,
+    targets: Vec<String>,
+    kinds: Vec<String>,
+    sender: broadcast::Sender<Arc<Sent>>,
+    state: Mutex<State>,
+}
+
+#[derive(Default)]
+struct State {
+    seq: u64,
+    recent: VecDeque<Arc<Sent>>,
+}
+
+struct Sent {
+    seq: u64,
+    data: String,
+}
+
+/// A destination a feed may update: a [`VersionedRegion`], a [`List`], or a
+/// versioned [`Component`]. Families of keyed ones use [`Feed::affects_kind`].
+pub trait PushTarget: sealed::PushTarget {
+    fn id(&self) -> &str;
+}
+
+mod sealed {
+    pub trait PushTarget {}
+    impl PushTarget for crate::VersionedRegion {}
+    impl PushTarget for crate::List {}
+    impl PushTarget for &crate::Component {}
+}
+
+impl PushTarget for VersionedRegion {
+    fn id(&self) -> &str {
+        self.id()
+    }
+}
+impl PushTarget for List {
+    fn id(&self) -> &str {
+        self.id()
+    }
+}
+impl PushTarget for &Component {
+    fn id(&self) -> &str {
+        Component::id(self)
+    }
+}
+
+impl Feed {
+    pub fn new(id: &'static str, path: &'static str) -> Self {
+        assert!(
+            !id.is_empty() && !id.contains(char::is_whitespace),
+            "a feed needs an id without whitespace"
+        );
+        assert!(path.starts_with('/'), "a feed's path starts with '/'");
+        let (sender, _) = broadcast::channel(RECENT);
+        Self(Arc::new(Inner {
+            id,
+            path,
+            instance: crate::replay::new_key()[..12].to_owned(),
+            targets: Vec::new(),
+            kinds: Vec::new(),
+            sender,
+            state: Mutex::default(),
+        }))
+    }
+
+    fn declare(mut self, declare: impl FnOnce(&mut Inner)) -> Self {
+        declare(Arc::get_mut(&mut self.0).expect("declare a feed's targets before cloning it"));
+        self
+    }
+
+    /// Declare a region, list, or component this feed may update.
+    pub fn affects(self, target: impl PushTarget) -> Self {
+        let id = target.id().to_owned();
+        self.declare(|inner| inner.targets.push(id))
+    }
+
+    /// Declare every keyed region and component of a kind, such as each
+    /// `VersionedRegion::keyed("task-summary", id)` or `Component::new("task", id)`.
+    pub fn affects_kind(self, kind: &'static str) -> Self {
+        assert!(
+            !kind.is_empty() && !kind.contains(':'),
+            "a kind is the part of a keyed id before ':'"
+        );
+        self.declare(|inner| inner.kinds.push(kind.to_owned()))
+    }
+
+    pub fn path(&self) -> &'static str {
+        self.0.path
+    }
+
+    /// The element that subscribes the page. It records the feed's position,
+    /// so updates published after the page was rendered are not missed:
+    /// render it under the same lock or transaction as the data it follows.
+    pub fn mount(&self) -> Markup {
+        let seq = self.0.state.lock().unwrap().seq;
+        let config = Config {
+            version: VERSION,
+            feed: self.0.id,
+            url: format!("{}?after={}-{seq}", self.0.path, self.0.instance),
+            targets: &self.0.targets,
+            kinds: &self.0.kinds,
+        };
+        let config = serde_json::to_string(&config).expect("feed configuration serializes");
+        html! { div id=(self.0.id) hidden data-placebo-feed=(config) {} }
+    }
+
+    /// Start an update for every subscribed page.
+    pub fn push(&self) -> Push<'_> {
+        Push {
+            feed: self,
+            patches: Vec::new(),
+        }
+    }
+
+    /// The GET route that streams this feed as Server-Sent Events.
+    pub fn route<S: Clone + Send + Sync + 'static>(&self) -> MethodRouter<S> {
+        let feed = self.clone();
+        axum::routing::get(move |request: Request| {
+            let feed = feed.clone();
+            async move { feed.stream(&request) }
+        })
+    }
+
+    fn declared(&self, id: &str) -> bool {
+        self.0.targets.iter().any(|target| target == id)
+            || id
+                .split_once(':')
+                .is_some_and(|(kind, _)| self.0.kinds.iter().any(|declared| declared == kind))
+    }
+
+    fn publish(&self, patches: Vec<Patch>) {
+        let mut state = self.0.state.lock().unwrap();
+        state.seq += 1;
+        let update = Update {
+            version: VERSION,
+            feed: self.0.id,
+            patches,
+        };
+        let sent = Arc::new(Sent {
+            seq: state.seq,
+            data: serde_json::to_string(&update).expect("push update serializes"),
+        });
+        if state.recent.len() == RECENT {
+            state.recent.pop_front();
+        }
+        state.recent.push_back(sent.clone());
+        // No subscribers is not an error.
+        let _ = self.0.sender.send(sent);
+    }
+
+    fn event(&self, sent: &Sent) -> Event {
+        Event::default()
+            .event("update")
+            .id(format!("{}-{}", self.0.instance, sent.seq))
+            .data(&sent.data)
+    }
+
+    fn resync(&self, seq: u64) -> Event {
+        Event::default()
+            .event("resync")
+            .id(format!("{}-{seq}", self.0.instance))
+            .data(format!(r#"{{"version":{VERSION},"feed":"{}"}}"#, self.0.id))
+    }
+
+    /// Replay what a reconnecting page missed, or tell it to resync, then
+    /// follow new updates.
+    fn stream(&self, request: &Request) -> Response {
+        let header = request
+            .headers()
+            .get("last-event-id")
+            .and_then(|value| value.to_str().ok());
+        let query = request.uri().query().and_then(|query| {
+            form_urlencoded::parse(query.as_bytes())
+                .find(|(key, _)| key == "after")
+                .map(|(_, value)| value.into_owned())
+        });
+        let last = header.map(str::to_owned).or(query);
+        let receiver = self.0.sender.subscribe();
+        // Some browsers report a stream open only once bytes arrive.
+        let mut first = VecDeque::from([Event::default().comment("connected")]);
+        let sent_up_to = {
+            let state = self.0.state.lock().unwrap();
+            let oldest = state.recent.front().map_or(state.seq + 1, |sent| sent.seq);
+            let after = last.as_deref().and_then(|last| {
+                let (instance, seq) = last.rsplit_once('-')?;
+                (instance == self.0.instance)
+                    .then(|| seq.parse::<u64>().ok())
+                    .flatten()
+            });
+            match after {
+                // Everything after it is still kept: replay it.
+                Some(after) if after + 1 >= oldest && after <= state.seq => {
+                    first.extend(
+                        state
+                            .recent
+                            .iter()
+                            .filter(|sent| sent.seq > after)
+                            .map(|sent| self.event(sent)),
+                    );
+                }
+                // No position: follow from now.
+                None if last.is_none() => {}
+                _ => {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[placebo:push-resync] feed={} position={} is not among the recent \
+                         updates; the page reads itself again.",
+                        self.0.id,
+                        last.as_deref().unwrap_or("none")
+                    );
+                    first.push_back(self.resync(state.seq));
+                }
+            }
+            state.seq
+        };
+        let feed = self.clone();
+        let events = stream::unfold(
+            (first, receiver, sent_up_to),
+            move |(mut first, mut receiver, sent_up_to)| {
+                let feed = feed.clone();
+                async move {
+                    if let Some(event) = first.pop_front() {
+                        return Some((Ok::<_, Infallible>(event), (first, receiver, sent_up_to)));
+                    }
+                    loop {
+                        match receiver.recv().await {
+                            // Already replayed from the recent updates.
+                            Ok(sent) if sent.seq <= sent_up_to => continue,
+                            Ok(sent) => {
+                                let event = feed.event(&sent);
+                                return Some((Ok(event), (first, receiver, sent.seq)));
+                            }
+                            // This page fell behind the channel: read the page again.
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                let seq = feed.0.state.lock().unwrap().seq;
+                                return Some((Ok(feed.resync(seq)), (first, receiver, seq)));
+                            }
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                }
+            },
+        );
+        let mut response = Sse::new(events)
+            .keep_alive(KeepAlive::default())
+            .into_response();
+        // Proxies such as nginx otherwise buffer the stream.
+        response
+            .headers_mut()
+            .insert("x-accel-buffering", header::HeaderValue::from_static("no"));
+        response
+    }
+}
+
+#[derive(Serialize)]
+struct Config<'a> {
+    version: u8,
+    feed: &'static str,
+    url: String,
+    targets: &'a [String],
+    kinds: &'a [String],
+}
+
+#[derive(Serialize)]
+struct Update {
+    version: u8,
+    feed: &'static str,
+    patches: Vec<Patch>,
+}
+
+/// One update for every page subscribed to a feed. Nothing is sent until
+/// [`Push::send`].
+#[must_use = "call .send() to publish the update"]
+pub struct Push<'a> {
+    feed: &'a Feed,
+    patches: Vec<Patch>,
+}
+
+impl Push<'_> {
+    /// Replace a declared versioned region, on pages whose revision is older.
+    pub fn replace(mut self, region: VersionedRegion, revision: u64, content: Markup) -> Self {
+        self.declared(region.id());
+        self.patches.push(Patch {
+            revision: Some(revision.to_string()),
+            html: Some(content.into_string()),
+            ..Patch::new(region.id(), "replace-children")
+        });
+        self
+    }
+
+    /// Refresh a declared component, on pages whose revision is older. The
+    /// component needs a revision. Edited controls keep their edits, and a
+    /// component with its own request in flight takes the update afterwards,
+    /// if it is still newer.
+    pub fn refresh(mut self, component: &Component, content: Markup) -> Self {
+        self.declared(component.id());
+        assert!(
+            component.revision_value().is_some(),
+            "a pushed component needs a revision: Component::new(..).revision(n)"
+        );
+        self.patches.push(Patch::refresh(component, content));
+        self
+    }
+
+    /// Insert an item into a declared list. A page that already has it keeps it.
+    pub fn insert_item(mut self, item: MountedItem, at: Position) -> Self {
+        self.declared(&item.item.list);
+        let position = at.wire(&item.item.list);
+        self.patches.push(Patch {
+            item: Some(item.item.id),
+            position: Some(position),
+            html: Some(item.markup.into_string()),
+            ..Patch::new(&item.item.list, "insert-item")
+        });
+        self
+    }
+
+    pub fn move_item(mut self, item: &Item, to: Position) -> Self {
+        self.declared(&item.list);
+        self.patches.push(Patch {
+            item: Some(item.id.clone()),
+            position: Some(to.wire(&item.list)),
+            ..Patch::new(&item.list, "move-item")
+        });
+        self
+    }
+
+    pub fn remove_item(mut self, item: &Item) -> Self {
+        self.declared(&item.list);
+        self.patches.push(Patch {
+            item: Some(item.id.clone()),
+            ..Patch::new(&item.list, "remove-item")
+        });
+        self
+    }
+
+    pub fn order_items(mut self, list: &List, items: impl IntoIterator<Item = Item>) -> Self {
+        self.declared(list.id());
+        let items = items
+            .into_iter()
+            .map(|item| {
+                assert_eq!(
+                    item.list,
+                    list.id(),
+                    "ordered items must belong to the list"
+                );
+                item.id
+            })
+            .collect();
+        self.patches.push(Patch {
+            items: Some(items),
+            ..Patch::new(list.id(), "order-items")
+        });
+        self
+    }
+
+    /// Publish the update to every subscribed page.
+    pub fn send(self) {
+        if !self.patches.is_empty() {
+            self.feed.publish(self.patches);
+        }
+    }
+
+    /// The browser rejects an update for an undeclared target; catch it here
+    /// in debug builds, before it is sent.
+    fn declared(&self, id: &str) {
+        debug_assert!(
+            self.feed.declared(id),
+            "'{id}' is not declared on feed '{}'. Declare it with .affects() or .affects_kind().",
+            self.feed.0.id
+        );
+    }
+}

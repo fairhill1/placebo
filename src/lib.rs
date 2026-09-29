@@ -1,6 +1,8 @@
-//! Experimental HTML updates: a region, a read action, and a shared protocol.
+//! Experimental HTML updates for Rust and Axum: typed forms and actions,
+//! component replies, lists, feeds, and a shared protocol with the browser
+//! runtime.
 //!
-//! The same action emits form configuration and addresses its response. This
+//! The same action emits form configuration and addresses its response.
 //! Input-derived builders connect form controls and handler payloads. Region
 //! existence and the contents of browser requests still need runtime checks.
 //!

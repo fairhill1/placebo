@@ -1,8 +1,11 @@
 # Coordinated updates and local behaviors
 
 Run `cargo tasks` and open <http://127.0.0.1:4319>. The task-list example
-exercises a row editor, its saved summary, a shared completed count, an add
-dialog, and a keyed list whose rows can be deleted and moved. State is in memory; restarting the server resets the tasks.
+exercises a row editor in a dialog, its saved summary, a shared completed count,
+an add dialog, and a keyed list whose rows can be deleted and moved. Open it in
+two tabs to see changes arrive live. State is in memory; restarting the server
+resets the tasks. The [nested](../examples/nested.rs), [uploads](../examples/uploads.rs),
+and [triggers](../examples/triggers.rs) examples each focus on one feature.
 
 ## A response can update several declared regions
 

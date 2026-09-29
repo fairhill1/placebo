@@ -313,8 +313,10 @@ are scoped to each component, and nested or duplicate keys are rejected.
 Missing/renamed fields, duplicate controls, the wrong form schema, and mismatched
 typed handlers fail compilation. Ordinary Maud handles layout; `@field` declares
 payload controls. Controls cover text-like inputs, textareas, numbers,
-checkboxes, radios, selects, multiple selections, and hidden values, with
-`Option`, `Vec`, and `#[derive(FormEnum)]` enum fields. See [typed forms](docs/typed-forms.md) for the
+checkboxes, radios, selects, multiple selections, hidden values, and files, with
+`Option`, `Vec`, and `#[derive(FormEnum)]` enum fields. A file field is an
+`Upload<MAX_BYTES>`: its form becomes multipart, and the limit is checked in the
+browser before sending and on the server before the handler runs. See [typed forms](docs/typed-forms.md) for the
 control table, how absent/empty values decode, and restrictions.
 
 These guarantees depend on using the APIs together. Raw named inputs bypass the
@@ -420,6 +422,7 @@ cargo run --features dev --bin placebo -- dev --example search --features dev
 
 # Run an example directly, without the development supervisor:
 cargo run --example editors
+cargo run --example uploads  # File fields: http://127.0.0.1:4321
 ```
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
@@ -493,14 +496,16 @@ refreshes, navigation, malformed batches, remounted extra targets, dialog and
 button focus, live-region identity, and behavior teardown/restart. Search tests
 cover history and refetching. Native tests submit saves, validation, conflicts,
 moves, and searches with JavaScript disabled or before the runtime loads. Replay
-tests lose responses after and before the write, retry, and submit twice. The dev-loop test creates
+tests lose responses after and before the write, retry, and submit twice.
+Upload tests send files through the runtime and natively, keep a chosen file
+across a rejected reply, and refuse oversized files in the browser and server. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
 ## Still open
 
-File uploads and generated protocol definitions; richer state ownership;
+Generated protocol definitions; resumable or streamed uploads; richer state ownership;
 nested components;
 revisions for components refreshed by other actions; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses

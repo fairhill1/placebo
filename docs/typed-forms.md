@@ -167,6 +167,7 @@ Each control constructor only accepts the field types it can submit correctly.
 | `bool` | `checkbox`, `hidden`, `select`, `radios` |
 | `#[derive(FormEnum)]` enums and `Option` of one | `select`, `radios`, `hidden` |
 | `Vec<T>` of any of the scalars above | `multi_select`, `checkboxes` |
+| `Upload`, `Option<Upload>`, `Vec<Upload>` | `file` (a `Vec` accepts several files) |
 
 ```rust
 use placebo::{Control, FormInput, fields};
@@ -265,6 +266,92 @@ struct Save { count: u32 }
 let fields = fields! { Save { @field count = Control::checkbox(true); } };
 ```
 
+## Files
+
+A payload field of type `Upload<MAX_BYTES>`, `Option<Upload<..>>`, or
+`Vec<Upload<..>>` is a file field, rendered with `Control::file()`. Its form is
+sent as `multipart/form-data` automatically, by the runtime and by the browser
+without JavaScript. `MAX_BYTES` defaults to 10 MiB; for a `Vec` it bounds all
+the field's files together. `.accept("image/*")` limits what the file picker
+offers and `.required()` asks for a file before submitting.
+
+```rust
+use placebo::{Control, FormInput, Upload, fields};
+use serde::Deserialize;
+
+#[derive(Deserialize, FormInput)]
+struct Attach {
+    note: String,
+    cover: Option<Upload<{ 64 * 1024 }>>,
+    #[serde(default)]
+    files: Vec<Upload>,
+}
+
+let fields = fields! { Attach {
+    @field note = Control::text("");
+    @field cover = Control::file().accept("image/*");
+    @field files = Control::file();
+} };
+```
+
+The limit is enforced twice from the one type. The runtime checks the chosen
+files before sending and, if they are too large, shows the browser's
+validation message on the file input and sends nothing (traced as `ignored`
+with reason `upload-too-large`). The server stops reading a file past its limit
+and answers 413 before the handler runs, with a page that names the file and
+the limit; the runtime reports that as `upload-too-large`. A file input with no
+file chosen is an absent file: `None`, an empty `Vec`, or a decoding error for
+a required `Upload`. The handler gets each file's bytes, its file name, and
+its content type, the last two as untrusted text from the browser.
+
+A file input's value cannot be set by a page, which decides how its draft is
+kept. With the runtime, a chosen file is an edit: a rejected reply keeps the
+input's node, so the chosen file stays and is sent again with the next submit.
+A successful reply for the submitted form replaces the input, which is then
+empty. Without JavaScript, a rejected page cannot choose the file again for
+the person. Say so in the feedback, for example by naming the files the
+handler received, as the [uploads example](../examples/uploads.rs) does.
+Files take no part in the native edit hash.
+
+`Control::file()` is only for file fields:
+
+```compile_fail,E0277
+use placebo::{Control, FormInput, fields};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Attach { note: String }
+let fields = fields! { Attach { @field note = Control::file(); } };
+```
+
+and a file field takes no other control:
+
+```compile_fail,E0277
+use placebo::{Control, FormInput, Upload, fields};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Attach { cover: Upload }
+let fields = fields! { Attach { @field cover = Control::hidden(String::new()); } };
+```
+
+A read submits its fields in the URL, so its payload cannot have a file field:
+
+```compile_fail,E0080
+use placebo::{FormInput, ReadAction, Upload};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Search { q: String, sample: Option<Upload> }
+const SEARCH: ReadAction<Search> = ReadAction::new("search", "/search");
+```
+
+Several files need `#[serde(default)]`, like other `Vec` fields:
+
+```compile_fail,E0080
+use placebo::{FormInput, Upload};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Attach { files: Vec<Upload> }
+```
+
 ## Enums
 
 Derive `FormEnum` on an enum whose variants hold no data, next to serde's
@@ -327,8 +414,7 @@ are reserved for the fields Placebo adds to forms. Unsupported serde transforms
 such as flatten, skip, rename_all, and custom codecs are rejected.
 
 The implementation requires concrete, nonempty structs with named fields.
-Generic payloads, file uploads, enums with data, and custom value codecs
-are not covered yet. Macro expansion currently expects
+Generic payloads, enums with data, and custom value codecs are not covered yet. Macro expansion currently expects
 the dependency to be named `placebo`.
 
 These checks cover `@field`, the typed builder, and `action.route(handler)`.

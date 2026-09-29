@@ -198,11 +198,15 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         }
         let ty = &field.ty;
         table.push(quote_spanned! {ty.span()=>
-            (#wire_name, <#ty as ::placebo::FormValue>::ABSENT)
+            ::placebo::__private::Field {
+                name: #wire_name,
+                absent: <#ty as ::placebo::FormValue>::ABSENT,
+                upload: <#ty as ::placebo::FormValue>::UPLOAD,
+            }
         });
         checks.push(quote_spanned! {ty.span()=>
             const _: () = ::placebo::__private::require_default(
-                <#name as ::placebo::FormInput>::FIELDS[#index].1,
+                <#name as ::placebo::FormInput>::FIELDS[#index].absent,
                 #has_default,
             );
         });
@@ -248,7 +252,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
         impl ::placebo::FormInput for #name {
             type Builder = #builder;
-            const FIELDS: &'static [(&'static str, ::placebo::__private::Absent)] = &[#(#table),*];
+            const FIELDS: &'static [::placebo::__private::Field] = &[#(#table),*];
             fn fields() -> Self::Builder {
                 #builder { body: ::core::default::Default::default(), state: ::core::marker::PhantomData }
             }

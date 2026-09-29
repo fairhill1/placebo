@@ -34,11 +34,13 @@ mod component;
 mod diagnostics;
 mod native;
 mod replay;
+mod upload;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
 pub use native::native_forms;
 pub use replay::{Claim, MemoryReplays, Recorded, ReplayStore, Replays, StoreFuture, replays};
+pub use upload::{DEFAULT_MAX_BYTES, FileValue, Upload};
 
 #[cfg(all(feature = "dev", debug_assertions))]
 pub mod dev;
@@ -354,6 +356,10 @@ impl<I: FormInput> ReadAction<I> {
     pub const fn new(name: &'static str, path: &'static str) -> Self {
         assert!(!name.is_empty(), "an action needs a name");
         assert!(!path.is_empty(), "an action needs a path");
+        assert!(
+            !I::MULTIPART,
+            "a read submits its fields in the URL, so its payload cannot have an Upload field"
+        );
         Self {
             name,
             path,

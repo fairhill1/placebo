@@ -225,7 +225,7 @@ impl<I: FormInput> MutationBinding<I> {
         // The values the server rendered, so a native reply can tell which
         // fields the person edited.
         html! {
-            form method="post" action=(self.action.path) data-placebo=(config) {
+            form method="post" action=(self.action.path) enctype=[I::MULTIPART.then_some("multipart/form-data")] data-placebo=(config) {
                 (content)
                 input type="hidden" name=(crate::forms::BASE) value=(base);
                 // A fresh idempotency key for each rendered form.

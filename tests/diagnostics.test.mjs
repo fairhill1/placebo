@@ -201,7 +201,7 @@ test("a lost response reports uncertainty and correlates with the completed serv
   assert.equal(echoedId, sentId);
   assert.equal(detail.writeState, "unknown");
   assert.equal(detail.status, null);
-  assert.match(text, /read current state before retrying/i);
+  assert.match(text, /submit the form again to retry it safely/i);
   // The native error is preserved. Only Chromium includes async frames in its stack.
   assert.equal(cause.name, "TypeError");
   if (cause.stack) assert.match(cause.stack, /send/);

@@ -151,6 +151,8 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
             @field delay_ms = Control::select(0, [(0, "Off"), (700, "700 ms")]).id(&format!("delay-{}", task.id));
         }
         p .feedback id=(feedback_id) role="status" aria-live="polite" { (feedback) }
+        // Shown by CSS while the component has data-placebo-stale.
+        p .stale-note { "We could not confirm this save. Save again to retry it safely." }
         .form-actions {
             button type="submit" { span .idle-label { "Save changes" } span .busy-label { "Saving…" } }
             button .secondary type="button" data-dialog-close { "Cancel" }
@@ -204,6 +206,7 @@ fn add_form(draft: &str, feedback: &str) -> Markup {
         label for="new-title" { "Task title" }
         @field title = Control::text(draft).id("new-title").described_by("new-feedback").autocomplete("off");
         p #new-feedback .feedback role="status" aria-live="polite" { (feedback) }
+        p .stale-note { "We could not confirm this task was added. Add it again to retry safely." }
         .form-actions {
             button type="submit" { span .idle-label { "Add task" } span .busy-label { "Adding…" } }
             button .secondary type="button" data-dialog-close { "Cancel" }

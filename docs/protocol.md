@@ -91,8 +91,10 @@ Replaced targets cannot overlap; a list may contain replaced targets, which
 lets a form inside an item remove or move it.
 `navigate` is a same-origin path, allowed only on an `applied` outcome, and the
 browser goes there after applying the batch. The browser validates the batch
-before touching the DOM. When a mutation response arrives but cannot be applied,
-the component gets `data-placebo-stale` until its next applied reply.
+before touching the DOM. When a mutation's outcome is unknown (its response was
+lost, unreadable, or could not be applied), the component gets
+`data-placebo-stale` until it shows server state again: an applied reply, or a
+`refresh-component` patch.
 
 Read forms may set `"history": true`: after a result applies, the page URL takes
 the form's query (a new entry per query, with keystrokes in one text field
@@ -102,8 +104,31 @@ The Rust and browser halves must be upgraded together.
 
 Mutation outcomes use HTTP 200 (`applied`), 422 (`invalid`), or 409 (`conflict`).
 Validation/conflict HTML is applied intentionally. Other failures leave the
-current UI intact and emit a diagnostic. Network failures are not automatically
-retried; aborting a POST cannot undo a committed write.
+current UI intact and emit a diagnostic. Nothing is retried automatically, and
+aborting a POST cannot undo a committed write.
+
+## Idempotent retries
+
+Every mutation form renders a hidden `placebo-key` with a fresh 128-bit key.
+The adapter claims the submission in the application's `ReplayStore` (by
+default an in-memory store for ten minutes) before the handler runs, under an
+id made of the key and a hash of the path, the body, and the `Cookie` and
+`Authorization` headers. The same key with another body is a new submission.
+A reply (`reply`, `invalid`, or `conflict`) is recorded under the id; any other
+response releases it. A repeated submission gets the recorded reply with
+`X-Placebo-Replay: replayed` and its handler does not run; natively it becomes
+the same redirect or page. A repeat that arrives while the first is still
+running waits up to five seconds for it. If the first has still not finished,
+or stopped after claiming, the answer is 409 with `X-Placebo-Replay: pending`
+(the runtime reports `replay-pending`), because running the handler again could
+write twice. A store failure answers 503 with `X-Placebo-Replay: unavailable`
+without running the handler.
+
+The runtime remembers a stale component's uncertain request. Submitting the
+same form again resends that request unchanged, body and key, and reuses its
+snapshot of the controls, so edits typed in between are kept as edited since
+submission. `placebo:scheduled` carries `retry: true` and `retryOf`, and
+`placebo:applied` carries `replayed`.
 
 The runtime emits `placebo:scheduled`, `request`, `applied`, `discarded`,
 `deferred`, `ignored`, and `error` events (each prefixed with `placebo:`).

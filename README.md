@@ -234,7 +234,8 @@ These apply to people and coding agents alike.
   the browser console: Placebo logs every failure as `[placebo:<code>]` with a
   next step. Fix the cause rather than working around it. When a write may
   have committed but the page could not show it, the component gets
-  `data-placebo-stale`; show a way to reload.
+  `data-placebo-stale`; say so with CSS on that attribute. Submitting the form
+  again retries safely: the server replays its recorded reply.
 <!-- rules:end -->
 
 ## The application API
@@ -275,6 +276,16 @@ component shows the reply's contents. Fields the person edited keep what they
 typed and the first invalid control takes focus, following the same rule as the
 runtime. Reads are GET forms and navigate natively. See the
 [protocol](docs/protocol.md) for the redirect, same-origin, and page rules.
+
+**Retrying a save is safe.** Every mutation form carries a fresh idempotency
+key. If a response is lost, the component gets `data-placebo-stale`, and
+submitting its form again resends the same request: the server replays the reply
+it recorded instead of saving twice, or saves for the first time if the first
+attempt never arrived. A form submitted twice without JavaScript saves once too.
+Replies are recorded in memory by default. With several server processes, or
+writes that must survive a restart, implement `ReplayStore` on your database and
+install it with `.layer(placebo::replays(store))`. See
+[idempotent retries](docs/protocol.md#idempotent-retries).
 
 **Keep the dialog root persistent.** Use
 `component.mount_dialog("heading-id", contents)` to make the native dialog the
@@ -481,7 +492,8 @@ untouched fields, list inserts, moves, reorders, and deletes, cross-component
 refreshes, navigation, malformed batches, remounted extra targets, dialog and
 button focus, live-region identity, and behavior teardown/restart. Search tests
 cover history and refetching. Native tests submit saves, validation, conflicts,
-moves, and searches with JavaScript disabled or before the runtime loads. The dev-loop test creates
+moves, and searches with JavaScript disabled or before the runtime loads. Replay
+tests lose responses after and before the write, retry, and submit twice. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
@@ -489,8 +501,7 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 ## Still open
 
 File uploads and generated protocol definitions; richer state ownership;
-idempotency and recovery after uncertain mutations (a component whose write
-may have committed is only marked `data-placebo-stale`); nested components;
+nested components;
 revisions for components refreshed by other actions; streaming; general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses
 Playwright's Chromium, Firefox, and WebKit builds on macOS. WebKit there

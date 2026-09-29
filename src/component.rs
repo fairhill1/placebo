@@ -173,12 +173,7 @@ async fn require_mutation(request: Request, next: Next) -> Response {
         Ok(mutation) => mutation,
         Err(rejection) => return rejection,
     };
-    let request = Request::from_parts(parts, body);
-    if mutation.native {
-        native::submit(request, next).await
-    } else {
-        next.run(request).await
-    }
+    native::run(mutation.native, Request::from_parts(parts, body), next).await
 }
 
 /// A mutation form and its replies, for one component instance. Build the view's
@@ -233,6 +228,8 @@ impl<I: FormInput> MutationBinding<I> {
             form method="post" action=(self.action.path) data-placebo=(config) {
                 (content)
                 input type="hidden" name=(crate::forms::BASE) value=(base);
+                // A fresh idempotency key for each rendered form.
+                input type="hidden" name=(crate::replay::KEY) value=(crate::replay::new_key());
                 @if let Some(page) = native::current_page() {
                     input type="hidden" name=(crate::forms::PAGE) value=(page);
                 }

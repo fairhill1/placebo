@@ -75,3 +75,22 @@ test("a save submitted while the runtime is still loading is handled, not refuse
   assert.equal(response.status(), 200);
   await page.locator('[id="editor:1"] h2', { hasText: title }).waitFor();
 });
+
+test("the same form submitted twice without JavaScript saves once", async t => {
+  const page = await visit(t);
+  await page.locator("#title-1").fill(`Submitted twice ${Date.now()}`);
+  const version = await page.locator('[id="editor:1"] .version').textContent();
+  // What the browser posts for this form, sent twice: a double click, or the
+  // Back button and submit again.
+  const form = await page.locator('[id="editor:1"] form').evaluate(form =>
+    Array.from(form.querySelectorAll("[name]"), control => [control.name, control.value]));
+  const headers = { Origin: fixture.origin, Referer: `${fixture.origin}/`, "Sec-Fetch-Site": "same-origin" };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await page.request.post(`${fixture.origin}/actions/save-title`,
+      { form: Object.fromEntries(form), headers, maxRedirects: 0 });
+    assert.equal(response.status(), 303, "both attempts redirect back, the second one replayed");
+  }
+  await page.reload();
+  const saved = Number(version.match(/\d+/)[0]) + 1;
+  assert.equal(await page.locator('[id="editor:1"] .version').textContent(), `Version ${saved}`);
+});

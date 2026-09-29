@@ -262,8 +262,12 @@ function configFor(form, work) {
   require(read || mutation, "unsupported-method", "Expected a GET read binding or a POST component mutation binding.");
   require(config.history === undefined || (read && config.history === true), "invalid-config", "Only a read binding can follow history.");
   require(Array.isArray(config.effects) && config.effects.every(id => typeof id === "string" && id && id !== config.target) &&
-    new Set(config.effects).size === config.effects.length && (mutation || config.effects.length === 0),
-    "invalid-config", "Additional regions must be uniquely declared by a mutation binding.");
+    new Set(config.effects).size === config.effects.length,
+    "invalid-config", "Additional targets must be declared once each.");
+  require((config.load === undefined || config.load === true) && (config.reveal === undefined || config.reveal === true) &&
+    (config.every_ms === undefined || (Number.isInteger(config.every_ms) && config.every_ms >= 500 && config.every_ms <= 86400000)) &&
+    (read || (config.load === undefined && config.reveal === undefined && config.every_ms === undefined)),
+    "invalid-config", "Only a read binding can read on load, when revealed, or on an interval.");
   const url = new URL(form.action, document.baseURI);
   require(url.origin === location.origin, "cross-origin-action", "Actions must use the document's origin.");
   return config;
@@ -457,7 +461,8 @@ function updateFragment(work, update) {
     "invalid-update", "The response operation must match the initiating binding and contain HTML.");
   require(targetFor(update.target) === work.target, "remounted-target", "The original target instance no longer owns this response.");
   const patches = update.patches ?? [];
-  require(Array.isArray(patches) && (work.method === "POST" || !patches.length), "invalid-update", "Only mutation replies can update additional targets.");
+  require(Array.isArray(patches) && (work.method === "POST" || patches.every(patch => patch?.operation === "insert-item")),
+    "invalid-update", "A read reply can only insert items into lists its binding declares.");
   require(update.navigate == null || (typeof update.navigate === "string" && work.method === "POST" && update.outcome === "applied"),
     "invalid-update", "Only a successful mutation reply can navigate.");
   const destination = update.navigate == null ? null : new URL(update.navigate, document.baseURI);
@@ -1035,7 +1040,8 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
       require(target.hasAttribute("data-placebo-component") && nearest === target, "invalid-component", nearest && target.contains(nearest)
         ? `This form is inside nested component '${nearest.id}' but targets '${target.id}'. A form belongs to its nearest component.`
         : "A mutation form must belong to its target component.", { relatedTarget: nearest?.id ?? null });
-    } else require(!target.contains(form), "unstable-source", "Place persistent read forms outside their replacement region.");
+    } else require(!target.contains(form) || (triggeredBy(config) && config.input_delay_ms === null), "unstable-source",
+      "Place persistent read forms outside their replacement region.");
     const url = new URL(form.action, document.baseURI);
     const method = form.method.toUpperCase();
     // Submitting a form whose last attempt has an unknown outcome retries that
@@ -1069,7 +1075,8 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
     pending.set(target, work);
     target.setAttribute("aria-busy", "true");
     emit("scheduled", work, retry?.form === form
-      ? { retry: true, retryOf: retry.requestId, reason: `retrying request ${retry.requestId} unchanged, with its idempotency key` } : {});
+      ? { source, retry: true, retryOf: retry.requestId, reason: `retrying request ${retry.requestId} unchanged, with its idempotency key` }
+      : { source, ...(["load", "reveal", "interval"].includes(source) ? { reason: `read on ${source}` } : {}) });
     work.timer = setTimeout(() => send(work), input ? config.input_delay_ms : 0);
   } catch (error) {
     report(work, error, "invalid-action");
@@ -1335,6 +1342,100 @@ function resyncPatches(config, fresh) {
 function onPageHide() { unloading = true; }
 function onPageShow() { unloading = false; syncFeeds(); }
 
+// Reads that start themselves: once on load, once when revealed, or on an
+// interval. Each belongs to its form element and ends when the form goes.
+const triggered = new Map();
+let revealer = null;
+
+function triggeredBy(config) {
+  return Boolean(config.load || config.reveal || config.every_ms != null);
+}
+
+function triggerContext(state, extra) {
+  return { action: state.config.action, target: state.config.target, ...extra };
+}
+
+function syncTriggers() {
+  for (const [form, state] of triggered) {
+    if (!started || !form.isConnected || form.dataset.placebo !== state.raw) stopTrigger(form, state);
+  }
+  if (!started) return;
+  for (const form of document.querySelectorAll("form[data-placebo]")) {
+    if (triggered.has(form)) continue;
+    let config;
+    // An invalid configuration is reported when the form is used.
+    try { config = configFor(form); } catch { continue; }
+    if (!triggeredBy(config)) continue;
+    const state = { raw: form.dataset.placebo, config, timer: null, overdue: false, ran: false };
+    triggered.set(form, state);
+    if (config.load) queueMicrotask(() => { if (triggered.get(form) === state) fire(form, state, "load"); });
+    if (config.reveal) {
+      revealer ??= new IntersectionObserver(onReveal, { rootMargin: "200px" });
+      revealer.observe(form);
+    }
+    if (config.every_ms != null) armInterval(form, state);
+  }
+}
+
+function stopTrigger(form, state) {
+  clearTimeout(state.timer);
+  revealer?.unobserve(form);
+  triggered.delete(form);
+}
+
+function fire(form, state, source) {
+  if (source === "interval") {
+    const target = document.getElementById(state.config.target);
+    // Polling ends with its region; a region that was never there is an error.
+    if (!target && state.ran) {
+      stopTrigger(form, state);
+      emit("discarded", null, triggerContext(state, { reason: "target-unmounted", phase: "interval-stopped" }));
+      return;
+    }
+    // Let a slow read finish instead of cancelling it every interval.
+    if (target && pending.has(target)) {
+      emit("ignored", null, triggerContext(state, { reason: "busy" }));
+      return;
+    }
+  }
+  state.ran = true;
+  schedule(form, false, null, source);
+}
+
+function armInterval(form, state) {
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    if (triggered.get(form) !== state) return;
+    // Paused until the page is shown again, then read once.
+    if (document.visibilityState === "hidden") {
+      state.overdue = true;
+      emit("deferred", null, triggerContext(state, { reason: "page-hidden" }));
+      return;
+    }
+    fire(form, state, "interval");
+    if (triggered.get(form) === state) armInterval(form, state);
+  }, state.config.every_ms);
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState !== "visible") return;
+  for (const [form, state] of triggered) {
+    if (!state.overdue) continue;
+    state.overdue = false;
+    fire(form, state, "interval");
+    if (triggered.get(form) === state) armInterval(form, state);
+  }
+}
+
+function onReveal(entries) {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    revealer.unobserve(entry.target);
+    const state = triggered.get(entry.target);
+    if (state) fire(entry.target, state, "reveal");
+  }
+}
+
 export function start() {
   if (started) return;
   started = true;
@@ -1347,17 +1448,20 @@ export function start() {
   window.addEventListener("popstate", onPopState);
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   observer = new MutationObserver(() => {
     for (const work of pending.values()) {
       if (!work.form.isConnected || !work.target.isConnected) cancel(work, "unmounted");
     }
     syncBehaviors();
     syncFeeds();
+    syncTriggers();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
-    attributeFilter: ["data-placebo-behavior", "data-placebo-feed"] });
+    attributeFilter: ["data-placebo-behavior", "data-placebo-feed", "data-placebo"] });
   syncBehaviors();
   syncFeeds();
+  syncTriggers();
 }
 
 export function stop() {
@@ -1372,6 +1476,7 @@ export function stop() {
   window.removeEventListener("popstate", onPopState);
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("pageshow", onPageShow);
+  document.removeEventListener("visibilitychange", onVisibilityChange);
   clearTimeout(behaviorAudit);
   unknownBehaviors = new WeakMap();
   composing = new WeakSet();
@@ -1382,6 +1487,7 @@ export function stop() {
   for (const work of pending.values()) cancel(work, "runtime-stopped");
   syncBehaviors();
   syncFeeds();
+  syncTriggers();
 }
 
 start();

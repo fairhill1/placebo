@@ -192,10 +192,13 @@ These apply to people and coding agents alike.
   on it. A plain Axum route such as `post(save)` skips payload decoding and the
   mutation request check; the browser reports it as `unadapted-route`.
   Unrelated pages, assets, and JSON endpoints are ordinary Axum routes.
-- **Search:** use `ReadAction` with `.on_input(ms)` for live server search. Don't
-  rebuild it with `fetch`, `DOMParser`, or manual DOM replacement. Add
-  `.history()` to keep the query in the URL, and render the page from the same
-  query (`Input<Search>` in the page handler) so reloads and bookmarks work.
+- **Search and other reads:** use `ReadAction` with `.on_input(ms)` for live
+  server search, and `.on_load()`, `.on_reveal()`, or `.every(ms)` for reads that
+  start themselves. Don't rebuild them with `fetch`, `DOMParser`, or manual DOM
+  replacement. Add `.history()` to keep the query in the URL, and render the page
+  from the same query (`Input<Search>` in the page handler) so reloads and
+  bookmarks work. To extend a list, declare it with `.affects(LIST)` and reply
+  with `.also_insert(item, Position::End)`.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
   including the form and its feedback, never another mount. Contents may mount
@@ -356,6 +359,13 @@ query gets a history entry (keystrokes in one text field share one), Back and
 Forward put the entry's values back into the form and read again, and the page
 handler renders the same query on reload.
 
+Reads can also start themselves: `.on_load()` fills in a slow section after the
+page shows, `.on_reveal()` reads when a form scrolls into view, and `.every(ms)`
+polls while the page is visible. A read reply can insert items into a list its
+binding declares with `.affects(LIST)`, which makes an infinite list from a
+"load more" form. See [reads that start themselves](docs/interactions.md#reads-that-start-themselves)
+and the [triggers example](examples/triggers.rs).
+
 For shared summaries/counts, declare a `VersionedRegion`, mount it with
 `counts.mount(revision, contents)`, declare `.affects(counts)`, and reply with
 `.also_replace(counts, revision, contents)`. A plain `Region` cannot be passed to
@@ -440,6 +450,7 @@ cargo run --features dev --bin placebo -- dev --example search --features dev
 cargo run --example editors
 cargo run --example uploads  # File fields: http://127.0.0.1:4321
 cargo run --example nested   # Nested components: http://127.0.0.1:4322
+cargo run --example triggers # Lazy, polled, and infinite reads: http://127.0.0.1:4323
 ```
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
@@ -519,7 +530,8 @@ across a rejected reply, and refuse oversized files in the browser and server.
 Nested tests refresh a component around busy, edited, removed, and dialog
 components. Push tests keep two tabs in step through saves, drafts, inserts,
 moves, and deletes, skip stale snapshots, drop and resume the stream, and
-resync a page whose position is gone. The dev-loop test creates
+resync a page whose position is gone. Trigger tests load a lazy section,
+poll, pause while hidden, stop with the region, and scroll an infinite list. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.

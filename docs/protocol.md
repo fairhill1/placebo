@@ -122,6 +122,19 @@ Read forms may set `"history": true`: after a result applies, the page URL takes
 the form's query (a new entry per query, with keystrokes in one text field
 sharing one), and `popstate` restores the query into the form and reads again.
 
+Read forms may also set `"load": true` (read once when the form is mounted),
+`"reveal": true` (read once when an `IntersectionObserver` with a 200px margin
+sees the form), and `"every_ms"` (500 to 86400000: read on that interval).
+Triggers belong to the form element and end when it is removed. A poll is
+skipped (`ignored`, reason `busy`) while the region's previous read is in
+flight, is paused while `document.visibilityState` is `hidden` (`deferred`,
+reason `page-hidden`) and reads once when the page is shown, and stops when its
+region is gone after a first read (`discarded`, reason `target-unmounted`).
+`placebo:scheduled` carries `source`: `user`, `load`, `reveal`, `interval`,
+`history`, or `refetch`. A triggered form without `on_input` may sit inside
+its own region; its reply replaces it. A read binding may declare lists in
+`effects`, and its reply may carry only `insert-item` patches for them.
+
 The Rust and browser halves must be upgraded together.
 
 Mutation outcomes use HTTP 200 (`applied`), 422 (`invalid`), or 409 (`conflict`).

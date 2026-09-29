@@ -239,6 +239,9 @@ impl<I: FormInput> MutationBinding<I> {
             operation: "refresh-component",
             input_delay_ms: None,
             history: false,
+            load: false,
+            reveal: false,
+            every_ms: None,
             effects: self.effects.iter().map(String::as_str).collect(),
         };
         let config = serde_json::to_string(&config).expect("configuration serializes");

@@ -215,9 +215,12 @@ These apply to people and coding agents alike.
   `role="alert"`) element. An invalid reply moves focus to the first invalid
   control, and the status element keeps its node so screen readers announce it.
   Use `.required()` for fields the browser can check before submitting.
-- **Dialogs:** make the dialog the component root with `mount_dialog`, or keep
-  it outside the refreshed component. `Component::class` styles the root.
-  Listen for `placebo:applied` on `document`.
+- **Dialogs and local UI:** make the dialog the component root with
+  `mount_dialog`, or keep it outside the refreshed component, and open and close
+  it with `command="show-modal"`/`"close"` and `commandfor`, which work without
+  JavaScript. Use `popovertarget` and `details` for other local UI; with an id,
+  their open state survives replies. Use `behavior()` for application intent,
+  such as closing after a save; listen for `placebo:applied` on `document`.
 - **Shared counts and summaries:** use `VersionedRegion`, mount it with
   `region.mount(revision, contents)`, declare it with `.affects(region)`, and
   reply with `.also_replace(region, revision, contents)`. Return the binding
@@ -262,8 +265,8 @@ The quickstart uses the following form, action, and component APIs.
 | Answer forms submitted without JavaScript with pages | `placebo::native_forms(app)` |
 
 Dynamic record IDs work with the typed APIs. Adding a dialog does not require
-replacing them either: keep the typed form and add a local browser behavior for
-opening and closing the dialog. See [coordinated updates and dialogs](docs/interactions.md)
+replacing them either: keep the typed form, mount the dialog with
+`mount_dialog`, and open it with a `command="show-modal"` button. See [coordinated updates and dialogs](docs/interactions.md)
 and the complete [task example](examples/tasks.rs).
 
 **Mount on the page; reply with contents.** A refresh keeps the existing outer
@@ -311,8 +314,10 @@ component root, or put `component.mount(contents)` inside a dialog. A
 its node, open state, and modality when the outer one refreshes. The browser
 rejects other dialogs inside replaceable component contents with
 `unstable-dialog`, before sending a mutation or applying a malformed response.
-This also applies to dialogs inside local subtrees. Opening/closing is still
-local application behavior; see [the dialog recipe](docs/interactions.md).
+This also applies to dialogs inside local subtrees. Open and close dialogs with
+`command`/`commandfor` buttons, which work without JavaScript; popovers and
+`details` with an id keep their open state across replies. See
+[local UI state](docs/interactions.md#local-ui-state).
 
 **Edits survive replies; everything else follows the server.** Each typed
 control is retained on its own. A control keeps its node, value, focus, and
@@ -531,7 +536,9 @@ Nested tests refresh a component around busy, edited, removed, and dialog
 components. Push tests keep two tabs in step through saves, drafts, inserts,
 moves, and deletes, skip stale snapshots, drop and resume the stream, and
 resync a page whose position is gone. Trigger tests load a lazy section,
-poll, pause while hidden, stop with the region, and scroll an infinite list. The dev-loop test creates
+poll, pause while hidden, stop with the region, and scroll an infinite list.
+Local UI tests open dialogs without JavaScript, keep details and popovers across
+replies, and report command buttons without a target. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.

@@ -89,9 +89,35 @@ function onContentLoaded() {
   auditBehaviors();
 }
 
+// A command or popover button whose target is missing, or of the wrong kind,
+// does nothing in the browser and says nothing. Report it once per button.
+const DIALOG_COMMANDS = ["show-modal", "close", "request-close"];
+const POPOVER_COMMANDS = ["show-popover", "hide-popover", "toggle-popover"];
+let unresolvedCommands = new WeakMap();
+function auditCommands() {
+  for (const button of document.querySelectorAll("[commandfor],[popovertarget]")) {
+    const attribute = button.hasAttribute("commandfor") ? "commandfor" : "popovertarget";
+    const id = button.getAttribute(attribute);
+    const command = attribute === "commandfor" ? button.getAttribute("command") ?? "" : "toggle-popover";
+    const target = id ? document.getElementById(id) : null;
+    const problem = !target ? `${attribute}="${id}" names no element on this page`
+      : DIALOG_COMMANDS.includes(command) && target.localName !== "dialog" ? `command "${command}" needs a dialog, but '${id}' is a <${target.localName}>`
+      : POPOVER_COMMANDS.includes(command) && !target.hasAttribute("popover") ? `command "${command}" needs an element with popover, but '${id}' has none`
+      : !command.startsWith("--") && ![...DIALOG_COMMANDS, ...POPOVER_COMMANDS].includes(command) ? `command "${command}" is not a built-in command; custom commands start with "--"`
+      : null;
+    const key = `${attribute}:${id}:${command}`;
+    if (!problem) { unresolvedCommands.delete(button); continue; }
+    if (unresolvedCommands.get(button) === key) continue;
+    unresolvedCommands.set(button, key);
+    report(null, new ProtocolError(problem.startsWith(attribute) ? "missing-command-target" : "invalid-command",
+      `This button does nothing: ${problem}.`), "invalid-command", { element: elementName(button), relatedTarget: id });
+  }
+}
+
 function auditBehaviors() {
   clearTimeout(behaviorAudit);
   if (!started || !contentLoaded) return;
+  auditCommands();
   for (const element of document.querySelectorAll("[data-placebo-behavior]")) {
     const name = element.dataset.placeboBehavior;
     if (behaviors.has(name) || unknownBehaviors.get(element) === name) continue;
@@ -182,6 +208,8 @@ const hints = {
   "undeclared-push": "Declare the target on the Feed with .affects(target) or .affects_kind(kind), and mount the feed from that same Feed.",
   "push-disconnected": "The browser reconnects by itself. If this repeats, check the feed's route and any proxy timeouts; Network shows the event stream.",
   "push-closed": "Register the feed's route with .route(FEED.path(), FEED.route()), check the path and that it returns text/event-stream, then reload.",
+  "missing-command-target": "Give the dialog or popover the id the button names, or mount it on this page. A mount_dialog component's id is its component id, such as 'task:1'.",
+  "invalid-command": "Point show-modal/close/request-close at a <dialog>, and show-/hide-/toggle-popover at an element with popover.",
   "unknown-behavior": "Check the name and module import. Register with behavior() before mounting, or reserve an asynchronous import with lazyBehavior().",
   "behavior-setup": "Inspect the original cause and setup function. Return a cleanup function or undefined.",
   "behavior-cleanup": "Inspect the original cause and cleanup function; release only resources owned by this behavior.",
@@ -617,6 +645,26 @@ function moveInto(parent, node, before) {
   }
 }
 
+// A details element's open state and an open popover are the person's, like
+// a draft: a refresh keeps them for the element with the same id.
+function keepDisclosures(root) {
+  const states = [];
+  for (const node of root.querySelectorAll("details[id],[popover][id]")) {
+    if (!ownedBy(node, root)) continue;
+    states.push([node.id, node.localName === "details" ? node.open : null, node.matches(":popover-open")]);
+  }
+  return () => {
+    for (const [id, open, shown] of states) {
+      const node = root.querySelector(`#${CSS.escape(id)}`);
+      if (!node || !ownedBy(node, root)) continue;
+      if (open !== null && node.localName === "details") node.open = open;
+      if (node.hasAttribute("popover") && node.matches(":popover-open") !== shown) {
+        try { shown ? node.showPopover() : node.hidePopover(); } catch { /* A disconnected or invalid popover. */ }
+      }
+    }
+  };
+}
+
 // Put the incoming contents into the target, with each kept node in place of
 // its incoming counterpart. The incoming contents are connected first, so a
 // kept node moves instead of leaving the document: focus and a modal dialog
@@ -651,7 +699,11 @@ function removeItem(node, hadFocus) {
 // A node belongs to its nearest component. Nested components own their own
 // contents: a refresh of the outer one refreshes each inner one separately.
 function owner(root) { return root.nodeType === Node.ELEMENT_NODE ? root : null; }
-function ownedBy(node, root) { return node.closest("[data-placebo-component]") === owner(root); }
+function ownedBy(node, root) {
+  const component = node.closest("[data-placebo-component]");
+  return root.nodeType === Node.ELEMENT_NODE && root.hasAttribute("data-placebo-component")
+    ? component === root : !component || !root.contains(component);
+}
 function childComponents(root) {
   return new Map(Array.from(root.querySelectorAll("[data-placebo-component]"))
     .filter(child => (child.parentElement?.closest("[data-placebo-component]") ?? null) === owner(root))
@@ -788,8 +840,10 @@ function prepareComponent(target, fragment, mode, snapshots = null) {
       if (plan) { plan.commit(); settle(old); }
       kept.push([old, next]);
     }
+    const disclosures = keepDisclosures(target);
     keepLiveRegions(live);
     graft(target, fragment, kept);
+    disclosures();
     if (!(focused?.isConnected && target.contains(focused))) restoreFocus(target, anchor);
   } };
 }
@@ -798,8 +852,10 @@ function prepareRead(target, fragment) {
   const live = pairLiveRegions(target, fragment);
   return { refreshed: [], preserved: [], commit() {
     const anchor = focusAnchor(target);
+    const disclosures = keepDisclosures(target);
     keepLiveRegions(live);
     target.replaceChildren(fragment);
+    disclosures();
     restoreFocus(target, anchor);
   } };
 }
@@ -1479,6 +1535,7 @@ export function stop() {
   document.removeEventListener("visibilitychange", onVisibilityChange);
   clearTimeout(behaviorAudit);
   unknownBehaviors = new WeakMap();
+  unresolvedCommands = new WeakMap();
   composing = new WeakSet();
   edits = new WeakMap();
   uncertain = new WeakMap();

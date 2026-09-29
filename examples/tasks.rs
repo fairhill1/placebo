@@ -153,24 +153,38 @@ fn summary(task: &Task) -> Markup {
                 p .task-title { (&task.title) }
                 p .task-meta { @if task.done { "Complete" } @else { "To do" } " · Task " (task.id) }
             }
-            button .secondary type="button" data-dialog-open { "Edit" span .sr-only { " task " (task.id) } }
+            // Opens the editor dialog natively, without JavaScript.
+            button .secondary type="button" command="show-modal" commandfor=(format!("task:{}", task.id)) data-dialog-open {
+                "Edit" span .sr-only { " task " (task.id) }
+            }
         }
     }
 }
 
+// The editor dialog's contents, heading included: the dialog itself is the
+// component's root (mount_dialog), so every reply renders all of this.
 fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
+    let dialog = format!("task:{}", task.id);
     let title_id = format!("title-{}", task.id);
     let feedback_id = format!("feedback-{}", task.id);
+    let help_id = format!("title-help-{}", task.id);
     let fields = fields! { SaveTask {
         @field id = Control::hidden(task.id);
         @field version = Control::hidden(task.version);
-        label for=(title_id) { "Task title" }
+        label for=(title_id) {
+            "Task title "
+            // A native popover. It stays open across replies (matched by id).
+            button .help type="button" popovertarget=(help_id) aria-label="About task titles" { "?" }
+        }
+        div .help-text popover id=(help_id) { "Use 3 to 80 characters. Extra spaces are removed when you save." }
         @field title = Control::text(draft).id(&title_id).described_by(&feedback_id).autocomplete("off");
         .field {
             label for=(format!("done-{}", task.id)) { "Status" }
             @field done = Control::select(done, [(false, "To do"), (true, "Complete")]).id(&format!("done-{}", task.id));
         }
-        .network {
+        // Open or closed stays the person's choice across replies (by id).
+        details .network id=(format!("advanced-{}", task.id)) open {
+            summary { "Advanced" }
             label for=(format!("delay-{}", task.id)) { "Simulate a slow save" }
             @field delay_ms = Control::select(0, [(0, "Off"), (700, "700 ms")]).id(&format!("delay-{}", task.id));
         }
@@ -179,7 +193,7 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
         p .stale-note { "We could not confirm this save. Save again to retry it safely." }
         .form-actions {
             button type="submit" { span .idle-label { "Save changes" } span .busy-label { "Saving…" } }
-            button .secondary type="button" data-dialog-close { "Cancel" }
+            button .secondary type="button" command="close" commandfor=(dialog) data-dialog-close { "Cancel" }
         }
     } };
     let delete = fields! { DeleteTask {
@@ -187,6 +201,11 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
         button .danger type="submit" { "Delete task" }
     } };
     html! {
+        .dialog-heading {
+            .eyebrow { "TASK " (format!("{:02}", task.id)) }
+            h2 id=(format!("dialog-title-{}", task.id)) { "Make it yours." }
+            p { "Save updates the list. Cancel keeps your draft for later." }
+        }
         (save_binding(task).form(fields))
         (Component::new("task-delete", task.id).mount(delete_binding(task.id).form(delete)))
     }
@@ -213,14 +232,10 @@ fn row(task: &Task) -> placebo::MountedItem {
         article .task-row data-placebo-behavior="dialog" data-owner=(component.id()) data-task=(task.id) {
             (row_summary(task).mount(task.version, summary(task)))
             (Component::new("task-order", task.id).class("task-order").mount(order_controls(task.id)))
-            dialog aria-labelledby=(format!("dialog-title-{}", task.id)) {
-                .dialog-heading {
-                    .eyebrow { "TASK " (format!("{:02}", task.id)) }
-                    h2 id=(format!("dialog-title-{}", task.id)) { "Make it yours." }
-                    p { "Save updates the list. Cancel keeps your draft for later." }
-                }
-                (component.mount(edit_form(task, &task.title, task.done, "Use 3–80 characters.")))
-            }
+            (component.mount_dialog(
+                &format!("dialog-title-{}", task.id),
+                edit_form(task, &task.title, task.done, "Use 3–80 characters."),
+            ))
         }
     })
 }
@@ -233,7 +248,7 @@ fn add_form(draft: &str, feedback: &str) -> Markup {
         p .stale-note { "We could not confirm this task was added. Add it again to retry safely." }
         .form-actions {
             button type="submit" { span .idle-label { "Add task" } span .busy-label { "Adding…" } }
-            button .secondary type="button" data-dialog-close { "Cancel" }
+            button .secondary type="button" command="close" commandfor="composer:new" data-dialog-close { "Cancel" }
         }
     } };
     html! {
@@ -271,7 +286,7 @@ async fn home(State(app): State<App>) -> Markup {
                         .list-heading {
                             div { p .eyebrow { "YOUR DAY" } h2 { "The small things" } }
                             section data-placebo-behavior="dialog" data-owner="composer:new" {
-                                button #add-task type="button" data-dialog-open { "+ Add task" }
+                                button #add-task type="button" command="show-modal" commandfor="composer:new" data-dialog-open { "+ Add task" }
                                 (Component::new("composer", "new").mount_dialog("add-heading", add_form("", "Use 3–80 characters.")))
                             }
                         }

@@ -38,9 +38,12 @@ These apply to people and coding agents alike.
   `role="alert"`) element. An invalid reply moves focus to the first invalid
   control, and the status element keeps its node so screen readers announce it.
   Use `.required()` for fields the browser can check before submitting.
-- **Dialogs:** make the dialog the component root with `mount_dialog`, or keep
-  it outside the refreshed component. `Component::class` styles the root.
-  Listen for `placebo:applied` on `document`.
+- **Dialogs and local UI:** make the dialog the component root with
+  `mount_dialog`, or keep it outside the refreshed component, and open and close
+  it with `command="show-modal"`/`"close"` and `commandfor`, which work without
+  JavaScript. Use `popovertarget` and `details` for other local UI; with an id,
+  their open state survives replies. Use `behavior()` for application intent,
+  such as closing after a save; listen for `placebo:applied` on `document`.
 - **Shared counts and summaries:** use `VersionedRegion`, mount it with
   `region.mount(revision, contents)`, declare it with `.affects(region)`, and
   reply with `.also_replace(region, revision, contents)`. Return the binding

@@ -184,7 +184,8 @@ const hints = {
   "cross-origin-navigation": "Navigate replies to a path on this site; link to other sites from the page instead.",
   "invalid-component": "Mount the mutation form inside the component it updates.",
   "unstable-source": "Keep a read form outside the region its response replaces.",
-  "unsupported-file": "File submission is not supported by this form protocol yet.",
+  "unsupported-file": "Give the payload an Upload field and render it with Control::file(); only mutation forms send files.",
+  "upload-too-large": "The runtime checks file sizes against data-placebo-max-bytes before sending; render the input with Control::file(), or raise the field's Upload<MAX_BYTES>.",
 };
 
 function report(work, error, fallback, extra = {}, level = "error") {
@@ -205,7 +206,7 @@ function requestContext(work) {
     contentType: work?.contentType ?? null,
     requestState: !work?.sent ? "not-started" : work.phase === "request" ? "started" : "response-received",
     updateState: work?.applied ? "applied" : work?.phase === "applying" ? "possibly-partial" : "not-applied",
-    writeState: work?.method !== "POST" ? "not-applicable" : !work.sent ? "not-started" :
+    writeState: work?.method !== "POST" ? "not-applicable" : !work.sent || work.notSaved ? "not-started" :
       work.applied ? (work.outcome === "applied" ? "acknowledged" : "rejected") : "unknown",
   };
 }
@@ -825,6 +826,10 @@ async function send(work) {
       "The server has an earlier attempt of this submission that has not finished, so it did not run it again.");
     require(replay !== "unavailable", "replay-unavailable", "The server could not check for an earlier attempt, so it did not run this one.");
     work.replayed = replay === "replayed";
+    if (response.status === 413) {
+      work.notSaved = true;
+      throw new ProtocolError("upload-too-large", `The server refused a file over its field's limit of ${response.headers.get("x-placebo-upload-limit") ?? "?"} bytes before the handler ran. Nothing was saved.`);
+    }
     const expectedOutcome = response.ok ? "applied" : response.status === 422 ? "invalid" : response.status === 409 ? "conflict" : null;
     require(response.ok || (work.method === "POST" && expectedOutcome), "http-error", `Action returned HTTP ${response.status}.`);
     require(work.contentType === UPDATE_TYPE,
@@ -847,7 +852,7 @@ async function send(work) {
   } catch (error) {
     if (work.controller.signal.aborted || !isCurrent(work)) return;
     report(work, error, work.phase === "request" ? "network-error" : "invalid-update");
-    markStale(work);
+    if (!work.notSaved) markStale(work);
   } finally {
     if (!work.deferred) finish(work);
   }
@@ -905,13 +910,19 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
       body = retry.body;
       localSnapshots = retry.locals;
     } else {
-      const fields = new URLSearchParams();
-      for (const [name, value] of new FormData(form, submitter)) {
-        require(typeof value === "string", "unsupported-file", "File submission is not supported yet.");
-        fields.append(name, value);
+      const data = new FormData(form, submitter);
+      if (method === "POST" && form.enctype === "multipart/form-data") {
+        if (!checkUploads(form, work)) return;
+        body = data;
+      } else {
+        const fields = new URLSearchParams();
+        for (const [name, value] of data) {
+          require(typeof value === "string", "unsupported-file", "Files need a mutation form whose payload has an Upload field.");
+          fields.append(name, value);
+        }
+        if (method === "GET") url.search = fields.toString();
+        else body = fields;
       }
-      if (method === "GET") url.search = fields.toString();
-      else body = fields;
       localSnapshots = config.operation === "refresh-component" ? snapshotLocals(target, form) : new Map();
     }
     if (previous) cancel(previous, "superseded");
@@ -927,6 +938,26 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
   } catch (error) {
     report(work, error, "invalid-action");
   }
+}
+
+function readableSize(bytes) {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : bytes >= 1024 ? `${Math.floor(bytes / 1024)} KB` : `${bytes} bytes`;
+}
+
+// A file over its field's limit would be refused by the server after the
+// upload. Tell the person on the file input instead, and send nothing.
+function checkUploads(form, work) {
+  for (const input of form.querySelectorAll("input[type=file][data-placebo-max-bytes]")) {
+    const limit = Number(input.dataset.placeboMaxBytes);
+    const total = Array.from(input.files ?? []).reduce((sum, file) => sum + file.size, 0);
+    if (total <= limit) continue;
+    const several = input.multiple && input.files.length > 1;
+    input.setCustomValidity(`${several ? "These files are" : "This file is"} larger than ${readableSize(limit)}. Choose ${several ? "smaller files" : "a smaller file"}.`);
+    input.reportValidity();
+    emit("ignored", work, { reason: "upload-too-large", field: input.name, limit, size: total });
+    return false;
+  }
+  return true;
 }
 
 function onSubmit(event) {
@@ -952,6 +983,8 @@ function onInput(event) {
 }
 
 function markEdited(event) {
+  // A new choice clears the size message checkUploads set.
+  if (event.target instanceof HTMLInputElement && event.target.type === "file") event.target.setCustomValidity("");
   const local = localUnit(event.target);
   if (local) edits.set(local, (edits.get(local) ?? 0) + 1);
 }

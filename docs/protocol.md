@@ -6,6 +6,12 @@ Use action bindings to generate forms and replies, and action route adapters to
 register handlers. Handwritten protocol data bypasses those authoring checks.
 
 Requests use form encoding and `Accept: application/vnd.placebo.update+json`.
+A mutation form whose payload has an `Upload` field has
+`enctype="multipart/form-data"`, and the runtime sends it as `FormData`. File
+inputs carry `data-placebo-max-bytes`; the runtime refuses to send files over
+it, and the server answers 413 with `X-Placebo-Upload-Limit` before the handler
+runs. A file part must belong to a declared file field, and text parts to the
+others; an empty, unnamed file part is an absent file.
 Reads use GET; mutations use POST plus `X-Placebo-Request: 5`. Every mutation
 request must come from the same origin: `Sec-Fetch-Site` must be `same-origin`,
 or, from a browser without that header, `Origin` must match `Host`. A request

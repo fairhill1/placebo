@@ -97,6 +97,15 @@ a successful save returned to `/`; keep the default `Referrer-Policy` or reply
 with `.navigate(path)`. The person still sees their values and the feedback in
 both cases.
 
+## Files too large
+
+A chosen file over its field's `Upload<MAX_BYTES>` is a person's mistake, not a
+failure: the runtime shows the browser's validation message on the file input,
+sends nothing, and traces `ignored` with reason `upload-too-large`, the field,
+the limit, and the size. If the server still refuses a file (a bypassed check,
+or a native submission), the runtime logs `[placebo:upload-too-large]` with the
+limit and `writeState: not-started`; debug servers log the field and limit.
+
 ## Missing and asynchronous behaviors
 
 Register ordinary behaviors synchronously with `behavior(name, setup)`. Unknown

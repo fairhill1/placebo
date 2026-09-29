@@ -73,7 +73,7 @@ async fn a_page_gets_what_was_published_after_its_position_then_new_updates() {
     let rendered = position(&feed);
     feed.push().replace(COUNT, 2, html! { "2 tasks" }).send();
     feed.push()
-        .insert_item(TASKS.item(3).mount(html! { "Three" }), Position::End)
+        .insert(TASKS.item(3).mount(html! { "Three" }), Position::End)
         .send();
     let request = Request::get(format!("/live?after={rendered}"))
         .body(Body::empty())
@@ -185,13 +185,22 @@ async fn versioned_components_carry_their_revision_in_mounts_and_replies() {
 
 #[tokio::test]
 async fn keyed_feeds_reach_only_the_pages_that_mount_their_key() {
-    let inboxes: placebo::Feeds<String> = placebo::Feeds::new("inbox", "/live/inbox/{key}").affects(COUNT);
+    let inboxes: placebo::Feeds<String> =
+        placebo::Feeds::new("inbox", "/live/inbox/{key}").affects(COUNT);
     let ada = inboxes.get(&"ada".to_owned());
     let bob = inboxes.get(&"bob smith".to_owned());
     // Each key has its own id and URL, and the same feed on every get.
-    assert!(ada.mount().into_string().starts_with("<div id=\"inbox:ada\" hidden"));
+    assert!(
+        ada.mount()
+            .into_string()
+            .starts_with("<div id=\"inbox:ada\" hidden")
+    );
     assert_eq!(bob.path(), "/live/inbox/bob%20smith");
-    assert!(bob.mount().into_string().contains("id=\"inbox:bob%20smith\""));
+    assert!(
+        bob.mount()
+            .into_string()
+            .contains("id=\"inbox:bob%20smith\"")
+    );
     assert_eq!(position(&inboxes.get(&"ada".to_owned())), position(&ada));
     let ada_position = position(&ada);
     let bob_position = position(&bob);

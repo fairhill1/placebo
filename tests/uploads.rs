@@ -200,7 +200,10 @@ async fn a_multipart_body_is_limited_as_a_whole() {
     parts.insert(0, ("note", None, "Hi"));
     let (status, body) = send(multipart("/attach", &parts)).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
-    assert!(body.contains("the most this form's fields accept together"), "{body}");
+    assert!(
+        body.contains("the most this form's fields accept together"),
+        "{body}"
+    );
 }
 
 #[test]
@@ -232,5 +235,8 @@ fn a_required_file_field_renders_required() {
         .bind(&Component::new("upload", 1))
         .form(fields)
         .into_string();
-    assert!(form.contains("<input type=\"file\" name=\"file\" required"), "{form}");
+    assert!(
+        form.contains("<input type=\"file\" name=\"file\" required"),
+        "{form}"
+    );
 }

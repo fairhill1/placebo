@@ -304,16 +304,10 @@ impl<I: FormInput> MutationBinding<I> {
 /// authentication.
 ///
 /// The runtime marks its requests with `X-Placebo-Request` and the protocol
-/// version; a request without the header is a native form submission.
+/// version; a request without the header is a native form submission. The
+/// adapter answers both from the same reply, so a handler does not see which.
 pub struct MutationRequest {
     native: bool,
-}
-
-impl MutationRequest {
-    /// Whether the browser submitted the form itself, without the runtime.
-    pub fn is_native(&self) -> bool {
-        self.native
-    }
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for MutationRequest {

@@ -186,8 +186,8 @@ pub(crate) async fn read(
         .fold(TEXT_BYTES + FRAMING_BYTES, |total, (_, limit)| {
             total.saturating_add(*limit)
         });
-    let constraints = multer::Constraints::new()
-        .size_limit(multer::SizeLimit::new().whole_stream(whole as u64));
+    let constraints =
+        multer::Constraints::new().size_limit(multer::SizeLimit::new().whole_stream(whole as u64));
     let mut multipart =
         multer::Multipart::with_constraints(body.into_data_stream(), boundary, constraints);
     let read_error = |error: multer::Error| match error {
@@ -198,11 +198,7 @@ pub(crate) async fn read(
     let mut files = Vec::new();
     let mut text_bytes = 0;
     let mut used = vec![0usize; fields.len()];
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(read_error)?
-    {
+    while let Some(mut field) = multipart.next_field().await.map_err(read_error)? {
         let name = field.name().unwrap_or_default().to_owned();
         let upload = fields.iter().position(|(field, _)| *field == name);
         let Some(file_name) = field.file_name().map(file_name) else {

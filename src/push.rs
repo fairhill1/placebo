@@ -384,8 +384,7 @@ impl Feed {
     }
 
     fn idle(&self) -> bool {
-        self.0.sender.receiver_count() == 0
-            && self.0.state.lock().unwrap().used.elapsed() > IDLE
+        self.0.sender.receiver_count() == 0 && self.0.state.lock().unwrap().used.elapsed() > IDLE
     }
 
     fn resync(&self, seq: u64) -> Event {
@@ -542,7 +541,7 @@ impl Push<'_> {
     }
 
     /// Insert an item into a declared list. A page that already has it keeps it.
-    pub fn insert_item(mut self, item: MountedItem, at: Position) -> Self {
+    pub fn insert(mut self, item: MountedItem, at: Position) -> Self {
         self.declared(&item.item.list);
         let position = at.wire(&item.item.list);
         self.patches.push(Patch {
@@ -554,7 +553,9 @@ impl Push<'_> {
         self
     }
 
-    pub fn move_item(mut self, item: &Item, to: Position) -> Self {
+    /// Move an item within a declared list: a reply's `also_move` (`move`
+    /// is a keyword).
+    pub fn move_to(mut self, item: &Item, to: Position) -> Self {
         self.declared(&item.list);
         self.patches.push(Patch {
             item: Some(item.id.clone()),
@@ -564,7 +565,7 @@ impl Push<'_> {
         self
     }
 
-    pub fn remove_item(mut self, item: &Item) -> Self {
+    pub fn remove(mut self, item: &Item) -> Self {
         self.declared(&item.list);
         self.patches.push(Patch {
             item: Some(item.id.clone()),
@@ -573,7 +574,7 @@ impl Push<'_> {
         self
     }
 
-    pub fn order_items(mut self, list: &List, items: impl IntoIterator<Item = Item>) -> Self {
+    pub fn order(mut self, list: &List, items: impl IntoIterator<Item = Item>) -> Self {
         self.declared(list.id());
         let items = items
             .into_iter()

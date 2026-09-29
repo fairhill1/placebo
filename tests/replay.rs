@@ -9,8 +9,8 @@ use axum::{
 };
 use maud::{Markup, html};
 use placebo::{
-    Claim, Component, Control, FormInput, Input, MemoryReplays, MutationAction, Recorded,
-    ReplayStore, StoreFuture, fields,
+    Component, Control, FormInput, Input, MutationAction, fields,
+    replay::{Claim, MemoryReplays, Recorded, ReplayStore, StoreFuture},
 };
 use serde::Deserialize;
 use std::{

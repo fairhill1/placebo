@@ -36,14 +36,14 @@ mod component;
 mod diagnostics;
 mod native;
 mod push;
-mod replay;
+pub mod replay;
 mod upload;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
 pub use native::native_forms;
 pub use push::{Feed, Feeds, Push, PushTarget};
-pub use replay::{Claim, MemoryReplays, Recorded, ReplayStore, Replays, StoreFuture, replays};
+pub use replay::replays;
 pub use upload::{DEFAULT_MAX_BYTES, FileValue, Upload};
 
 #[cfg(all(feature = "dev", debug_assertions))]

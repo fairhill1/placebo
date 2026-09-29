@@ -288,7 +288,7 @@ attempt never arrived. A form submitted twice without JavaScript saves once too,
 and a handler runs to its end even if the browser disconnects. A retry older than
 the store remembers is refused as unknown rather than saved again.
 Replies are recorded in memory by default. With several server processes, or
-writes that must survive a restart, implement `ReplayStore` on your database and
+writes that must survive a restart, implement `placebo::replay::ReplayStore` on your database and
 install it with `.layer(placebo::replays(store))`. See
 [idempotent retries](docs/protocol.md#idempotent-retries).
 

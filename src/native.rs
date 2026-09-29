@@ -120,7 +120,10 @@ impl<F: Future + Send + 'static> Future for Finish<F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        let work = self.0.as_mut().expect("a mutation polled after it finished");
+        let work = self
+            .0
+            .as_mut()
+            .expect("a mutation polled after it finished");
         let output = ready!(work.as_mut().poll(cx));
         self.0 = None;
         Poll::Ready(output)

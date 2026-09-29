@@ -332,7 +332,7 @@ async fn add(State(app): State<App>, Input(input): Input<AddTask>) -> Response {
     tasks.revision += 1;
     app.live
         .push()
-        .insert_item(pushed_row, Position::End)
+        .insert(pushed_row, Position::End)
         .replace(SUMMARY, tasks.revision, count(&tasks))
         .send();
     binding
@@ -405,7 +405,7 @@ async fn delete(State(app): State<App>, Input(input): Input<DeleteTask>) -> Resp
         tasks.revision += 1;
         app.live
             .push()
-            .remove_item(&LIST.item(input.id))
+            .remove(&LIST.item(input.id))
             .replace(SUMMARY, tasks.revision, count(&tasks))
             .send();
     }
@@ -439,7 +439,7 @@ async fn move_task(State(app): State<App>, Input(input): Input<MoveTask>) -> Res
     };
     app.live
         .push()
-        .move_item(&LIST.item(input.id), position.clone())
+        .move_to(&LIST.item(input.id), position.clone())
         .send();
     reply
         .also_move(&LIST.item(input.id), position)

@@ -2,6 +2,10 @@
 //! submission sent twice (a retry after a lost response, a double click, a
 //! form submitted again from the Back button) runs its handler once. The
 //! second one gets the reply the first one recorded.
+//!
+//! Replies are kept in [`MemoryReplays`] unless the application installs a
+//! store of its own with [`crate::replays`]; this module has what a store
+//! implements.
 use axum::{
     Extension,
     http::{HeaderMap, HeaderValue, StatusCode, header},
@@ -42,7 +46,7 @@ pub type StoreFuture<'a, T> =
 /// one whose writes must survive a restart, implements this trait on its
 /// database: `claim` inserts the id as pending unless it exists, `record`
 /// stores the reply, and `release` deletes the id. Expiring old rows is the
-/// application's choice.
+/// application's choice; `window` reports how long they are kept.
 ///
 /// The claim and the application's write are separate transactions. If the
 /// process stops after the write commits and before `record`, the id stays
@@ -88,7 +92,7 @@ pub struct Recorded {
 
 /// The store installed on a router, as a request extension.
 #[derive(Clone)]
-pub struct Replays(Arc<dyn ReplayStore>);
+pub(crate) struct Replays(Arc<dyn ReplayStore>);
 
 /// Record replies in `store` instead of the default [`MemoryReplays`]:
 ///
@@ -96,12 +100,12 @@ pub struct Replays(Arc<dyn ReplayStore>);
 /// use axum::{Router, routing::get};
 /// let app: Router = Router::new()
 ///     .route("/", get(|| async { "Home" }))
-///     .layer(placebo::replays(placebo::MemoryReplays::new(
+///     .layer(placebo::replays(placebo::replay::MemoryReplays::new(
 ///         std::time::Duration::from_secs(60),
 ///         1000,
 ///     )));
 /// ```
-pub fn replays(store: impl ReplayStore) -> Extension<Replays> {
+pub fn replays(store: impl ReplayStore) -> Extension<impl Clone + Send + Sync + 'static> {
     Extension(Replays(Arc::new(store)))
 }
 

@@ -33,12 +33,14 @@ pub use placebo_macros::{FormEnum, FormInput};
 mod component;
 mod diagnostics;
 mod native;
+mod push;
 mod replay;
 mod upload;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
 pub use native::native_forms;
+pub use push::{Feed, Push, PushTarget};
 pub use replay::{Claim, MemoryReplays, Recorded, ReplayStore, Replays, StoreFuture, replays};
 pub use upload::{DEFAULT_MAX_BYTES, FileValue, Upload};
 
@@ -483,6 +485,9 @@ struct Envelope {
     target: String,
     operation: &'static str,
     html: String,
+    /// The target component's revision, for a versioned component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
     outcome: &'static str,
     patches: Vec<Patch>,
     navigate: Option<String>,
@@ -504,6 +509,7 @@ impl Envelope {
             target: target.into(),
             operation,
             html: content.into_string(),
+            revision: None,
             status,
             outcome: match status {
                 StatusCode::UNPROCESSABLE_ENTITY => "invalid",
@@ -643,10 +649,7 @@ impl Applied {
     /// ones are kept. Skipped while that component has its own request in flight.
     pub fn also_refresh(self, component: &Component, content: Markup) -> Self {
         declared(&self.effects, component.id());
-        self.push(Patch {
-            html: Some(content.into_string()),
-            ..Patch::new(component.id(), "refresh-component")
-        })
+        self.push(Patch::refresh(component, content))
     }
 
     /// Run the read form bound to a declared region again, with the browser's
@@ -753,6 +756,16 @@ struct Patch {
 }
 
 impl Patch {
+    fn refresh(component: &Component, content: Markup) -> Self {
+        Self {
+            html: Some(content.into_string()),
+            revision: component
+                .revision_value()
+                .map(|revision| revision.to_string()),
+            ..Patch::new(component.id(), "refresh-component")
+        }
+    }
+
     fn new(target: &str, operation: &'static str) -> Self {
         Self {
             target: target.into(),

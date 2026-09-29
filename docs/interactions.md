@@ -79,10 +79,11 @@ The server does not know what the browser currently shows, so item updates are
 lenient where a strict check would reject a committed write: a missing item is
 skipped, an anchor that is gone places the item at the end, and `order-items`
 leaves items the server did not list after the listed ones. The applied event
-reports `missingItems` and `misplacedItems`. Inserting an id that is already on
-the page is still rejected (`duplicate-append`); use `also_move` for an item
-that exists. List updates are not versioned: out-of-order replies apply in
-delivery order.
+reports `missingItems` and `misplacedItems`. Inserting an item that is already
+in the list keeps the existing one and reports it in `existingItems` (a reply
+and a push can both insert it); use `also_move` to move an item. An inserted id
+that another element on the page already uses is rejected (`duplicate-append`).
+List updates are not versioned: out-of-order updates apply in delivery order.
 
 `also_append(REGION, markup)` remains for plain regions that only grow.
 
@@ -98,8 +99,15 @@ another component, for example an editor that publishing just locked. Its
 controls follow the rejected-reply rule below: edited ones keep their edits.
 The refresh is skipped (and reported in `skippedComponents`) while that
 component has its own request in flight, since that reply carries its state.
-Components have no revisions yet, so an older reply for that component that
-arrives later can still overwrite the refresh.
+
+A component that other actions or a feed refresh should carry a revision, the
+version of the data its contents show: `Component::new("task", id).revision(task.version)`,
+on its mount and on every binding. Replies to its own form then apply unless
+they are older than what the page shows (an equal revision still applies, so
+`invalid` and `conflict` show their feedback), and any other refresh applies
+only when newer. Build a successful reply's binding from the record after the
+write. Once a component is mounted with a revision, a refresh without one is
+rejected with `missing-revision`, since it could not be ordered.
 
 `.navigate("/path")` on a successful reply goes to another page after applying
 the batch, such as a record just created or the list after a delete. Only
@@ -150,6 +158,57 @@ the first DOM change. Invalid batches leave the existing DOM intact and emit
 a diagnostic. A valid batch applies synchronously, with stale snapshots
 skipped deliberately. This does not roll back a database write: the server
 may already have committed even if the browser rejects or loses its response.
+
+## Live updates across tabs
+
+A `Feed` sends the same updates as a reply to every page that mounts it, over
+Server-Sent Events: versioned region replacements, versioned component
+refreshes, and list item operations. The task example keeps every open tab in
+step:
+
+```rust
+fn live_feed() -> Feed {
+    Feed::new("tasks-live", "/live/tasks")
+        .affects(LIST)
+        .affects(SUMMARY)
+        .affects_kind("task-summary") // every VersionedRegion::keyed("task-summary", id)
+        .affects_kind("task")         // every Component::new("task", id)
+}
+// Router
+.route(live.path(), live.route())
+// Page, under the lock the tasks are read with
+(app.live.mount())
+// Handler, after the write and under the same lock
+app.live.push()
+    .replace(row_summary(task), task.version, summary(task))
+    .refresh(&task_component(task), edit_form(task, ...))
+    .replace(SUMMARY, tasks.revision, count(&tasks))
+    .send();
+```
+
+Pushes and replies are ordered by revision, whichever arrives first. The tab
+that saved gets both its reply and the push: the second one is not newer and
+is skipped. A pushed refresh follows the rule for a refresh from another
+action, so an open editor keeps its edited fields and shows the rest. While a
+component has its own request in flight, a pushed refresh waits for that reply
+and then applies only if it is still newer. An insert of an item that is
+already there keeps the item (reported in `existingItems`). Declared targets
+that this page does not show are skipped (`missingTargets`).
+
+The mount records the feed's position, so updates published after the page
+was read are replayed when it connects. Render it under the lock or
+transaction the page reads its data with, and publish under the write's lock,
+so the feed's order matches the revisions. When the connection drops, the
+browser reconnects with its last event id and the feed replays what the page
+missed from its last 256 updates. If they are gone, or the server restarted,
+the feed tells the page to resync: the runtime reads the page again and takes
+each declared target's state from it by the same rules (newer revisions only,
+list items inserted, removed, and ordered to match).
+
+A feed broadcasts to every subscriber. Keep per-user data in feeds of their
+own and guard a feed's route like any other route. Polling (a read with
+`.every(ms)`) suits data that changes on its own schedule or a page that must
+not hold a connection; a feed suits changes caused by writes in this app.
 
 ## What a reply keeps
 

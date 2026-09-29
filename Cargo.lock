@@ -465,6 +465,7 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "form_urlencoded",
+ "futures-util",
  "maud",
  "multer",
  "nix",

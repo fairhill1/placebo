@@ -226,9 +226,13 @@ These apply to people and coding agents alike.
   Items keep their nodes, drafts, and focus. To show a new record in filtered
   search results, declare the results region and reply with
   `.also_refetch(&region)` instead of inserting into it.
-- **Other components and pages:** refresh another component with
+- **Other components, pages, and tabs:** refresh another component with
   `.affects(&component)` and `.also_refresh(&component, contents)`. After
-  creating or deleting a record, reply with `.navigate("/path")`.
+  creating or deleting a record, reply with `.navigate("/path")`. To update
+  other open pages, publish the same updates on a `Feed` with
+  `feed.push()...send()` under the write's lock, and mount it with
+  `feed.mount()`. Give a component that other actions or a feed refresh
+  `.revision(n)` on every mount and binding, from the record rendered.
 - **Verify in a browser:** compiling proves the Rust side agrees. Before calling
   a change done, run the app and exercise the changed flows: valid saves,
   invalid input, independent drafts, conflicts, and any dialog or search. Check
@@ -288,6 +292,14 @@ Replies are recorded in memory by default. With several server processes, or
 writes that must survive a restart, implement `ReplayStore` on your database and
 install it with `.layer(placebo::replays(store))`. See
 [idempotent retries](docs/protocol.md#idempotent-retries).
+
+**Other tabs update live.** A `Feed` pushes the same updates a reply can make
+(versioned regions, versioned components, list items) to every page that mounts
+it, over Server-Sent Events, ordered against replies by revision. Mount it with
+`feed.mount()`, register `feed.route()`, and publish with `feed.push()...send()`
+under the write's lock. A reconnecting page gets what it missed, or resyncs by
+reading itself again. See [live updates](docs/interactions.md#live-updates-across-tabs);
+the task example keeps two tabs in step.
 
 **Keep the dialog root persistent.** Use
 `component.mount_dialog("heading-id", contents)` to make the native dialog the
@@ -419,7 +431,7 @@ installed into your new app:
 
 ```sh
 cargo dev    # Two editors, with rebuild/reload: http://127.0.0.1:4318
-cargo tasks  # Tasks, counts, and dialogs: http://127.0.0.1:4319
+cargo tasks  # Tasks, counts, dialogs, and live updates: http://127.0.0.1:4319
 
 # Search, with rebuild/reload: http://127.0.0.1:4317
 cargo run --features dev --bin placebo -- dev --example search --features dev
@@ -505,15 +517,18 @@ tests lose responses after and before the write, retry, and submit twice.
 Upload tests send files through the runtime and natively, keep a chosen file
 across a rejected reply, and refuse oversized files in the browser and server.
 Nested tests refresh a component around busy, edited, removed, and dialog
-components. The dev-loop test creates
+components. Push tests keep two tabs in step through saves, drafts, inserts,
+moves, and deletes, skip stale snapshots, drop and resume the stream, and
+resync a page whose position is gone. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
 ## Still open
 
-Generated protocol definitions; resumable or streamed uploads; richer state ownership;
-revisions for components refreshed by other actions; streaming; general morphing; and an
+Generated protocol definitions; resumable or streamed uploads; feeds shared by
+several server processes (a feed lives in one process); richer state ownership;
+general morphing; and an
 authoring layer evaluated against the Maud baseline. Current verification uses
 Playwright's Chromium, Firefox, and WebKit builds on macOS. WebKit there
 approximates Safari; real Safari, mobile browsers, and other platforms are untested.

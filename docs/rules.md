@@ -49,9 +49,13 @@ These apply to people and coding agents alike.
   Items keep their nodes, drafts, and focus. To show a new record in filtered
   search results, declare the results region and reply with
   `.also_refetch(&region)` instead of inserting into it.
-- **Other components and pages:** refresh another component with
+- **Other components, pages, and tabs:** refresh another component with
   `.affects(&component)` and `.also_refresh(&component, contents)`. After
-  creating or deleting a record, reply with `.navigate("/path")`.
+  creating or deleting a record, reply with `.navigate("/path")`. To update
+  other open pages, publish the same updates on a `Feed` with
+  `feed.push()...send()` under the write's lock, and mount it with
+  `feed.mount()`. Give a component that other actions or a feed refresh
+  `.revision(n)` on every mount and binding, from the record rendered.
 - **Verify in a browser:** compiling proves the Rust side agrees. Before calling
   a change done, run the app and exercise the changed flows: valid saves,
   invalid input, independent drafts, conflicts, and any dialog or search. Check

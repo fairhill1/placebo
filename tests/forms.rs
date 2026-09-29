@@ -144,13 +144,14 @@ async fn mutation_adapter_deserializes_the_declared_input_and_keeps_the_request_
         to_bytes(response.into_body(), 4096).await.unwrap(),
         "42:Hello world:600"
     );
-    let unmarked = app
-        .oneshot(request("id=42&display-title=Hello", false))
-        .await
-        .unwrap();
-    assert_eq!(unmarked.status(), StatusCode::FORBIDDEN);
+    let mut cross_site = request("id=42&display-title=Hello", true);
+    cross_site
+        .headers_mut()
+        .insert("sec-fetch-site", "cross-site".parse().unwrap());
+    let refused = app.oneshot(cross_site).await.unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
     // Rejections come from the adapter too, so the browser does not blame the route.
-    assert_eq!(unmarked.headers()["x-placebo-action"], "save");
+    assert_eq!(refused.headers()["x-placebo-action"], "save");
 }
 
 #[tokio::test]
@@ -586,15 +587,28 @@ async fn enum_fields_decode_their_rendered_names_and_reject_others() {
 async fn rejected_mutations_explain_themselves_to_a_person() {
     let app = Router::new().route(SAVE.path(), SAVE.route(save));
     let cases = [
-        (None, None, "The page had not finished loading"),
-        (Some("1"), None, "This page is out of date"),
+        (Some("1"), None, None, "This page is out of date"),
         (
             Some("3"),
             Some("cross-site"),
+            None,
+            "submitted from another website",
+        ),
+        // Without the runtime too: a native form from another site.
+        (
+            None,
+            Some("same-site"),
+            None,
+            "submitted from another website",
+        ),
+        (
+            None,
+            None,
+            Some("https://attacker.example"),
             "submitted from another website",
         ),
     ];
-    for (version, site, explanation) in cases {
+    for (version, site, origin, explanation) in cases {
         let mut request = request("id=42&display-title=Hello", false);
         if let Some(version) = version {
             request
@@ -606,6 +620,14 @@ async fn rejected_mutations_explain_themselves_to_a_person() {
                 .headers_mut()
                 .insert("sec-fetch-site", site.parse().unwrap());
         }
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+            request
+                .headers_mut()
+                .insert("host", "app.example".parse().unwrap());
+        }
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "{explanation}");
         assert_eq!(
@@ -615,6 +637,38 @@ async fn rejected_mutations_explain_themselves_to_a_person() {
         let body = to_bytes(response.into_body(), 4096).await.unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains(explanation), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn native_submissions_from_the_same_origin_run_the_handler() {
+    let app = Router::new().route(SAVE.path(), SAVE.route(save));
+    for (site, origin) in [
+        (Some("same-origin"), None),
+        (None, Some("http://app.example")),
+        (None, None),
+    ] {
+        let mut request = request("id=42&display-title=Hello&placebo-base=x", false);
+        request
+            .headers_mut()
+            .insert("host", "app.example".parse().unwrap());
+        if let Some(site) = site {
+            request
+                .headers_mut()
+                .insert("sec-fetch-site", site.parse().unwrap());
+        }
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+        }
+        let response = app.clone().oneshot(request).await.unwrap();
+        // Not a Placebo reply, so it passes through unchanged.
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 4096).await.unwrap(),
+            "42:Hello:0"
+        );
     }
 }
 
@@ -658,8 +712,11 @@ async fn handlers_take_other_extractors_before_the_input() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(response.headers()["x-placebo-action"], "save");
     // The mutation check runs before any of the handler's extractors.
-    let unmarked = request("id=42&display-title=Hello", false);
-    let response = app.oneshot(unmarked).await.unwrap();
+    let mut cross_site = request("id=42&display-title=Hello", true);
+    cross_site
+        .headers_mut()
+        .insert("sec-fetch-site", "cross-site".parse().unwrap());
+    let response = app.oneshot(cross_site).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
@@ -671,4 +728,22 @@ async fn other_methods_on_a_mutation_route_are_not_allowed() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn line_breaks_decode_the_same_from_browsers_and_the_runtime() {
+    let app = Router::new().route(PROFILE.path(), PROFILE.route(save_profile));
+    for bio in ["Hi%0D%0Athere", "Hi%0Athere", "Hi%0Dthere"] {
+        let body = format!("bio={bio}&email=a%40b.c&age=36");
+        let response = app
+            .clone()
+            .oneshot(request_to("/profile", &body))
+            .await
+            .unwrap();
+        assert_eq!(
+            to_bytes(response.into_body(), 4096).await.unwrap(),
+            format!("{:?}", profile("Hi\nthere")),
+            "{bio}"
+        );
+    }
 }

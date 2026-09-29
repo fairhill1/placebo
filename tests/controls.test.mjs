@@ -64,18 +64,20 @@ test("validation keeps checked, selected and multiline drafts in the same nodes"
     newsletter: false, role: "2", topics: ["web", "ops"], days: ["5"] });
 });
 
-test("a save sent before the runtime loads explains that nothing was saved", async t => {
+test("without the runtime, every control type submits natively and a rejection keeps the values", async t => {
   const page = await fixture.page(t);
   await page.route("**/placebo.js", route => route.abort());
   await page.goto(fixture.origin);
-  await page.locator("#name").fill("Unsaved draft");
+  await editEverything(page, "   ");
+  let navigation = page.waitForNavigation();
   await page.getByRole("button", { name: "Save profile" }).click();
-  await page.waitForURL("**/actions/save-profile");
-  assert.equal(await page.locator("h1").textContent(), "Your changes were not saved");
-  assert.match(await page.locator("p").textContent(), /Back button/);
-  await page.goBack();
-  assert.equal(await page.locator("#name").inputValue(), "Unsaved draft", "Back restores the typed value");
-  await page.unroute("**/placebo.js");
-  await page.reload();
-  assert.doesNotMatch(await page.locator("#saved").textContent(), /Unsaved draft/);
+  assert.equal((await navigation).status(), 422);
+  assert.equal(await page.locator("#feedback").textContent(), "Enter a name.");
+  assert.deepEqual(await controlState(page), { name: "   ", bio: "\nIndented\nsecond line",
+    newsletter: false, role: "2", topics: ["web", "ops"], days: ["5"] });
+  await page.locator("#name").fill("Native Ada");
+  navigation = page.waitForNavigation();
+  await page.getByRole("button", { name: "Save profile" }).click();
+  assert.equal((await navigation).status(), 200);
+  assert.match(await page.locator("#saved").textContent(), /name: "Native Ada".*bio: "\\nIndented\\nsecond line".*role: Some\(2\), topics: \["web", "ops"\], days: \[5\]/);
 });

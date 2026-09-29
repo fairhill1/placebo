@@ -190,6 +190,12 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 "form field names must be nonempty and unique",
             ));
         }
+        if wire_name.starts_with("placebo-") {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "form field names starting with `placebo-` are reserved for the framework",
+            ));
+        }
         let ty = &field.ty;
         table.push(quote_spanned! {ty.span()=>
             (#wire_name, <#ty as ::placebo::FormValue>::ABSENT)
@@ -227,7 +233,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         setters.push(quote! {
             impl #impl_generics #builder<#(#before),*> {
                 pub fn #setter(mut self, control: ::placebo::Control<#ty>) -> #builder<#(#after),*> {
-                    self.body.push(control.render_named(#wire_name));
+                    ::placebo::__private::render_control::<#name, _>(&mut self.body, control, #wire_name);
                     #builder { body: self.body, state: ::core::marker::PhantomData }
                 }
             }
@@ -300,6 +306,7 @@ mod tests {
             "struct Input { #[serde(skip)] data: String }",
             "#[serde(rename_all = \"camelCase\")] struct Input { some_data: String }",
             "struct Input { #[serde(rename = \"x\")] a: String, #[serde(rename = \"x\")] b: String }",
+            "struct Input { #[serde(rename = \"placebo-key\")] key: String }",
         ] {
             assert!(expand(syn::parse_str(source).unwrap()).is_err(), "{source}");
         }

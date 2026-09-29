@@ -533,3 +533,19 @@ test("a successful reply can navigate within the site, and nowhere else", async 
   await submit(page, 1, "Saved, then navigated");
   await page.waitForURL("**/?from=reply");
 });
+
+test("moving a task without JavaScript redirects back to the page in its new order", async t => {
+  const page = await fixture.page(t, { javaScriptEnabled: false });
+  await page.goto(fixture.origin);
+  const before = await order(page);
+  const first = before[0].split("/")[1];
+  const navigation = page.waitForNavigation();
+  await page.locator(`${row(first)} button[aria-label="Move down task ${first}"]`).click();
+  assert.equal((await navigation).status(), 200);
+  // The reply's also_move is moot: the redirected page renders the new order.
+  assert.deepEqual(await order(page), [before[1], before[0], ...before.slice(2)]);
+  const back = page.waitForNavigation();
+  await page.locator(`${row(first)} button[aria-label="Move up task ${first}"]`).click();
+  await back;
+  assert.deepEqual(await order(page), before);
+});

@@ -121,6 +121,8 @@ async fn main() {
         .route("/placebo.js", get(placebo::runtime))
         .route(SAVE.path(), SAVE.route(save))
         .with_state(store);
+    // Saves also work before the runtime loads, or without JavaScript.
+    let app = placebo::native_forms(app);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .unwrap();

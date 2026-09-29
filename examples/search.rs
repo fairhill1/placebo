@@ -247,6 +247,8 @@ async fn main() {
             }),
         )
         .with_state(books);
+    // Forms submitted before the runtime loads, or without JavaScript.
+    let app = placebo::native_forms(app);
     #[cfg(all(feature = "dev", debug_assertions))]
     let reload = support::reload();
     #[cfg(all(feature = "dev", debug_assertions))]

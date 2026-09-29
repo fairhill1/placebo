@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 
 use crate::{
     Applied, Config, EndsWithInput, Envelope, FormFields, FormInput, RegionTarget, Rejected,
-    VERSION,
+    VERSION, native,
 };
 
 /// Identity is scoped by component kind and a runtime instance key. This is
@@ -70,6 +70,7 @@ impl Component {
     }
 
     pub fn mount(&self, content: Markup) -> MountedComponent {
+        let content = native::mounted_contents(self.id()).unwrap_or(content);
         MountedComponent(
             html! { div id=(self.id()) class=[&self.class] data-placebo-region data-placebo-component { (content) } },
         )
@@ -82,8 +83,14 @@ impl Component {
     /// Alternatively, mount a normal component *inside* a persistent dialog.
     pub fn mount_dialog(&self, labelled_by: &str, content: Markup) -> MountedComponent {
         assert!(!labelled_by.is_empty(), "a dialog needs a heading id");
+        // A page rendered again for a rejected native submission opens the
+        // dialog, so the person sees the feedback without JavaScript.
+        let (content, open) = match native::mounted_contents(self.id()) {
+            Some(reply) => (reply, true),
+            None => (content, false),
+        };
         MountedComponent(html! {
-            dialog id=(self.id()) class=[&self.class] aria-labelledby=(labelled_by) data-placebo-region data-placebo-component { (content) }
+            dialog id=(self.id()) class=[&self.class] open[open] aria-labelledby=(labelled_by) data-placebo-region data-placebo-component { (content) }
         })
     }
 
@@ -158,11 +165,19 @@ impl<I: FormInput> MutationAction<I> {
 }
 
 /// Runs before the handler's extractors, so refused requests reach no handler code.
+/// A native submission (no runtime header) runs the same handler; its reply
+/// becomes a redirect or a page instead of an update.
 async fn require_mutation(request: Request, next: Next) -> Response {
     let (mut parts, body) = request.into_parts();
-    match MutationRequest::from_request_parts(&mut parts, &()).await {
-        Ok(MutationRequest) => next.run(Request::from_parts(parts, body)).await,
-        Err(rejection) => rejection,
+    let mutation = match MutationRequest::from_request_parts(&mut parts, &()).await {
+        Ok(mutation) => mutation,
+        Err(rejection) => return rejection,
+    };
+    let request = Request::from_parts(parts, body);
+    if mutation.native {
+        native::submit(request, next).await
+    } else {
+        next.run(request).await
     }
 }
 
@@ -198,8 +213,9 @@ impl<I: FormInput> MutationBinding<I> {
         self
     }
 
+    /// The form works without JavaScript too: see [`crate::native_forms`].
     pub fn form(&self, fields: FormFields<I>) -> Markup {
-        let content = fields.into_markup();
+        let (content, base) = fields.into_parts();
         let config = Config {
             version: VERSION,
             action: self.action.name,
@@ -211,7 +227,17 @@ impl<I: FormInput> MutationBinding<I> {
             effects: self.effects.iter().map(String::as_str).collect(),
         };
         let config = serde_json::to_string(&config).expect("configuration serializes");
-        html! { form method="post" action=(self.action.path) data-placebo=(config) { (content) } }
+        // The values the server rendered, so a native reply can tell which
+        // fields the person edited.
+        html! {
+            form method="post" action=(self.action.path) data-placebo=(config) {
+                (content)
+                input type="hidden" name=(crate::forms::BASE) value=(base);
+                @if let Some(page) = native::current_page() {
+                    input type="hidden" name=(crate::forms::PAGE) value=(page);
+                }
+            }
+        }
     }
 
     pub fn reply(&self, content: Markup) -> Applied {
@@ -245,45 +271,58 @@ impl<I: FormInput> MutationBinding<I> {
     }
 }
 
-/// Require the non-simple framework header on mutation requests. Cross-origin
-/// forms cannot add it, and cross-origin fetches need CORS permission. This
-/// assumes same-origin deployment without permissive CORS; it is not auth.
-/// The version string comes from the same constant used by the emitter.
-pub struct MutationRequest;
+/// The checks every mutation request passes before its handler runs.
+///
+/// A browser must send it from the same origin: `Sec-Fetch-Site` must be
+/// `same-origin`, or, from a browser that does not send that header, `Origin`
+/// must match the `Host`. A request with neither header is not from a current
+/// browser's cross-site form and is allowed, as in Go's `CrossOriginProtection`.
+/// This assumes same-origin deployment without permissive CORS; it is not
+/// authentication.
+///
+/// The runtime marks its requests with `X-Placebo-Request` and the protocol
+/// version; a request without the header is a native form submission.
+pub struct MutationRequest {
+    native: bool,
+}
+
+impl MutationRequest {
+    /// Whether the browser submitted the form itself, without the runtime.
+    pub fn is_native(&self) -> bool {
+        self.native
+    }
+}
 
 impl<S: Send + Sync> FromRequestParts<S> for MutationRequest {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let version = parts
-            .headers
-            .get("x-placebo-request")
-            .and_then(|h| h.to_str().ok());
-        let site = parts
-            .headers
-            .get("sec-fetch-site")
-            .and_then(|h| h.to_str().ok());
-        let (title, explanation) = if matches!(site, Some("cross-site" | "same-site")) {
+        let text = |name: &str| parts.headers.get(name).and_then(|h| h.to_str().ok());
+        let version = text("x-placebo-request");
+        let same_origin = match (text("sec-fetch-site"), text("origin")) {
+            (Some(site), _) => site == "same-origin",
+            (None, Some(origin)) => origin
+                .parse::<axum::http::Uri>()
+                .ok()
+                .and_then(|origin| origin.authority().map(|a| a.as_str().to_owned()))
+                .is_some_and(|authority| Some(authority.as_str()) == text("host")),
+            (None, None) => true,
+        };
+        let (title, explanation) = if !same_origin {
             (
                 "Request refused",
                 "This form was submitted from another website, so it was not accepted.",
             )
-        } else if version.is_none() {
-            // A native submission: the runtime had not loaded, or failed to.
-            (
-                "Your changes were not saved",
-                "The page had not finished loading when the form was sent. Use your \
-                 browser's Back button (it usually keeps what you typed), wait for the \
-                 page to finish loading, and submit again.",
-            )
-        } else if version != Some(VERSION.to_string().as_str()) {
+        } else if version.is_some_and(|version| version != VERSION.to_string()) {
             (
                 "Your changes were not saved",
                 "This page is out of date. Copy anything you typed, reload the page, \
                  and submit again.",
             )
         } else {
-            return Ok(Self);
+            return Ok(Self {
+                native: version.is_none(),
+            });
         };
         // Readable in the browser for native submissions; the runtime reports
         // enhanced requests through its own http-error diagnostic.

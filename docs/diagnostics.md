@@ -81,6 +81,17 @@ contain body snippets, so malformed JSON gets a sanitized error. Network and
 behavior errors preserve their original error objects/stacks, including causes;
 application-authored error messages remain the application's responsibility.
 
+## Forms submitted without JavaScript
+
+A native submission has no browser runtime to report problems, so debug builds
+log them on the server. `[placebo:native-page]` means a rejected reply got a page
+with only its component: the router is not wrapped with `native_forms`, or the
+page the form was on did not mount that component when rendered again.
+`[placebo:native-no-referer]` means the browser sent no same-origin `Referer`, so
+a successful save returned to `/`; keep the default `Referrer-Policy` or reply
+with `.navigate(path)`. The person still sees their values and the feedback in
+both cases.
+
 ## Missing and asynchronous behaviors
 
 Register ordinary behaviors synchronously with `behavior(name, setup)`. Unknown

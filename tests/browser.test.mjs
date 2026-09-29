@@ -32,12 +32,13 @@ async function visit(t, { javaScriptEnabled = true, mockTransport = false } = {}
           }));
         };
         window.deliver = (q, overrides = {}, status = 200) => {
-          const request = window.requests.find(r => r.q === q && !r.done);
+          // The latest one: typing may have sent the same query before Enter did.
+          const request = window.requests.findLast(r => r.q === q && !r.done);
           if (!request) throw new Error(`No pending mock request for ${q}`);
           request.done = true;
           const books = request.path.endsWith("books");
           request.resolve(new Response(JSON.stringify({
-            version: 4,
+            version: 5,
             action: books ? "search-books" : "search-places",
             target: books ? "book-results" : "place-results",
             operation: "replace-children",
@@ -74,6 +75,16 @@ test("server HTML works before JavaScript and native form navigation remains val
   await page.waitForURL("**/search/books?**");
   assert.equal(await page.locator("#book-results li").count(), 2);
   assert.equal(await page.locator("#books-query").inputValue(), "rust");
+  // The address is the query, so reload and Back work without JavaScript too.
+  await page.reload();
+  assert.equal(await page.locator("#book-results li").count(), 2);
+  await submit(page, "philosophy");
+  await page.waitForURL("**q=philosophy**");
+  assert.equal(await page.locator("#book-results li").count(), 1);
+  await page.goBack();
+  await page.waitForURL("**q=rust**");
+  assert.equal(await page.locator("#books-query").inputValue(), "rust");
+  assert.equal(await page.locator("#book-results li").count(), 2);
 });
 
 test("real fragments preserve the input node, focus, selection, and unrelated local state", async t => {
@@ -302,7 +313,7 @@ test("the Books search follows history: one entry per query, Back and reload res
   assert.match(page.url(), /\?q=rust\+in&/);
 });
 
-// Runs last: it adds a book to the shared server state.
+// Runs near the end: it adds a book to the shared server state.
 test("adding a book reruns the Books search with its current filter and keeps focus on the button", async t => {
   const page = await visit(t);
   await page.locator("#books-query").fill("design");
@@ -317,4 +328,17 @@ test("adding a book reruns the Books search with its current filter and keeps fo
   assert.equal(await page.locator("#new-book").inputValue(), "");
   assert.equal(await page.locator("#add-feedback").textContent(), "Added.");
   assert.ok(await page.evaluate(() => document.activeElement.matches('[id="add-book:1"] button')));
+});
+
+test("adding a book without JavaScript redirects back to the filtered page, which shows it", async t => {
+  const page = await visit(t, { javaScriptEnabled: false });
+  await page.goto(`${fixture.origin}/?q=native`);
+  assert.equal(await page.locator("#book-results li").count(), 0);
+  await page.locator("#new-book").fill("A native book");
+  const navigation = page.waitForNavigation();
+  await page.locator("#new-book").press("Enter");
+  assert.equal((await navigation).status(), 200);
+  // The reply's also_refetch is moot: the redirect renders the current results.
+  assert.equal(new URL(page.url()).search, "?q=native");
+  assert.deepEqual(await page.locator("#book-results li span:first-child").allTextContents(), ["A native book"]);
 });

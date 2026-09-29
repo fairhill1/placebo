@@ -154,8 +154,10 @@ goal. Broader application failures, production logging integration, and actual
 debugging effort still need evaluation. No comparative developer-experience
 result against Datastar or the other comparison stacks has been established.
 
-The broader authoring model is still being evaluated. Nested component
-refreshes, revisions for components refreshed by other actions, and recovery
-after uncertain writes remain open. The examples do not yet establish that
-Placebo makes a complete production application simpler than the comparison
-stack.
+The broader authoring model is still being evaluated. Forms now work without
+JavaScript through the same handlers, retries after uncertain writes are
+idempotent, components can nest, component revisions order replies against
+server push, and reads can start themselves. Each has tests for its adverse
+cases, but none has been compared with the other stacks yet. The examples do not
+yet establish that Placebo makes a complete production application simpler than
+the comparison stack.

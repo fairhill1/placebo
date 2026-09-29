@@ -9,7 +9,7 @@ description = "An experimental Rust/browser contract for HTML fragment updates"
 members = ["placebo-macros"]
 
 [features]
-dev = ["dep:notify", "dep:tower-livereload", "dep:tokio", "dep:nix"]
+dev = ["dep:notify", "dep:tower-livereload", "tokio/process", "tokio/signal", "tokio/io-util", "dep:nix"]
 
 [dependencies]
 placebo-macros = { path = "placebo-macros" }
@@ -19,15 +19,18 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 notify = { version = "8.2.0", optional = true }
 tower-livereload = { version = "0.10.3", optional = true }
-tokio = { version = "1.53.1", optional = true, features = ["macros", "rt", "signal", "process", "io-util", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
+tower = { version = "0.5.3", features = ["util"] }
 serde_html_form = "0.4.1"
 form_urlencoded = "1.2.2"
+multer = "3.1.0"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", optional = true, features = ["signal", "process"] }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "time", "test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
 
 [[example]]

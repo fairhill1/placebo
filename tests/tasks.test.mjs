@@ -7,8 +7,9 @@ const fixture = serverFixture("tasks");
 const row = id => `[data-task="${id}"]`;
 const component = id => `[id="task:${id}"]`;
 
+// Replies alone: pushes from this tab's own saves would also show them.
 async function visit(t) {
-  const page = await fixture.page(t);
+  const page = await fixture.page(t, { feeds: false });
   await page.goto(fixture.origin);
   return page;
 }
@@ -20,9 +21,9 @@ async function submit(page, id, title) {
   await page.locator(`#title-${id}`).fill(title);
   await page.locator(`#title-${id}`).press("Enter");
 }
-async function applied(page, target, outcome = "applied") {
-  await page.waitForFunction(({ target, outcome }) => window.events.some(e =>
-    e.type === "applied" && e.target === target && e.outcome === outcome), { target, outcome });
+async function applied(page, target, outcome = "applied", count = 1) {
+  await page.waitForFunction(({ target, outcome, count }) => window.events.filter(e =>
+    e.type === "applied" && e.target === target && e.outcome === outcome).length >= count, { target, outcome, count });
 }
 async function failure(page, code) {
   await page.waitForFunction(code => window.events.some(e => e.type === "error" && e.code === code), code);
@@ -201,8 +202,9 @@ test("an undeclared target and duplicate append are rejected before primary rese
   await page.route("**/actions/add-task", async route => {
     const response = await route.fetch();
     const update = await response.json();
-    update.patches[0].item = "tasks/1";
-    update.patches[0].html = '<div id="tasks/1" data-placebo-item>Duplicate</div>';
+    // An item id that is already some other element on the page.
+    update.patches[0].item = "title-1";
+    update.patches[0].html = '<div id="title-1" data-placebo-item>Duplicate</div>';
     await route.fulfill({ response, body: JSON.stringify(update), contentType: "application/vnd.placebo.update+json" });
   });
   const count = await page.locator(".task-row").count();
@@ -461,30 +463,51 @@ test("a reply can refresh another declared component, keeping only its edited fi
   const other = done === "true" ? "false" : "true";
   await page.locator("#done-1").selectOption(other);
   await page.locator(`${row(1)} [data-dialog-close]`).click();
-  const incoming = await page.evaluate(() => {
+  const { incoming, revision } = await page.evaluate(() => {
     const form = document.querySelector('[id="task-order:1"] form');
     const config = JSON.parse(form.dataset.placebo);
     for (const node of document.querySelectorAll('[id="task-order:1"] form')) node.dataset.placebo = JSON.stringify({ ...config, effects: [...config.effects, "task:1"] });
     const copy = document.getElementById("task:1").cloneNode(true);
     copy.querySelector("#title-1").setAttribute("value", "Title from another write");
     copy.querySelector("#feedback-1").textContent = "Refreshed by another action.";
-    return copy.innerHTML;
+    // The editor is versioned, so another action's refresh must be newer.
+    return { incoming: copy.innerHTML, revision: String(Number(copy.dataset.placeboRevision) + 1) };
   });
+  let withRevision = false;
   await page.route("**/actions/move-task", async route => {
     const response = await route.fetch();
     const update = await response.json();
-    update.patches.push({ target: "task:1", operation: "refresh-component", html: incoming });
+    update.patches.push({ target: "task:1", operation: "refresh-component", html: incoming, ...(withRevision ? { revision } : {}) });
     await route.fulfill({ response, body: JSON.stringify(update) });
   });
   await page.locator(`${row(1)} button[aria-label="Move down task 1"]`).click();
+  await failure(page, "missing-revision");
+  assert.equal(await page.locator("#title-1").getAttribute("value") === "Title from another write", false);
+  withRevision = true;
+  await page.reload();
+  await page.locator(`${row(1)} [data-dialog-open]`).click();
+  await page.locator("#done-1").selectOption(other);
+  await page.locator(`${row(1)} [data-dialog-close]`).click();
+  await page.evaluate(() => {
+    const config = JSON.parse(document.querySelector('[id="task-order:1"] form').dataset.placebo);
+    for (const node of document.querySelectorAll('[id="task-order:1"] form')) node.dataset.placebo = JSON.stringify({ ...config, effects: [...config.effects, "task:1"] });
+  });
+  await page.locator(`${row(1)} button[aria-label="Move down task 1"]`).click();
   await applied(page, "task-order:1");
-  assert.deepEqual(await page.evaluate(() => window.events.find(e => e.type === "applied").refreshedComponents), ["task:1"]);
+  const event = await page.evaluate(() => window.events.find(e => e.type === "applied" && e.target === "task-order:1"));
+  // The delete form is a component nested in the editor.
+  assert.deepEqual(event.refreshedComponents, ["task:1", "task-delete:1"]);
+  assert.equal(await page.locator('[id="task:1"]').getAttribute("data-placebo-revision"), revision);
   assert.equal(await page.locator("#title-1").inputValue(), "Title from another write");
   assert.equal(await page.locator("#done-1").inputValue(), other);
   assert.equal(await page.locator("#feedback-1").textContent(), "Refreshed by another action.");
   await page.unroute("**/actions/move-task");
-  await page.locator(`${row(1)} button[aria-label="Move up task 1"]`).click();
-  await applied(page, "task-order:1");
+  // Both moves committed on the server; put the order back.
+  await page.reload();
+  for (const count of [1, 2]) {
+    await page.locator(`${row(1)} button[aria-label="Move up task 1"]`).click();
+    await applied(page, "task-order:1", "applied", count);
+  }
 });
 
 test("a conflict shows the other tab's status when this tab only changed the title", async t => {
@@ -532,4 +555,38 @@ test("a successful reply can navigate within the site, and nowhere else", async 
   await edit(page, 1);
   await submit(page, 1, "Saved, then navigated");
   await page.waitForURL("**/?from=reply");
+});
+
+test("moving a task without JavaScript redirects back to the page in its new order", async t => {
+  const page = await fixture.page(t, { javaScriptEnabled: false });
+  await page.goto(fixture.origin);
+  const before = await order(page);
+  const first = before[0].split("/")[1];
+  const navigation = page.waitForNavigation();
+  await page.locator(`${row(first)} button[aria-label="Move down task ${first}"]`).click();
+  assert.equal((await navigation).status(), 200);
+  // The reply's also_move is moot: the redirected page renders the new order.
+  assert.deepEqual(await order(page), [before[1], before[0], ...before.slice(2)]);
+  const back = page.waitForNavigation();
+  await page.locator(`${row(first)} button[aria-label="Move up task ${first}"]`).click();
+  await back;
+  assert.deepEqual(await order(page), before);
+});
+
+test("an open edit dialog stays modal, with focus, when its row moves", async t => {
+  const page = await visit(t);
+  await edit(page, 2);
+  await page.locator("#title-2").fill("Typing while the row moves");
+  const moved = page.waitForFunction(() => window.events.some(e => e.type === "applied" && e.target === "task-order:2"));
+  await page.evaluate(() => document.querySelector('[id="task-order:2"] form').requestSubmit());
+  await moved;
+  assert.deepEqual(await page.evaluate(() => {
+    const dialog = document.querySelector('[data-task="2"] dialog');
+    return { modal: dialog.matches(":modal"), focused: document.activeElement === document.querySelector("#title-2"),
+      value: document.querySelector("#title-2").value };
+  }), { modal: true, focused: true, value: "Typing while the row moves" });
+  await page.keyboard.press("Escape");
+  // Put the order back for the other tests.
+  await page.evaluate(() => document.querySelector('[id="task-order:2"] form:last-of-type').requestSubmit());
+  await page.waitForFunction(() => window.events.filter(e => e.type === "applied" && e.target === "task-order:2").length === 2);
 });

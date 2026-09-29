@@ -66,9 +66,14 @@ The console context separates three facts:
 | `writeState` | `not-applicable` for reads, `not-started`, `unknown`, or the valid applied response's `acknowledged`/`rejected` outcome. |
 
 A lost or rejected mutation response leaves the write outcome unknown. The
-application may have committed even when the UI did not update. Read current
-server state before retrying; neither an HTTP status nor a diagnostic implements
-transaction rollback or idempotent retries.
+application may have committed even when the UI did not update, so the component
+gets `data-placebo-stale`. Submitting its form again retries safely: the runtime
+resends the same request with its idempotency key, and the server replays the
+reply it recorded instead of writing again, or runs the write for the first time
+if the first attempt never arrived. The retry is traced as `scheduled` with
+`retry` and `retryOf`, and `applied` reports `replayed`. `replay-pending` means
+the server has the first attempt but not its result (it is still running, or
+stopped); wait and submit again, or reload. See [idempotent retries](protocol.md#idempotent-retries).
 
 A redirect is reported as `redirected`, not as a network failure. The usual
 cause is authentication middleware sending an expired session to a login page,
@@ -80,6 +85,48 @@ not log form bodies, response bodies, or credentials. JSON parser messages can
 contain body snippets, so malformed JSON gets a sanitized error. Network and
 behavior errors preserve their original error objects/stacks, including causes;
 application-authored error messages remain the application's responsibility.
+
+## Forms submitted without JavaScript
+
+A native submission has no browser runtime to report problems, so debug builds
+log them on the server. `[placebo:native-page]` means a rejected reply got a page
+with only its component: the router is not wrapped with `native_forms`, or the
+page the form was on did not mount that component when rendered again.
+`[placebo:native-no-referer]` means the browser sent no same-origin `Referer`, so
+a successful save returned to `/`; keep the default `Referrer-Policy` or reply
+with `.navigate(path)`. The person still sees their values and the feedback in
+both cases.
+
+## Buttons that do nothing
+
+A `commandfor` or `popovertarget` button whose target is missing, or a command
+aimed at the wrong kind of element, is inert in the browser without any
+message. After the page loads, and after each change to the DOM, the runtime
+reports each such button once as `[placebo:missing-command-target]` or
+`[placebo:invalid-command]`, naming the button, the id, and the command.
+
+## Live updates
+
+A feed's connection is traced as `placebo:push` with `push-connected`,
+`push-reconnected`, or `push-resync`. A dropped connection logs one
+`[placebo:push-disconnected]` warning; the browser reconnects by itself and the
+feed replays what the page missed, or the page resyncs by reading itself again.
+A stream the browser gives up on (a missing route, an error status, another
+content type) logs `[placebo:push-closed]`: updates published from then on do
+not reach the page. An update for a target the feed did not declare is
+rejected with `undeclared-push`. Skipped work is not an error: pushed batches
+emit `placebo:applied` with `source: "push"`, listing snapshots and components
+that were not newer, components deferred while busy, and targets this page
+does not show.
+
+## Files too large
+
+A chosen file over its field's `Upload<MAX_BYTES>` is a person's mistake, not a
+failure: the runtime shows the browser's validation message on the file input,
+sends nothing, and traces `ignored` with reason `upload-too-large`, the field,
+the limit, and the size. If the server still refuses a file (a bypassed check,
+or a native submission), the runtime logs `[placebo:upload-too-large]` with the
+limit and `writeState: not-started`; debug servers log the field and limit.
 
 ## Missing and asynchronous behaviors
 
@@ -129,7 +176,7 @@ adding application logging?
 | HTTP 500 | Request ID, method/path, status, update/write state, and a server-log correlation hint. |
 | HTML instead of an update | Expected and received content types; suggests login/error-page or extractor rejection checks. |
 | Wrong protocol version | Actual and expected versions with a rebuild/reload hint. |
-| Response lost after a real commit | Reports uncertainty and preserves the cause; the request ID matches the server's completed request. |
+| Response lost after a real commit | Reports uncertainty and preserves the cause; the request ID matches the server's completed request. Submitting again replays the recorded reply. |
 | Behavior setup/cleanup exception | Names the behavior and element, preserves the original stack, and suggests the lifecycle check. |
 
 Other tests cover malformed JSON, interrupted body streams, invalid form

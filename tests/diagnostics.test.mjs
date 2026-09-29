@@ -28,7 +28,7 @@ test("a body stream failure is distinguished from malformed JSON", async t => {
 });
 
 async function visit(t, { trace = false } = {}) {
-  const page = await fixture.page(t);
+  const page = await fixture.page(t, { feeds: false });
   const logs = [], captures = [];
   page.on("console", message => {
     if (!message.text().startsWith("[placebo:")) return;
@@ -139,7 +139,7 @@ test("invalid form configuration retains useful preflight context", async t => {
   });
   const { detail } = await error(audit, "version-mismatch");
   assert.equal(detail.action, "save-task");
-  assert.equal(detail.expectedVersion, 4);
+  assert.equal(detail.expectedVersion, 5);
   assert.equal(detail.receivedVersion, 999);
   assert.equal(detail.requestState, "not-started");
 });
@@ -179,7 +179,7 @@ for (const [scenario, code, status, contentType, adapter = "save-task"] of [
       assert.match(detail.hint, /ACTION\.route\(handler\)/);
     }
     if (scenario === "version-mismatch") {
-      assert.equal(detail.expectedVersion, 4);
+      assert.equal(detail.expectedVersion, 5);
       assert.equal(detail.receivedVersion, 999);
     }
   });
@@ -201,7 +201,7 @@ test("a lost response reports uncertainty and correlates with the completed serv
   assert.equal(echoedId, sentId);
   assert.equal(detail.writeState, "unknown");
   assert.equal(detail.status, null);
-  assert.match(text, /read current state before retrying/i);
+  assert.match(text, /submit the form again to retry it safely/i);
   // The native error is preserved. Only Chromium includes async frames in its stack.
   assert.equal(cause.name, "TypeError");
   if (cause.stack) assert.match(cause.stack, /send/);

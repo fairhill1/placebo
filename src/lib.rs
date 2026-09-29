@@ -1,6 +1,8 @@
-//! Experimental HTML updates: a region, a read action, and a shared protocol.
+//! Experimental HTML updates for Rust and Axum: typed forms and actions,
+//! component replies, lists, feeds, and a shared protocol with the browser
+//! runtime.
 //!
-//! The same action emits form configuration and addresses its response. This
+//! The same action emits form configuration and addresses its response.
 //! Input-derived builders connect form controls and handler payloads. Region
 //! existence and the contents of browser requests still need runtime checks.
 //!
@@ -32,14 +34,22 @@ pub use placebo_macros::{FormEnum, FormInput};
 
 mod component;
 mod diagnostics;
+mod native;
+mod push;
+mod replay;
+mod upload;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
+pub use native::native_forms;
+pub use push::{Feed, Push, PushTarget};
+pub use replay::{Claim, MemoryReplays, Recorded, ReplayStore, Replays, StoreFuture, replays};
+pub use upload::{DEFAULT_MAX_BYTES, FileValue, Upload};
 
 #[cfg(all(feature = "dev", debug_assertions))]
 pub mod dev;
 
-pub const VERSION: u8 = 4;
+pub const VERSION: u8 = 5;
 pub const UPDATE_TYPE: &str = "application/vnd.placebo.update+json";
 pub const RUNTIME: &str = include_str!("../client/placebo.js");
 
@@ -350,6 +360,10 @@ impl<I: FormInput> ReadAction<I> {
     pub const fn new(name: &'static str, path: &'static str) -> Self {
         assert!(!name.is_empty(), "an action needs a name");
         assert!(!path.is_empty(), "an action needs a path");
+        assert!(
+            !I::MULTIPART,
+            "a read submits its fields in the URL, so its payload cannot have an Upload field"
+        );
         Self {
             name,
             path,
@@ -368,6 +382,10 @@ impl<I: FormInput> ReadAction<I> {
             target,
             input_delay_ms: None,
             history: false,
+            load: false,
+            reveal: false,
+            every_ms: None,
+            effects: Vec::new(),
         }
     }
 
@@ -391,6 +409,10 @@ pub struct ReadBinding<I: FormInput> {
     target: Region,
     input_delay_ms: Option<u32>,
     history: bool,
+    load: bool,
+    reveal: bool,
+    every_ms: Option<u32>,
+    effects: Vec<String>,
 }
 
 impl<I: FormInput> Clone for ReadBinding<I> {
@@ -400,6 +422,10 @@ impl<I: FormInput> Clone for ReadBinding<I> {
             target: self.target.clone(),
             input_delay_ms: self.input_delay_ms,
             history: self.history,
+            load: self.load,
+            reveal: self.reveal,
+            every_ms: self.every_ms,
+            effects: self.effects.clone(),
         }
     }
 }
@@ -423,6 +449,44 @@ impl<I: FormInput> ReadBinding<I> {
         self
     }
 
+    /// Read once as soon as the form is on the page: a section rendered
+    /// without its slow contents, filled in after the page shows.
+    pub const fn on_load(mut self) -> Self {
+        self.load = true;
+        self
+    }
+
+    /// Read once when the form scrolls near the viewport: a section below the
+    /// fold, or the "load more" form at the end of a list. A form inside its
+    /// own region is replaced by the reply, so the next page's form starts
+    /// watching again.
+    pub const fn on_reveal(mut self) -> Self {
+        self.reveal = true;
+        self
+    }
+
+    /// Read again every `interval_ms` while the form and its region are on the
+    /// page. Polling pauses while the page is hidden and reads once when it is
+    /// shown again. For changes caused by writes in this app, a [`Feed`]
+    /// updates pages without asking.
+    pub const fn every(mut self, interval_ms: u32) -> Self {
+        assert!(
+            interval_ms >= 500 && interval_ms <= 86_400_000,
+            "poll between every 500 ms and once a day"
+        );
+        self.every_ms = Some(interval_ms);
+        self
+    }
+
+    /// Declare a list this read's replies may insert items into, such as the
+    /// list an infinite "load more" form extends. Reads insert; they do not
+    /// move or remove.
+    pub fn affects(mut self, list: List) -> Self {
+        assert!(!self.effects.iter().any(|id| id == list.id()));
+        self.effects.push(list.id().to_owned());
+        self
+    }
+
     pub fn form(&self, fields: FormFields<I>) -> Markup {
         let content = fields.into_markup();
         let config = Config {
@@ -433,7 +497,10 @@ impl<I: FormInput> ReadBinding<I> {
             operation: "replace-children",
             input_delay_ms: self.input_delay_ms,
             history: self.history,
-            effects: Vec::new(),
+            load: self.load,
+            reveal: self.reveal,
+            every_ms: self.every_ms,
+            effects: self.effects.iter().map(String::as_str).collect(),
         };
         let config = serde_json::to_string(&config).expect("static configuration serializes");
         html! {
@@ -442,13 +509,16 @@ impl<I: FormInput> ReadBinding<I> {
     }
 
     pub fn reply(&self, content: Markup) -> ReadUpdate {
-        ReadUpdate(Envelope::new(
-            self.action.name,
-            self.target.id(),
-            "replace-children",
-            StatusCode::OK,
-            content,
-        ))
+        ReadUpdate {
+            envelope: Envelope::new(
+                self.action.name,
+                self.target.id(),
+                "replace-children",
+                StatusCode::OK,
+                content,
+            ),
+            effects: self.effects.clone(),
+        }
     }
 }
 
@@ -462,6 +532,12 @@ struct Config<'a> {
     input_delay_ms: Option<u32>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     history: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    load: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    reveal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    every_ms: Option<u32>,
     effects: Vec<&'a str>,
 }
 
@@ -473,6 +549,9 @@ struct Envelope {
     target: String,
     operation: &'static str,
     html: String,
+    /// The target component's revision, for a versioned component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
     outcome: &'static str,
     patches: Vec<Patch>,
     navigate: Option<String>,
@@ -494,6 +573,7 @@ impl Envelope {
             target: target.into(),
             operation,
             html: content.into_string(),
+            revision: None,
             status,
             outcome: match status {
                 StatusCode::UNPROCESSABLE_ENTITY => "invalid",
@@ -508,7 +588,7 @@ impl Envelope {
 
 impl IntoResponse for Envelope {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             self.status,
             [
                 (header::CONTENT_TYPE, UPDATE_TYPE),
@@ -516,11 +596,19 @@ impl IntoResponse for Envelope {
             ],
             serde_json::to_string(&self).expect("HTML update serializes"),
         )
-            .into_response()
+            .into_response();
+        // A native submission's adapter turns the reply into a navigation.
+        response.extensions_mut().insert(native::NativeReply {
+            target: self.target,
+            html: self.html,
+            navigate: self.navigate,
+        });
+        response
     }
 }
 
-/// A read reply. It replaces its region's children and nothing else.
+/// A read reply. It replaces its region's children, and can insert items
+/// into lists its binding declares.
 ///
 /// Reads cannot patch other regions:
 /// ```compile_fail
@@ -531,11 +619,31 @@ impl IntoResponse for Envelope {
 /// ReadAction::<Search>::new("search", "/search").bind(Region::new("results"))
 ///     .reply(html! {}).also_append(Region::new("list"), html! {});
 /// ```
-pub struct ReadUpdate(Envelope);
+pub struct ReadUpdate {
+    envelope: Envelope,
+    effects: Vec<String>,
+}
+
+impl ReadUpdate {
+    /// Insert an item into a list the binding declares with `affects`, such
+    /// as the next page of an infinite list. An item already in the list keeps
+    /// its node.
+    pub fn also_insert(mut self, item: MountedItem, at: Position) -> Self {
+        declared(&self.effects, &item.item.list);
+        let position = at.wire(&item.item.list);
+        self.envelope.patches.push(Patch {
+            item: Some(item.item.id),
+            position: Some(position),
+            html: Some(item.markup.into_string()),
+            ..Patch::new(&item.item.list, "insert-item")
+        });
+        self
+    }
+}
 
 impl IntoResponse for ReadUpdate {
     fn into_response(self) -> Response {
-        self.0.into_response()
+        self.envelope.into_response()
     }
 }
 
@@ -626,10 +734,7 @@ impl Applied {
     /// ones are kept. Skipped while that component has its own request in flight.
     pub fn also_refresh(self, component: &Component, content: Markup) -> Self {
         declared(&self.effects, component.id());
-        self.push(Patch {
-            html: Some(content.into_string()),
-            ..Patch::new(component.id(), "refresh-component")
-        })
+        self.push(Patch::refresh(component, content))
     }
 
     /// Run the read form bound to a declared region again, with the browser's
@@ -736,6 +841,16 @@ struct Patch {
 }
 
 impl Patch {
+    fn refresh(component: &Component, content: Markup) -> Self {
+        Self {
+            html: Some(content.into_string()),
+            revision: component
+                .revision_value()
+                .map(|revision| revision.to_string()),
+            ..Patch::new(component.id(), "refresh-component")
+        }
+    }
+
     fn new(target: &str, operation: &'static str) -> Self {
         Self {
             target: target.into(),
@@ -796,8 +911,12 @@ mod tests {
     fn response_and_view_share_the_target_and_escape_untrusted_text() {
         let region = Region::new("results");
         let action = ReadAction::<Search>::new("search", "/search").bind(region.clone());
-        let update =
-            serde_json::to_value(action.reply(html! { p { "<script>bad()</script>" } }).0).unwrap();
+        let update = serde_json::to_value(
+            action
+                .reply(html! { p { "<script>bad()</script>" } })
+                .envelope,
+        )
+        .unwrap();
         assert_eq!(update["target"], region.id());
         assert_eq!(update["html"], "<p>&lt;script&gt;bad()&lt;/script&gt;</p>");
         let form = action

@@ -155,12 +155,17 @@ test("duplicate local keys reject a response before altering the live component"
   assert.equal(await page.locator("#title-1").inputValue(), "x");
 });
 
-test("mutation endpoint rejects an ordinary cross-origin-capable form request", async t => {
+test("mutation endpoint rejects a form posted from another site", async t => {
   const page = await visit(t);
-  const response = await page.request.post(`${fixture.origin}/actions/save-title`, {
-    form: { id: "1", version: "1", title: "Unmarked request" },
-  });
-  assert.equal(response.status(), 403);
+  for (const headers of [{ "Sec-Fetch-Site": "cross-site" }, { Origin: "https://attacker.example" }]) {
+    const response = await page.request.post(`${fixture.origin}/actions/save-title`, {
+      form: { id: "1", version: "1", title: "Cross-site request" }, headers,
+    });
+    assert.equal(response.status(), 403);
+    assert.match(await response.text(), /another website/);
+  }
+  await page.reload();
+  assert.notEqual(await page.locator('[id="editor:1"] h2').textContent(), "Cross-site request");
 });
 
 test("dev static edits reload the browser and serve the new bytes", { skip: !process.env.PLACEBO_TEST_DEV }, async t => {

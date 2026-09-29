@@ -1,5 +1,6 @@
 //! A small task list: coordinated fragments, revisioned summaries, dialogs,
-//! and a keyed list whose rows can be added, deleted, and reordered.
+//! and a keyed list whose rows can be added, deleted, and reordered. Every
+//! change is pushed to the other open tabs.
 use axum::{
     Router,
     extract::State,
@@ -9,7 +10,7 @@ use axum::{
 };
 use maud::{DOCTYPE, Markup, html};
 use placebo::{
-    Component, Control, FormEnum, FormInput, Input, List, MutationAction, MutationBinding,
+    Component, Control, Feed, FormEnum, FormInput, Input, List, MutationAction, MutationBinding,
     Position, VersionedRegion, fields,
 };
 use serde::{Deserialize, Serialize};
@@ -82,7 +83,28 @@ impl Tasks {
         self.order.iter().map(|id| &self.items[id])
     }
 }
-type Store = Arc<Mutex<Tasks>>;
+
+#[derive(Clone)]
+struct App {
+    tasks: Arc<Mutex<Tasks>>,
+    live: Feed,
+}
+
+// Every open page follows this feed. Publish under the tasks lock, so the
+// feed's order matches the revisions.
+fn live_feed() -> Feed {
+    Feed::new("tasks-live", "/live/tasks")
+        .affects(LIST)
+        .affects(SUMMARY)
+        .affects_kind("task-summary")
+        .affects_kind("task")
+}
+
+// The editor carries the task's version as its revision, so a pushed refresh
+// and a reply to its own save apply in version order.
+fn task_component(task: &Task) -> Component {
+    Component::new("task", task.id).revision(task.version)
+}
 
 fn row_summary(task: &Task) -> VersionedRegion {
     VersionedRegion::keyed("task-summary", task.id)
@@ -91,14 +113,16 @@ fn row_summary(task: &Task) -> VersionedRegion {
 // The view's forms and the handlers' replies share these bindings, so the
 // regions a form declares are the ones its replies may patch.
 fn save_binding(task: &Task) -> MutationBinding<SaveTask> {
-    SAVE.bind(&Component::new("task", task.id))
+    SAVE.bind(&task_component(task))
         .affects(row_summary(task))
         .affects(SUMMARY)
 }
 
+// Deleting is its own component, nested in the editor, so its reply needs
+// no revision and the editor's refreshes keep it.
 fn delete_binding(id: u64) -> MutationBinding<DeleteTask> {
     DELETE
-        .bind(&Component::new("task", id))
+        .bind(&Component::new("task-delete", id))
         .affects(LIST)
         .affects(SUMMARY)
 }
@@ -129,31 +153,47 @@ fn summary(task: &Task) -> Markup {
                 p .task-title { (&task.title) }
                 p .task-meta { @if task.done { "Complete" } @else { "To do" } " · Task " (task.id) }
             }
-            button .secondary type="button" data-dialog-open { "Edit" span .sr-only { " task " (task.id) } }
+            // Opens the editor dialog natively, without JavaScript.
+            button .secondary type="button" command="show-modal" commandfor=(format!("task:{}", task.id)) data-dialog-open {
+                "Edit" span .sr-only { " task " (task.id) }
+            }
         }
     }
 }
 
+// The editor dialog's contents, heading included: the dialog itself is the
+// component's root (mount_dialog), so every reply renders all of this.
 fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
+    let dialog = format!("task:{}", task.id);
     let title_id = format!("title-{}", task.id);
     let feedback_id = format!("feedback-{}", task.id);
+    let help_id = format!("title-help-{}", task.id);
     let fields = fields! { SaveTask {
         @field id = Control::hidden(task.id);
         @field version = Control::hidden(task.version);
-        label for=(title_id) { "Task title" }
+        label for=(title_id) {
+            "Task title "
+            // A native popover. It stays open across replies (matched by id).
+            button .help type="button" popovertarget=(help_id) aria-label="About task titles" { "?" }
+        }
+        div .help-text popover id=(help_id) { "Use 3 to 80 characters. Extra spaces are removed when you save." }
         @field title = Control::text(draft).id(&title_id).described_by(&feedback_id).autocomplete("off");
         .field {
             label for=(format!("done-{}", task.id)) { "Status" }
             @field done = Control::select(done, [(false, "To do"), (true, "Complete")]).id(&format!("done-{}", task.id));
         }
-        .network {
+        // Open or closed stays the person's choice across replies (by id).
+        details .network id=(format!("advanced-{}", task.id)) open {
+            summary { "Advanced" }
             label for=(format!("delay-{}", task.id)) { "Simulate a slow save" }
             @field delay_ms = Control::select(0, [(0, "Off"), (700, "700 ms")]).id(&format!("delay-{}", task.id));
         }
         p .feedback id=(feedback_id) role="status" aria-live="polite" { (feedback) }
+        // Shown by CSS while the component has data-placebo-stale.
+        p .stale-note { "We could not confirm this save. Save again to retry it safely." }
         .form-actions {
             button type="submit" { span .idle-label { "Save changes" } span .busy-label { "Saving…" } }
-            button .secondary type="button" data-dialog-close { "Cancel" }
+            button .secondary type="button" command="close" commandfor=(dialog) data-dialog-close { "Cancel" }
         }
     } };
     let delete = fields! { DeleteTask {
@@ -161,8 +201,13 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
         button .danger type="submit" { "Delete task" }
     } };
     html! {
+        .dialog-heading {
+            .eyebrow { "TASK " (format!("{:02}", task.id)) }
+            h2 id=(format!("dialog-title-{}", task.id)) { "Make it yours." }
+            p { "Save updates the list. Cancel keeps your draft for later." }
+        }
         (save_binding(task).form(fields))
-        (delete_binding(task.id).form(delete))
+        (Component::new("task-delete", task.id).mount(delete_binding(task.id).form(delete)))
     }
 }
 
@@ -182,19 +227,15 @@ fn order_controls(id: u64) -> Markup {
 }
 
 fn row(task: &Task) -> placebo::MountedItem {
-    let component = Component::new("task", task.id);
+    let component = task_component(task);
     LIST.item(task.id).mount(html! {
         article .task-row data-placebo-behavior="dialog" data-owner=(component.id()) data-task=(task.id) {
             (row_summary(task).mount(task.version, summary(task)))
             (Component::new("task-order", task.id).class("task-order").mount(order_controls(task.id)))
-            dialog aria-labelledby=(format!("dialog-title-{}", task.id)) {
-                .dialog-heading {
-                    .eyebrow { "TASK " (format!("{:02}", task.id)) }
-                    h2 id=(format!("dialog-title-{}", task.id)) { "Make it yours." }
-                    p { "Save updates the list. Cancel keeps your draft for later." }
-                }
-                (component.mount(edit_form(task, &task.title, task.done, "Use 3–80 characters.")))
-            }
+            (component.mount_dialog(
+                &format!("dialog-title-{}", task.id),
+                edit_form(task, &task.title, task.done, "Use 3–80 characters."),
+            ))
         }
     })
 }
@@ -204,9 +245,10 @@ fn add_form(draft: &str, feedback: &str) -> Markup {
         label for="new-title" { "Task title" }
         @field title = Control::text(draft).id("new-title").described_by("new-feedback").autocomplete("off");
         p #new-feedback .feedback role="status" aria-live="polite" { (feedback) }
+        p .stale-note { "We could not confirm this task was added. Add it again to retry safely." }
         .form-actions {
             button type="submit" { span .idle-label { "Add task" } span .busy-label { "Adding…" } }
-            button .secondary type="button" data-dialog-close { "Cancel" }
+            button .secondary type="button" command="close" commandfor="composer:new" data-dialog-close { "Cancel" }
         }
     } };
     html! {
@@ -215,8 +257,8 @@ fn add_form(draft: &str, feedback: &str) -> Markup {
     }
 }
 
-async fn home(State(store): State<Store>) -> Markup {
-    let tasks = store.lock().unwrap();
+async fn home(State(app): State<App>) -> Markup {
+    let tasks = app.tasks.lock().unwrap();
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -244,7 +286,7 @@ async fn home(State(store): State<Store>) -> Markup {
                         .list-heading {
                             div { p .eyebrow { "YOUR DAY" } h2 { "The small things" } }
                             section data-placebo-behavior="dialog" data-owner="composer:new" {
-                                button #add-task type="button" data-dialog-open { "+ Add task" }
+                                button #add-task type="button" command="show-modal" commandfor="composer:new" data-dialog-open { "+ Add task" }
                                 (Component::new("composer", "new").mount_dialog("add-heading", add_form("", "Use 3–80 characters.")))
                             }
                         }
@@ -253,7 +295,9 @@ async fn home(State(store): State<Store>) -> Markup {
                     }
                     p .hint { "Tip: Cancel keeps an unfinished edit. Save accepts the cleaned-up title unless you’ve already started typing something newer." }
                     details .trace { summary { "Interaction trace" } p { "Follow requests and applied updates while you try the list." } ol #trace role="log" aria-label="Interaction events" {} }
-                    footer { "Experiment 003 · In-memory tasks reset when the server restarts" }
+                    footer { "Experiment 003 · In-memory tasks reset when the server restarts · Open a second tab to see changes arrive" }
+                    // Mounted under the same lock as the tasks it follows.
+                    (app.live.mount())
                 }
             }
         }
@@ -265,14 +309,14 @@ fn normalized(title: &str) -> Option<String> {
     (3..=80).contains(&title.chars().count()).then_some(title)
 }
 
-async fn add(State(store): State<Store>, Input(input): Input<AddTask>) -> Response {
+async fn add(State(app): State<App>, Input(input): Input<AddTask>) -> Response {
     let binding = add_binding();
     let Some(title) = normalized(&input.title) else {
         return binding
             .invalid(add_form(&input.title, "Use between 3 and 80 characters."))
             .into_response();
     };
-    let mut tasks = store.lock().unwrap();
+    let mut tasks = app.tasks.lock().unwrap();
     let id = tasks.next_id;
     tasks.next_id += 1;
     let task = Task {
@@ -282,9 +326,15 @@ async fn add(State(store): State<Store>, Input(input): Input<AddTask>) -> Respon
         version: 1,
     };
     let new_row = row(&task);
+    let pushed_row = row(&task);
     tasks.items.insert(id, task);
     tasks.order.push(id);
     tasks.revision += 1;
+    app.live
+        .push()
+        .insert_item(pushed_row, Position::End)
+        .replace(SUMMARY, tasks.revision, count(&tasks))
+        .send();
     binding
         .reply(add_form("", "Ready for the next task."))
         .also_insert(new_row, Position::End)
@@ -292,9 +342,9 @@ async fn add(State(store): State<Store>, Input(input): Input<AddTask>) -> Respon
         .into_response()
 }
 
-async fn save(State(store): State<Store>, Input(input): Input<SaveTask>) -> Response {
+async fn save(State(app): State<App>, Input(input): Input<SaveTask>) -> Response {
     tokio::time::sleep(Duration::from_millis(input.delay_ms.min(1500))).await;
-    let mut tasks = store.lock().unwrap();
+    let mut tasks = app.tasks.lock().unwrap();
     let Some(task) = tasks.items.get_mut(&input.id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -321,7 +371,17 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTask>) -> Resp
     task.title = title;
     task.done = input.done;
     task.version += 1;
-    let response = binding
+    // Other tabs: the edited fields of an open editor keep their edits.
+    let push = app
+        .live
+        .push()
+        .replace(row_summary(task), task.version, summary(task))
+        .refresh(
+            &task_component(task),
+            edit_form(task, &task.title, task.done, "Updated in another tab."),
+        );
+    // Built again after the write, so the reply carries the new revision.
+    let response = save_binding(task)
         .reply(edit_form(
             task,
             &task.title,
@@ -330,18 +390,24 @@ async fn save(State(store): State<Store>, Input(input): Input<SaveTask>) -> Resp
         ))
         .also_replace(row_summary(task), task.version, summary(task));
     tasks.revision += 1;
+    push.replace(SUMMARY, tasks.revision, count(&tasks)).send();
     response
         .also_replace(SUMMARY, tasks.revision, count(&tasks))
         .into_response()
 }
 
-async fn delete(State(store): State<Store>, Input(input): Input<DeleteTask>) -> Response {
-    let mut tasks = store.lock().unwrap();
+async fn delete(State(app): State<App>, Input(input): Input<DeleteTask>) -> Response {
+    let mut tasks = app.tasks.lock().unwrap();
     let binding = delete_binding(input.id);
     // Deleting twice, from two tabs, removes a row that is already gone.
     if tasks.items.remove(&input.id).is_some() {
         tasks.order.retain(|id| *id != input.id);
         tasks.revision += 1;
+        app.live
+            .push()
+            .remove_item(&LIST.item(input.id))
+            .replace(SUMMARY, tasks.revision, count(&tasks))
+            .send();
     }
     binding
         .reply(html! { p { "Deleted." } })
@@ -350,8 +416,8 @@ async fn delete(State(store): State<Store>, Input(input): Input<DeleteTask>) -> 
         .into_response()
 }
 
-async fn move_task(State(store): State<Store>, Input(input): Input<MoveTask>) -> Response {
-    let mut tasks = store.lock().unwrap();
+async fn move_task(State(app): State<App>, Input(input): Input<MoveTask>) -> Response {
+    let mut tasks = app.tasks.lock().unwrap();
     let binding = move_binding(input.id);
     let Some(from) = tasks.order.iter().position(|id| *id == input.id) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -371,6 +437,10 @@ async fn move_task(State(store): State<Store>, Input(input): Input<MoveTask>) ->
         Direction::Up => Position::Before(LIST.item(tasks.order[to + 1])),
         Direction::Down => Position::After(LIST.item(tasks.order[to - 1])),
     };
+    app.live
+        .push()
+        .move_item(&LIST.item(input.id), position.clone())
+        .send();
     reply
         .also_move(&LIST.item(input.id), position)
         .into_response()
@@ -378,7 +448,7 @@ async fn move_task(State(store): State<Store>, Input(input): Input<MoveTask>) ->
 
 #[tokio::main]
 async fn main() {
-    let store = Arc::new(Mutex::new(Tasks {
+    let tasks = Arc::new(Mutex::new(Tasks {
         items: [
             Task {
                 id: 1,
@@ -406,8 +476,10 @@ async fn main() {
         revision: 1,
         next_id: 4,
     }));
+    let live = live_feed();
     let app = Router::new()
         .route("/", get(home))
+        .route(live.path(), live.route())
         .route(ADD.path(), ADD.route(add))
         .route(SAVE.path(), SAVE.route(save))
         .route(DELETE.path(), DELETE.route(delete))
@@ -437,7 +509,9 @@ async fn main() {
                 support::asset("demo.js", "text/javascript", include_str!("static/demo.js"))
             }),
         )
-        .with_state(store);
+        .with_state(App { tasks, live });
+    // Forms submitted before the runtime loads, or without JavaScript.
+    let app = placebo::native_forms(app);
     #[cfg(all(feature = "dev", debug_assertions))]
     let reload = support::reload();
     #[cfg(all(feature = "dev", debug_assertions))]

@@ -36,10 +36,19 @@ export function serverFixture(example) {
     fixture.browser = await browserType.launch({ headless: true });
   });
   after(async () => { await fixture.browser?.close(); server?.kill(); });
-  fixture.page = async (t, options = {}) => {
+  // `feeds: false` removes feed mounts from pages, for tests of replies alone.
+  fixture.page = async (t, { feeds = true, ...options } = {}) => {
     const context = await fixture.browser.newContext(options);
     t.after(() => context.close());
     const page = await context.newPage();
+    if (!feeds) {
+      await page.route("**/*", async route => {
+        if (route.request().resourceType() !== "document") return route.fallback();
+        const response = await route.fetch();
+        const body = (await response.text()).replace(/<div id="[^"]*" hidden data-placebo-feed="[^"]*"><\/div>/g, "");
+        await route.fulfill({ response, body });
+      });
+    }
     page.setDefaultTimeout(8000);
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
@@ -53,7 +62,7 @@ export function serverFixture(example) {
         }
       };
       window.events = [];
-      for (const type of ["scheduled", "request", "applied", "discarded", "deferred", "ignored", "error"]) {
+      for (const type of ["scheduled", "request", "applied", "discarded", "deferred", "ignored", "warning", "push", "error"]) {
         document.addEventListener(`placebo:${type}`, ({ detail }) => window.events.push({ type, ...detail }));
       }
     });

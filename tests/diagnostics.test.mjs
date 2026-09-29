@@ -11,13 +11,13 @@ after(async () => {
   await writeFile("test-results/diagnostics-after.json", JSON.stringify(evidence, null, 2));
 });
 
-test("a body stream failure is distinguished from malformed JSON", async t => {
+test("a body stream failure is distinguished from a malformed reply", async t => {
   const audit = await visit(t);
   await audit.page.evaluate(() => {
     const nativeFetch = window.fetch;
     window.fetch = (url, options) => new URL(url).pathname === "/actions/save-task"
       ? Promise.resolve(new Response(new ReadableStream({ start(controller) { controller.error(new Error("Body stream interrupted")); } }),
-        { status: 200, headers: { "content-type": "application/vnd.placebo.update+json", "x-placebo-action": "save-task" } }))
+        { status: 200, headers: { "content-type": "text/html", "x-placebo-action": "save-task", "x-placebo-outcome": "applied" } }))
       : nativeFetch(url, options);
   });
   await submit(audit.page);
@@ -113,14 +113,16 @@ test("a behavior registered by a later module script is not reported as unknown"
   assert.deepEqual(logs, []);
 });
 
-test("missing target explains that no request was started and names the affected region", async t => {
+test("missing target explains that no request was started and names the affected component", async t => {
   const audit = await visit(t);
-  await audit.page.evaluate(() => document.querySelector("#task-count").remove());
-  await submit(audit.page);
+  await audit.page.locator('[data-task="1"] [data-dialog-open]').click();
+  await audit.page.evaluate(() => document.getElementById("task:1").removeAttribute("id"));
+  await audit.page.locator("#title-1").fill("Diagnostics save");
+  await audit.page.locator("#title-1").press("Enter");
   const { detail, text } = await error(audit, "missing-target");
   assert.equal(detail.action, "save-task");
   assert.equal(detail.target, "task:1");
-  assert.equal(detail.relatedTarget, "task-count");
+  assert.equal(detail.relatedTarget, "task:1");
   assert.equal(detail.method, "POST");
   assert.equal(detail.path, "/actions/save-task");
   assert.equal(detail.requestState, "not-started");
@@ -139,26 +141,26 @@ test("invalid form configuration retains useful preflight context", async t => {
   });
   const { detail } = await error(audit, "version-mismatch");
   assert.equal(detail.action, "save-task");
-  assert.equal(detail.expectedVersion, 5);
+  assert.equal(detail.expectedVersion, 6);
   assert.equal(detail.receivedVersion, 999);
   assert.equal(detail.requestState, "not-started");
 });
 
+// A mutation's reply is a page, with its outcome in X-Placebo-Outcome.
 for (const [scenario, code, status, contentType, adapter = "save-task"] of [
   ["http-500", "http-error", 500, "text/plain"],
-  ["html-response", "invalid-content-type", 200, "text/html"],
-  ["invalid-json", "invalid-json", 200, "application/vnd.placebo.update+json"],
-  ["version-mismatch", "version-mismatch", 200, "application/vnd.placebo.update+json"],
-  ["plain-axum-route", "unadapted-route", 200, "application/vnd.placebo.update+json", null],
-  ["another-actions-adapter", "unadapted-route", 200, "application/vnd.placebo.update+json", "add-task"],
+  ["json-response", "invalid-content-type", 200, "application/json"],
+  ["page-without-outcome", "invalid-outcome", 200, "text/html"],
+  ["plain-axum-route", "unadapted-route", 200, "text/html", null],
+  ["another-actions-adapter", "unadapted-route", 200, "text/html", "add-task"],
 ]) {
   test(`${scenario} includes request context, consequence, and a next step`, async t => {
     const audit = await visit(t);
     let sentId;
     await audit.page.route("**/actions/save-task", route => {
       sentId = route.request().headers()["x-placebo-request-id"];
-      return route.fulfill({ status, contentType, headers: adapter ? { "x-placebo-action": adapter } : {}, body: scenario === "version-mismatch"
-        ? JSON.stringify({ version: 999, outcome: "applied" }) : "RESPONSE_SECRET must not appear in diagnostics" });
+      return route.fulfill({ status, contentType, headers: adapter ? { "x-placebo-action": adapter } : {},
+        body: "RESPONSE_SECRET must not appear in diagnostics" });
     });
     await submit(audit.page, "FORM_SECRET must stay out of logs");
     const { detail, text } = await error(audit, code);
@@ -177,10 +179,6 @@ for (const [scenario, code, status, contentType, adapter = "save-task"] of [
     if (code === "unadapted-route") {
       assert.equal(detail.respondingAction, adapter);
       assert.match(detail.hint, /ACTION\.route\(handler\)/);
-    }
-    if (scenario === "version-mismatch") {
-      assert.equal(detail.expectedVersion, 5);
-      assert.equal(detail.receivedVersion, 999);
     }
   });
 }
@@ -229,27 +227,49 @@ test("a redirect, such as an expired session, is reported as a redirect rather t
   assert.ok(!audit.logs.some(log => log.detail.code === "network-error"));
 });
 
-test("remounted secondary target identifies the old ownership without hiding the write uncertainty", async t => {
+// The server answers with the component alone when it cannot render the
+// page; the rest of the page stays as it was.
+for (const [scenario, code, level, headers] of [
+  // No X-Placebo-Page and no same-origin Referer: the server does not know the page.
+  ["page-error", "page-error", "error", headers => {
+    const { "x-placebo-page": _, ...rest } = headers;
+    return { ...rest, referer: "https://elsewhere.example/" };
+  }],
+  // A page that no longer renders, such as a deleted record's.
+  ["page-missing", "page-missing", "warning", headers => ({ ...headers, "x-placebo-page": "/gone" })],
+]) {
+  test(`a reply without its page (${scenario}) shows in its component and says why`, async t => {
+    const audit = await visit(t);
+    await audit.page.route("**/actions/save-task", async route =>
+      route.fulfill({ response: await route.fetch({ headers: headers(route.request().headers()) }) }));
+    const summary = await audit.page.locator('[data-task="1"] .task-title').textContent();
+    await submit(audit.page, `Saved without the page (${scenario})`);
+    const log = await logged(audit, log => log.level === level && log.detail.code === code);
+    evidence.push({ scenario, ...log });
+    assert.ok(log.detail.hint?.length > 15);
+    assert.equal(log.detail.updateState, "applied");
+    assert.equal(log.detail.writeState, "acknowledged");
+    assert.match(log.text, /component alone/);
+    // The editor shows the reply; the row's summary outside it does not change.
+    assert.match(await audit.page.locator("#feedback-1").textContent(), /Saved/);
+    assert.equal(await audit.page.locator('[data-task="1"] .task-title').textContent(), summary);
+    const applied = await audit.page.evaluate(() => window.events.find(e => e.type === "applied"));
+    assert.equal(applied.page, "missing");
+  });
+}
+
+test("a rejected reply whose page does not mount its component is reported", async t => {
   const audit = await visit(t);
-  let committed;
-  const received = new Promise(resolve => { committed = resolve; });
-  let release;
-  const hold = new Promise(resolve => { release = resolve; });
-  t.after(() => release());
   await audit.page.route("**/actions/save-task", async route => {
-    const response = await route.fetch(); committed();
-    await hold; await route.fulfill({ response });
+    const response = await route.fetch();
+    await route.fulfill({ response, headers: { ...response.headers(), "x-placebo-unmounted": "task:1" } });
   });
-  await submit(audit.page);
-  await received;
-  await audit.page.evaluate(() => {
-    const summary = document.querySelector("#task-count"); summary.replaceWith(summary.cloneNode(true));
-  });
-  release();
-  const { detail } = await error(audit, "remounted-target");
-  assert.equal(detail.relatedTarget, "task-count");
-  assert.equal(detail.writeState, "unknown");
-  assert.equal(detail.updateState, "not-applied");
+  await submit(audit.page, "x");
+  const { detail, text } = await error(audit, "unmounted-target");
+  assert.equal(detail.target, "task:1");
+  assert.equal(detail.updateState, "applied");
+  assert.equal(detail.writeState, "rejected");
+  assert.match(text, /does not mount component 'task:1'/);
 });
 
 test("unmounting a dispatched mutation warns by default even with trace disabled", async t => {
@@ -346,6 +366,8 @@ test("console trace exposes lifecycle and duplicate suppression, can turn off, a
   assert.ok(!fixture.serverLog.includes("FORM_SECRET"));
   assert.ok(!fixture.serverLog.includes("QUERY_SECRET"));
   await audit.page.evaluate(async () => (await import("/placebo.js")).trace(false));
+  // Traced messages still being captured count before, not after.
+  await settle(audit);
   const length = audit.logs.length;
   await submit(audit.page, "x");
   await audit.page.waitForFunction(() => document.querySelector("#feedback-1").textContent.includes("between 3"));

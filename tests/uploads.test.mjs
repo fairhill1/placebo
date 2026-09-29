@@ -25,7 +25,14 @@ test("the runtime sends chosen files as multipart and the handler receives them"
   await applied(page);
   assert.equal(await page.locator("#saved-cover").textContent(), "Cover: cover.png (1000 bytes, image/png)");
   assert.deepEqual(await page.locator("#saved-files li").allTextContents(), ["a.txt (10 bytes)", "b.txt (20 bytes)"]);
-  // After a successful save, the submitted file inputs are empty again.
+});
+
+test("after a successful save, the submitted file inputs are empty again", async t => {
+  const page = await visit(t);
+  await page.locator("#note").fill("Cover only");
+  await page.locator("#cover").setInputFiles(file("cover.png", 1000));
+  await page.locator("#note").press("Enter");
+  await applied(page);
   assert.equal(await page.locator("#cover").evaluate(input => input.files.length), 0);
 });
 

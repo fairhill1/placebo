@@ -300,20 +300,107 @@ async fn a_page_that_does_not_mount_the_component_falls_back_to_the_component() 
     assert!(page.contains("Too short."));
 }
 
-#[tokio::test]
-async fn runtime_requests_still_get_updates() {
-    let app = placebo::native_forms(router(store()));
-    let mut request = native_post(
-        form_body(&[("id", "1"), ("version", "1"), ("title", "x")]),
-        Some("http://app.example/"),
-    );
-    request.headers_mut().insert(
+/// A submission from the runtime, from the page at `page`.
+fn runtime_post(body: String, page: &str) -> Request<Body> {
+    let mut request = native_post(body, Some("http://app.example/"));
+    let headers = request.headers_mut();
+    headers.insert(
         "x-placebo-request",
         placebo::VERSION.to_string().parse().unwrap(),
     );
-    let response = app.oneshot(request).await.unwrap();
+    headers.insert("x-placebo-page", page.parse().unwrap());
+    request
+}
+
+#[tokio::test]
+async fn a_runtime_submission_gets_its_page_with_the_reply_in_the_component() {
+    let app = placebo::native_forms(router(store()));
+    let body = form_body(&[("id", "1"), ("version", "1"), ("title", "x")]);
+    let response = app.clone().oneshot(runtime_post(body, "/")).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(response.headers()["content-type"], placebo::UPDATE_TYPE);
+    assert_eq!(response.headers()["x-placebo-outcome"], "invalid");
+    assert_eq!(response.headers()["x-placebo-action"], "save");
+    assert!(response.headers().contains_key("x-placebo-rendered"));
+    assert!(response.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    let page = text(response).await;
+    assert!(page.contains("The page") && page.contains("Too short."), "{page}");
+
+    let body = form_body(&[("id", "1"), ("version", "1"), ("title", "Second")]);
+    let response = app.clone().oneshot(runtime_post(body, "/")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-placebo-outcome"], "applied");
+    let page = text(response).await;
+    assert!(page.contains("The page") && page.contains("Saved."), "{page}");
+
+    // A later page carries a later stamp.
+    let stamp = |response: &Response| -> u64 {
+        response.headers()["x-placebo-rendered"].to_str().unwrap().parse().unwrap()
+    };
+    let body = || form_body(&[("id", "1"), ("version", "9"), ("title", "Third")]);
+    let first = app.clone().oneshot(runtime_post(body(), "/")).await.unwrap();
+    let second = app.oneshot(runtime_post(body(), "/")).await.unwrap();
+    assert_eq!(first.status(), StatusCode::CONFLICT);
+    assert!(stamp(&second) > stamp(&first));
+}
+
+#[tokio::test]
+async fn a_runtime_reply_that_navigates_only_says_where_to() {
+    let app = placebo::native_forms(router(store()));
+    let body = form_body(&[("id", "1"), ("version", "1"), ("title", "Go elsewhere")]);
+    let response = app.oneshot(runtime_post(body, "/")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-placebo-navigate"], "/elsewhere");
+    assert_eq!(text(response).await, "");
+}
+
+#[tokio::test]
+async fn without_its_page_a_runtime_reply_shows_in_the_component_and_says_why() {
+    // Not wrapped with native_forms: a setup error.
+    let body = || form_body(&[("id", "1"), ("version", "1"), ("title", "x")]);
+    let response = router(store()).oneshot(runtime_post(body(), "/")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(response.headers().contains_key("x-placebo-page-error"));
+    let contents = text(response).await;
+    assert!(contents.contains("Too short.") && !contents.contains("The page"));
+
+    // A page that no longer renders, such as a deleted record's.
+    let app = placebo::native_forms(router(store()));
+    let response = app.clone().oneshot(runtime_post(body(), "/gone")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        response.headers()["x-placebo-page-missing"]
+            .to_str()
+            .unwrap()
+            .contains("404")
+    );
+    assert!(text(response).await.contains("Too short."));
+}
+
+#[tokio::test]
+async fn a_page_without_the_component_is_marked_for_the_runtime() {
+    let app = placebo::native_forms(router(store()).route(
+        "/other",
+        get(|| async {
+            html! { h1 { "Other" } }
+        }),
+    ));
+    let body = form_body(&[("id", "1"), ("version", "1"), ("title", "x")]);
+    let response = app.oneshot(runtime_post(body, "/other")).await.unwrap();
+    assert_eq!(response.headers()["x-placebo-unmounted"], "editor:1");
+    assert!(text(response).await.contains("Other"));
+}
+
+#[tokio::test]
+async fn a_refresh_after_a_feed_signal_is_stamped_like_a_reply() {
+    let app = placebo::native_forms(router(store()));
+    let mut request = page_request("/");
+    request
+        .headers_mut()
+        .insert("x-placebo-refresh", "6".parse().unwrap());
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert!(response.headers().contains_key("x-placebo-rendered"));
+    let response = app.oneshot(page_request("/")).await.unwrap();
+    assert!(!response.headers().contains_key("x-placebo-rendered"));
 }
 
 #[tokio::test]

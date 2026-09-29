@@ -1,14 +1,15 @@
-// Protocol v5. HTML is trusted server-rendered content, not a sanitizer input.
+// Protocol v6. HTML is trusted server-rendered content, not a sanitizer input.
 // Scheduling belongs to the actual mounted target node, not its reusable id.
-const VERSION = 5;
-const UPDATE_TYPE = "application/vnd.placebo.update+json";
+// A mutation is answered with its whole page; a read form reads its page at
+// the form's query, and a feed's signal or a poll reads it again. Idiomorph
+// (vendored above this file in /placebo.js) morphs each into the document.
+const VERSION = 6;
 const KEY_FIELD = "placebo-key";
 const pending = new Map();
 // Per component: a mutation sent whose outcome is unknown. Submitting the
 // same form again resends it unchanged, with its idempotency key.
 let uncertain = new WeakMap();
 // Per component: a pushed refresh waiting for its own request to finish.
-let deferredPushes = new WeakMap();
 let composing = new WeakSet();
 let started = false;
 let observer;
@@ -202,37 +203,31 @@ function require(condition, code, message, context) {
 const hints = {
   "invalid-config": "Render the form through its Placebo action binding; check its configuration and reload after rebuilding.",
   "version-mismatch": "Serve the Rust and browser runtime from the same build, then reload the page.",
-  "missing-target": "Mount the named region before submitting, and check that the binding and mounted id agree.",
-  "duplicate-target": "Give each mounted component or region a unique id.",
-  "undeclared-target": "Mount this element through Region or Component so it declares the update boundary.",
+  "missing-target": "Mount the component before submitting its form, and check that the binding and mounted id agree.",
+  "duplicate-target": "Give each mounted component a unique id.",
+  "undeclared-target": "Mount this element through Component so it declares the update boundary.",
   "remounted-target": "The response belongs to an older DOM instance. Read current server state before retrying a write.",
   "http-error": "Inspect the request in Network and correlate its X-Placebo-Request-Id with server logs.",
-  "invalid-content-type": "Return a Placebo update from this action. Check for a login/error page or an extractor rejection in the server logs; a value that does not decode, such as a malformed number for a non-Option field, is rejected before the handler runs.",
+  "invalid-content-type": "Return a Placebo reply from this action. Check for a login/error page or an extractor rejection in the server logs; a value that does not decode, such as a malformed number for a non-Option field, is rejected before the handler runs.",
+  "page-error": "Wrap the finished router with placebo::native_forms(app), which renders the page a reply belongs to. The server logged the reason as [placebo:page-error].",
+  "page-missing": "The page the form is on answered a GET with an error, often because the reply removed what it shows, such as a deleted record. A successful reply can send the person on with navigate(path). The server logged the status as [placebo:page-missing].",
+  "unmounted-target": "Mount the component on the page its form is on, in every render of that page, so the page rendered for its reply can show the reply.",
   "unadapted-route": "Register the handler with its action's adapter: .route(ACTION.path(), ACTION.route(handler)). Plain Axum routes skip payload decoding and the mutation request check.",
-  "invalid-json": "Return a complete Placebo update envelope; inspect the response in Network and the server logs.",
   "response-read-error": "Check Network and server logs for an interrupted response body. Submit the form again to retry the write safely with its idempotency key.",
   "network-error": "Check Network and server logs. The write may have committed: submit the form again to retry it safely. The retry resends the same request with its idempotency key, so the server replays its recorded reply instead of writing twice.",
   "replay-pending": "The first attempt is still running, or stopped after possibly writing. Wait and submit again, or reload to see current data.",
   "replay-unavailable": "The server's replay store failed, so nothing was saved by this attempt. Check the server logs, then submit again.",
   "replay-unknown": "The first attempt is older than the server's replay store remembers, so it may have written. Reload to see current data before submitting again. To allow later retries, keep replies longer in the ReplayStore.",
-  "redirected": "Sign in again, in another tab to keep this page's input, then resubmit. If the action's handler redirects, return a Placebo update instead.",
+  "redirected": "Sign in again, in another tab to keep this page's input, then resubmit. If the action's handler redirects, return binding.reply(...).navigate(path) instead.",
   "response-mismatch": "Build the reply from the same action and component instance as the initiating form.",
-  "invalid-update": "Check the reply operation, HTML, and patch declarations against the initiating binding.",
+  "invalid-update": "Build the reply with reply(), invalid(), or conflict() from the same binding as the form.",
   "invalid-outcome": "Use reply(), invalid(), or conflict() so HTTP status and update outcome agree.",
-  "invalid-patch": "Declare extra targets with affects() and use the operation for their type: also_replace for a VersionedRegion, also_append for a Region, item operations for a List, also_refresh for another Component.",
-  "overlapping-targets": "Use distinct update boundaries that do not contain one another. A List may contain the components and regions it moves or removes.",
-  "invalid-revision": "Mount shared snapshots with VersionedRegion::mount(revision, contents) and reply with a monotonic server revision.",
-  "duplicate-append": "Insert new instances with unique ids; inserts are not an idempotent retry mechanism. Use also_move for an item that already exists.",
   "duplicate-local": "Give each retained subtree a unique key within its component. Two forms for the same action in one component cannot both render a field of the same name.",
   "local-shape": "Keep a retained local key on the same element type, or use a new key for a fresh subtree.",
   "nested-local": "Use separate local ownership boundaries; nested local subtrees are not supported.",
   "local-component": "Mount the nested component outside the data-placebo-local subtree; a nested component keeps its own node and state already.",
   "nested-component": "Mount a nested component the same way in every render (mount or mount_dialog), so its root element keeps its type.",
-  "unstable-dialog": "Use component.mount_dialog(headingId, contents), or mount the component inside a persistent dialog. Replies must contain only the component contents.",
-  "nested-region": "Keep shared snapshot regions free of other mounted regions.",
   "invalid-feed": "Mount the feed with feed.mount() from the same build as the runtime.",
-  "missing-revision": "Give the component a revision on every mount and binding: Component::new(kind, key).revision(n), from the record the contents render.",
-  "undeclared-push": "Declare the target on the Feed with .affects(target) or .affects_kind(kind), and mount the feed from that same Feed.",
   "push-disconnected": "The browser reconnects by itself. If this repeats, check the feed's route and any proxy timeouts; Network shows the event stream.",
   "push-closed": "Register the feed's route with .route(FEED.path(), FEED.route()), check the path and that it returns text/event-stream, then reload.",
   "missing-command-target": "Give the dialog or popover the id the button names, or mount it on this page. A mount_dialog component's id is its component id, such as 'task:1'.",
@@ -241,11 +236,10 @@ const hints = {
   "behavior-setup": "Inspect the original cause and setup function. Return a cleanup function or undefined.",
   "behavior-cleanup": "Inspect the original cause and cleanup function; release only resources owned by this behavior.",
   "mutation-interrupted": "Aborting a request cannot undo a write. Read current server state before retrying.",
-  "unsupported-method": "Use a GET read binding or a POST mutation binding with its supported request policy.",
+  "unsupported-method": "Render a read form with Read::new().form(fields) and a mutation form with its binding's form(fields).",
   "cross-origin-action": "Use a same-origin action URL.",
   "cross-origin-navigation": "Navigate replies to a path on this site; link to other sites from the page instead.",
   "invalid-component": "Render the mutation form in the contents of the component it updates, not in a component nested inside it.",
-  "unstable-source": "Keep a read form outside the region its response replaces.",
   "unsupported-file": "Give the payload an Upload field and render it with Control::file(); only mutation forms send files.",
   "upload-too-large": "The runtime checks file sizes against data-placebo-max-bytes before sending; render the input with Control::file(), or raise the field's Upload<MAX_BYTES>.",
 };
@@ -262,7 +256,6 @@ function requestContext(work) {
     requestId: work?.requestId ?? null,
     method: work?.method ?? null,
     path: work?.path ?? null,
-    operation: work?.config?.operation ?? null,
     phase: work?.phase ?? null,
     status: work?.status ?? null,
     contentType: work?.contentType ?? null,
@@ -306,23 +299,19 @@ function configFor(form, work) {
   if (work && config && typeof config === "object") work.config = config;
   require(config?.version === VERSION, "version-mismatch", `Browser protocol ${VERSION} does not match form protocol ${config?.version}.`,
     { expectedVersion: VERSION, receivedVersion: config?.version ?? null });
-  require(typeof config.action === "string" && config.action.length > 0 &&
-    typeof config.target === "string" && config.target.length > 0 &&
-    ["latest", "exclusive"].includes(config.policy), "invalid-config", "Expected a named action, target, and request policy.");
-  require(config.input_delay_ms === null || (Number.isInteger(config.input_delay_ms) &&
-    config.input_delay_ms >= 0 && config.input_delay_ms <= 60000), "invalid-config", "Invalid input delay.");
-  const read = config.policy === "latest" && config.operation === "replace-children" && form.method === "get";
-  const mutation = config.policy === "exclusive" && config.operation === "refresh-component" &&
-    form.method === "post" && config.input_delay_ms === null;
-  require(read || mutation, "unsupported-method", "Expected a GET read binding or a POST component mutation binding.");
-  require(config.history === undefined || (read && config.history === true), "invalid-config", "Only a read binding can follow history.");
-  require(Array.isArray(config.effects) && config.effects.every(id => typeof id === "string" && id && id !== config.target) &&
-    new Set(config.effects).size === config.effects.length,
-    "invalid-config", "Additional targets must be declared once each.");
-  require((config.load === undefined || config.load === true) && (config.reveal === undefined || config.reveal === true) &&
-    (config.every_ms === undefined || (Number.isInteger(config.every_ms) && config.every_ms >= 500 && config.every_ms <= 86400000)) &&
-    (read || (config.load === undefined && config.reveal === undefined && config.every_ms === undefined)),
-    "invalid-config", "Only a read binding can read on load, when revealed, or on an interval.");
+  // A read form reads the page it is on; a mutation form posts to its action
+  // and answers for its component.
+  if (config.read === true) {
+    require(form.method === "get" && !form.hasAttribute("action"), "unsupported-method",
+      "A read form is a GET form without an action, so it reads the page it is on.");
+    require(config.input_delay_ms === undefined || (Number.isInteger(config.input_delay_ms) &&
+      config.input_delay_ms >= 0 && config.input_delay_ms <= 60000), "invalid-config", "Invalid input delay.");
+    require(config.reveal === undefined || config.reveal === true, "invalid-config", "Invalid reveal trigger.");
+  } else {
+    require(typeof config.action === "string" && config.action.length > 0 &&
+      typeof config.target === "string" && config.target.length > 0, "invalid-config", "Expected a read, or a named action and its component.");
+    require(form.method === "post", "unsupported-method", "A mutation form posts to its action.");
+  }
   const url = new URL(form.action, document.baseURI);
   require(url.origin === location.origin, "cross-origin-action", "Actions must use the document's origin.");
   return config;
@@ -331,9 +320,9 @@ function configFor(form, work) {
 function targetFor(id) {
   // Count all ids, including ordinary elements: getElementById alone hides duplicates.
   const matches = document.querySelectorAll(`#${CSS.escape(id)}`);
-  require(matches.length > 0, "missing-target", `Region '${id}' is not mounted.`, { relatedTarget: id });
-  require(matches.length === 1, "duplicate-target", `Region '${id}' has multiple elements with the same id.`, { relatedTarget: id });
-  require(matches[0].hasAttribute("data-placebo-region"), "undeclared-target", `Element '${id}' is not a declared region.`, { relatedTarget: id });
+  require(matches.length > 0, "missing-target", `Component '${id}' is not mounted.`, { relatedTarget: id });
+  require(matches.length === 1, "duplicate-target", `Component '${id}' has multiple elements with the same id.`, { relatedTarget: id });
+  require(matches[0].hasAttribute("data-placebo-component"), "undeclared-target", `Element '${id}' is not a mounted component.`, { relatedTarget: id });
   return matches[0];
 }
 
@@ -343,7 +332,11 @@ function finish(work) {
   pending.delete(work.target);
   if (work.previousBusy === null) work.target.removeAttribute("aria-busy");
   else work.target.setAttribute("aria-busy", work.previousBusy);
-  if (deferredPushes.has(work.target)) queueMicrotask(() => flushDeferredPush(work.target));
+  // A "load more" form watches again once its read is done.
+  if (work.method === "GET") queueMicrotask(syncTriggers);
+  // This save's own feed signal came while it was on its way, but its page
+  // did not show: read the page after all.
+  if (work.signalled && !work.shown) queueMicrotask(() => refreshPage(work.signalled));
 }
 
 function cancel(work, reason) {
@@ -371,406 +364,202 @@ function parseHTML(html) {
   return template.content;
 }
 
-function revision(value, target) {
-  require(typeof value === "string" && /^(0|[1-9]\d*)$/.test(value), "invalid-revision", "Expected a decimal server revision.",
-    { relatedTarget: target, receivedRevision: value ?? null });
-  return BigInt(value);
-}
-
-// Checks shared by every batch: replaced targets swap their children;
-// containers only add, move, or remove direct children, so they may hold the
-// replaced targets. Inserted ids must be new.
-function batch(primaryTarget = null, primaryFragment = null) {
-  const replaced = primaryTarget ? [primaryTarget] : [];
-  const containers = [];
-  const newIds = new Set();
-  let primaryIds;
-  return {
-    summary: { refreshedComponents: [], skippedComponents: [], deferredComponents: [], missingTargets: [],
-      missingItems: [], misplacedItems: [], existingItems: [], supersededItems: [], refetched: [], skippedReads: [] },
-    replace(target) {
-      require(!replaced.some(other => other === target || other.contains(target) || target.contains(other)) &&
-        !containers.some(container => target.contains(container)),
-      "overlapping-targets", "Replaced targets must be distinct and cannot contain one another or a changed list.");
-      replaced.push(target);
-    },
-    contain(target) {
-      require(!replaced.some(other => other === target || other.contains(target)),
-        "overlapping-targets", "A changed list or collection cannot be inside a replaced target.");
-      containers.push(target);
-    },
-    reserve(content) {
-      primaryIds ??= new Set(primaryFragment ? Array.from(primaryFragment.querySelectorAll("[id]"), node => node.id) : []);
-      for (const node of content.querySelectorAll("[id]")) {
-        require(node.id && !document.getElementById(node.id) && !newIds.has(node.id) && !primaryIds.has(node.id),
-          "duplicate-append", "Inserted content must have new, unique ids.");
-        newIds.add(node.id);
-      }
-    },
-  };
-}
-
-// A versioned component orders its refreshes by revision. A reply to its own
-// form applies unless older; any other refresh applies only when newer.
-function componentRevision(target, incoming, strict) {
-  const current = target.dataset.placeboRevision;
-  require(incoming != null || current == null, "missing-revision",
-    `Component '${target.id}' is mounted with a revision, so every refresh of it needs one.`, { relatedTarget: target.id });
-  if (incoming == null || current == null) return true;
-  const next = revision(incoming, target.id), shown = revision(current, target.id);
-  return strict ? next > shown : next >= shown;
-}
-
-function componentBusy(target) {
-  return pending.has(target) || Array.from(target.querySelectorAll("form")).some(form => composing.has(form));
-}
-
-// Plan one patch against the live DOM without changing it. `push` updates
-// come from a feed: a busy component defers them instead of skipping them.
-function planPatch(patch, target, context, { primaryId = null, push = false, since = null, read = false } = {}) {
-  const { summary } = context;
-  const component = target.hasAttribute("data-placebo-component");
-  const list = target.hasAttribute("data-placebo-list");
-  switch (patch.operation) {
-    case "replace-children": {
-      require(!component && !list && typeof patch.html === "string", "invalid-patch", "Snapshots replace plain versioned regions.");
-      context.replace(target);
-      const content = parseHTML(patch.html);
-      require(!target.querySelector("[data-placebo-region]") && !content.querySelector("[data-placebo-region]"),
-        "nested-region", "Shared snapshot regions cannot contain other regions.");
-      const next = revision(patch.revision, patch.target);
-      const current = revision(target.dataset.placeboRevision, patch.target);
-      if (next <= current) return { skip: { target: patch.target, revision: patch.revision,
-        currentRevision: target.dataset.placeboRevision, reason: "not-newer" } };
-      const live = pairLiveRegions(target, content);
-      return { commit() {
-        const anchor = focusAnchor(target);
-        keepLiveRegions(live);
-        target.replaceChildren(content);
-        target.dataset.placeboRevision = patch.revision;
-        restoreFocus(target, anchor);
-      } };
-    }
-    case "append-children": {
-      require(!push && !component && !list && typeof patch.html === "string" && patch.revision == null &&
-        !target.hasAttribute("data-placebo-revision"), "invalid-patch", "Append destinations must be unversioned collections.");
-      context.contain(target);
-      const content = parseHTML(patch.html);
-      context.reserve(content);
-      return { commit: () => target.append(content) };
-    }
-    case "refresh-component": {
-      require(component && patch.target !== primaryId && typeof patch.html === "string",
-        "invalid-patch", "Only another declared component can be refreshed.");
-      context.replace(target);
-      if (!componentRevision(target, patch.revision, true)) {
-        summary.skippedComponents.push({ target: patch.target, reason: "not-newer", revision: patch.revision,
-          currentRevision: target.dataset.placeboRevision });
-        return {};
-      }
-      if (componentBusy(target)) {
-        // Its own request in flight answers with its state. A pushed refresh
-        // waits for that answer and applies if it is still newer.
-        if (!push) { summary.skippedComponents.push({ target: patch.target, reason: "busy" }); return {}; }
-        const waiting = deferredPushes.get(target)?.patch;
-        if (!waiting || revision(patch.revision, patch.target) > revision(waiting.revision, patch.target)) deferredPushes.set(target, { feed: push, patch });
-        summary.deferredComponents.push(patch.target);
-        return {};
-      }
-      const prepared = prepareComponent(target, parseHTML(patch.html), "external");
-      return { commit: () => {
-        prepared.commit();
-        if (patch.revision != null) target.dataset.placeboRevision = patch.revision;
-        deferredPushes.delete(target);
-        settle(target);
-        summary.refreshedComponents.push(patch.target, ...prepared.components.refreshed);
-        summary.skippedComponents.push(...prepared.components.skipped);
-      } };
-    }
-    case "insert-item": case "move-item": case "remove-item": case "order-items": {
-      require(list, "invalid-patch", "Item updates address a mounted List.");
-      context.contain(target);
-      return planItems(target, patch, context.reserve, summary, { pushed: Boolean(push), since, read });
-    }
-    case "rerun-read": {
-      require(!push && !component && !list && !target.hasAttribute("data-placebo-revision"), "invalid-patch", "Only a read region can be fetched again.");
-      return { after() {
-        const forms = readFormsFor(patch.target);
-        if (forms.length) { summary.refetched.push(patch.target); for (const form of forms) schedule(form, false, null, "refetch"); }
-        else summary.skippedReads.push(patch.target);
-      } };
-    }
-    default:
-      throw new ProtocolError("invalid-patch", `Unknown patch operation '${patch.operation}'.`);
-  }
-}
-
-function updateFragment(work, update) {
+// A mutation's reply is its whole page, rendered again with the submitted
+// component showing the reply. The page morphs into the document, so every
+// part of it shows current data while nodes, focus, and scroll stay. What the
+// person owns is kept: edited controls, open dialogs and disclosures, and
+// components with a request of their own in flight.
+function applyPage(work, update) {
   work.phase = "validating-response";
-  require(update?.version === VERSION, "version-mismatch", `Browser protocol ${VERSION} does not match response protocol ${update?.version}.`,
-    { expectedVersion: VERSION, receivedVersion: update?.version ?? null });
-  require(update.action === work.config.action && update.target === work.config.target,
-    "response-mismatch", "The response action or target does not match the initiating action.",
-    { receivedAction: update.action, receivedTarget: update.target });
-  require(update.operation === work.config.operation && typeof update.html === "string",
-    "invalid-update", "The response operation must match the initiating binding and contain HTML.");
-  require(targetFor(update.target) === work.target, "remounted-target", "The original target instance no longer owns this response.");
-  const patches = update.patches ?? [];
-  require(Array.isArray(patches) && (work.method === "POST" || patches.every(patch => patch?.operation === "insert-item")),
-    "invalid-update", "A read reply can only insert items into lists its binding declares.");
-  require(update.navigate == null || (typeof update.navigate === "string" && work.method === "POST" && update.outcome === "applied"),
-    "invalid-update", "Only a successful mutation reply can navigate.");
-  const destination = update.navigate == null ? null : new URL(update.navigate, document.baseURI);
-  require(!destination || destination.origin === location.origin, "cross-origin-navigation", "A reply can only navigate within this site.");
-  const fragment = parseHTML(update.html);
-  const component = update.operation === "refresh-component";
-  // A newer refresh (a push, or another action's reply) may already show
-  // later state than this reply. Then only its other patches apply.
-  const newer = component && !componentRevision(work.target, update.revision, false);
-  const primary = newer ? { refreshed: [], preserved: [], components: { refreshed: [], skipped: [] }, commit() {} }
-    : component ? prepareComponent(work.target, fragment, update.outcome === "applied" ? "applied" : "rejected", work.locals)
-    : prepareRead(work.target, fragment);
-  const context = batch(work.target, fragment);
-  const { summary } = context;
-  if (newer) summary.skippedComponents.push({ target: update.target, reason: "not-newer", revision: update.revision,
-    currentRevision: work.target.dataset.placeboRevision });
-  const plans = patches.map(patch => {
-    require(patch && typeof patch.target === "string" && work.effects.has(patch.target), "invalid-patch", "Patch must address a declared additional target.");
-    const target = targetFor(patch.target);
-    require(target === work.effects.get(patch.target), "remounted-target", `Additional target '${patch.target}' was remounted during this request.`,
-      { relatedTarget: patch.target });
-    return planPatch(patch, target, context, { primaryId: work.config.target, since: work.firstSentAt ?? work.sentAt,
-      read: work.method === "GET" });
-  });
-  // Every target, fragment, and local has been checked before any live mutation.
+  const { outcome } = update;
+  require(targetFor(work.config.target) === work.target, "remounted-target", "The original target instance no longer owns this response.");
+  // A reply shows in its component alone when the server could not render
+  // its page, when its page was rendered before the one shown (which then
+  // lacks that page's writes), or when a read has since moved this page to
+  // another query. The rest of the page stays as it is.
+  const moved = update.page != null && work.pageUrl !== here();
+  const older = update.page != null && !moved && update.rendered != null && update.rendered <= shownRendered;
+  const whole = update.page != null && !moved && !older;
+  const [root, incoming] = whole ? [document.body, update.page.body]
+    : [work.target, update.page ? update.page.getElementById(work.config.target) : contentsFor(work.target, update.alone)];
+  // Every local key and component root is checked before the first change.
+  const plan = incoming ? planPage(work, root, incoming, outcome) : emptyPlan();
   work.phase = "applying";
-  primary.commit();
-  if (!newer) {
-    if (component && update.revision != null) work.target.dataset.placeboRevision = update.revision;
-    settle(work.target);
+  const anchor = focusAnchor(document.body);
+  if (incoming) morphPage(root, incoming, plan);
+  if (whole) {
+    shownRendered = Math.max(shownRendered, update.rendered ?? 0);
+    if (update.page.title && update.page.title !== document.title) document.title = update.page.title;
   }
-  summary.refreshedComponents.push(...(primary.components?.refreshed ?? []));
-  summary.skippedComponents.push(...(primary.components?.skipped ?? []));
-  if (update.outcome === "invalid" && !newer) focusInvalid(work, primary);
-  if (work.historyMode && work.historyMode !== "none") updateHistory(work);
-  for (const plan of plans) plan.commit?.();
+  restoreFocus(document.body, anchor);
+  for (const component of plan.morphed) settle(component);
   work.applied = true;
-  work.outcome = update.outcome ?? "applied";
+  work.outcome = outcome;
   work.phase = "applied";
+  // A page that shows this write, or one newer than it.
+  work.shown = whole || older || moved;
+  if (outcome === "invalid" && plan.morphed.includes(work.target)) focusInvalid(work, { preserved: plan.summary.preservedLocal });
   syncBehaviors(work);
-  const skipped = plans.filter(plan => plan.skip).map(plan => plan.skip);
-  for (const plan of plans) plan.after?.();
-  emit("applied", work, { outcome: update.outcome ?? "applied", replayed: Boolean(work.replayed), refreshedLocal: primary.refreshed, preservedLocal: primary.preserved,
-    skippedRegions: skipped.map(skip => skip.target), skippedSnapshots: skipped, ...summary,
-    navigate: destination ? destination.pathname + destination.search + destination.hash : null });
-  if (destination) location.assign(destination.href);
-}
-
-function readFormsFor(id) {
-  return Array.from(document.querySelectorAll("form[data-placebo]")).filter(form => {
-    try { const config = configFor(form); return config.target === id && config.operation === "replace-children"; }
-    catch { return false; }
-  });
-}
-
-const POSITIONS = ["start", "end", "before", "after"];
-
-// A feed's stream is the order of a list's changes. A reply shows the state
-// when its request ran, so it leaves alone an item a push has changed since
-// the request was sent (reported in `supersededItems`); the push, or the push
-// of this request's own write, has the newer state. Only the times of pushes
-// that a request still in flight might predate are kept.
-const pushedItems = new Map();
-const readItems = new WeakSet();
-function pushedSince(id, since) { return since != null && (pushedItems.get(id) ?? -Infinity) > since; }
-function recordPushed(id) {
-  pushedItems.set(id, performance.now());
-  if (pushedItems.size <= 512) return;
-  const oldest = Math.min(performance.now() - 600000, ...Array.from(pending.values(), work => work.firstSentAt ?? work.sentAt ?? Infinity));
-  for (const [item, at] of pushedItems) if (at < oldest) pushedItems.delete(item);
-}
-
-// Items are resolved when the batch is applied. A missing item or anchor is
-// skipped or placed at the end and reported, rather than rejecting a reply
-// whose write has already committed.
-function planItems(list, patch, reserve, summary, { pushed = false, since = null, read = false } = {}) {
-  const itemId = value => typeof value === "string" && value.length > 0;
-  const position = patch.position;
-  if (patch.operation === "insert-item" || patch.operation === "move-item") {
-    require(position && POSITIONS.includes(position.at) && (["start", "end"].includes(position.at) ? position.item == null : itemId(position.item)),
-      "invalid-patch", "An item position is start, end, or before/after an item.");
+  emit("applied", work, { outcome, replayed: Boolean(work.replayed), ...plan.summary, navigate: null,
+    page: whole ? "whole" : older ? "older" : moved ? "moved" : "missing" });
+  // The rest of the page shows the write once read again at its new query;
+  // the component keeps the reply it just showed.
+  if (moved) {
+    holding.add(work.target);
+    refreshPage({ source: "moved" });
   }
-  const find = id => {
-    const node = document.getElementById(id);
-    return node?.parentElement === list && node.hasAttribute("data-placebo-item") ? node : null;
-  };
-  // A reply's change to an item a push changed since its request was sent.
-  const superseded = () => {
-    if (pushed) { recordPushed(patch.item); return false; }
-    if (!pushedSince(patch.item, since)) return false;
-    summary.supersededItems.push(patch.item);
-    return true;
-  };
-  const place = (node, id) => {
-    let anchor = null;
-    if (position.at === "start") anchor = list.firstElementChild;
-    else if (position.at !== "end") {
-      const other = find(position.item);
-      if (!other) summary.misplacedItems.push(id);
-      else anchor = position.at === "before" ? other : other.nextElementSibling;
+  if (update.unmounted && outcome !== "applied") {
+    report(work, new ProtocolError("unmounted-target", `The page this form is on does not mount component '${work.config.target}', so its ${outcome} reply could not be shown. The rest of the page was updated.`),
+      "unmounted-target");
+  }
+  if (update.pageError != null) {
+    report(work, new ProtocolError("page-error", `The server could not render the page for this ${outcome} reply, so it shows in its component alone: ${update.pageError}.`), "page-error");
+  } else if (update.pageMissing != null) {
+    report(work, new ProtocolError("page-missing", `The page for this ${outcome} reply did not render, so the reply shows in its component alone and the rest of the page may be out of date: ${update.pageMissing}.`),
+      "page-missing", {}, "warning");
+  }
+}
+
+// The reply's contents in a detached copy of its component's root element.
+function contentsFor(target, html) {
+  const root = target.cloneNode(false), template = document.createElement("template");
+  template.innerHTML = html;
+  root.append(template.content);
+  return root;
+}
+const byId = (root, id) => root.querySelector(`#${CSS.escape(id)}`);
+// Saves this page sent, by request id, to recognize the feed signals they cause.
+const sent = new Map();
+// The page shown: its path and query, which every page read and reply renders.
+const here = () => location.pathname + location.search;
+// When the page shown was rendered, from its reply's X-Placebo-Rendered. The
+// loaded page is older than any reply, since the reply's request came later.
+let shownRendered = 0;
+// Components showing a reply the next page read must not replace.
+let holding = new WeakSet();
+
+// Decide what the morph keeps, without changing the document.
+function emptyPlan() {
+  return { skipped: new Set(), plans: new Map(), morphed: [],
+    summary: { refreshedLocal: [], preservedLocal: [], refreshedComponents: [], skippedComponents: [] } };
+}
+
+function planPage(work, root, incoming, outcome) {
+  const plan = emptyPlan(), { skipped, plans, morphed, summary } = plan;
+  // A read or refresh answers no component: every component takes it as a
+  // refresh from another action.
+  const target = work?.target ?? null;
+  const read = work?.method === "GET";
+  const inSkipped = node => Array.from(skipped).some(root => root.contains(node));
+  // A component with its own request in flight keeps its contents: its own
+  // reply carries its state.
+  for (const old of root.querySelectorAll("[data-placebo-component]")) {
+    if (holding.has(old) && !work?.method) {
+      skipped.add(old);
+      summary.skippedComponents.push({ target: old.id, reason: "reply" });
+      continue;
     }
-    if (anchor !== node) moveInto(list, node, anchor);
-  };
-  switch (patch.operation) {
-    case "insert-item": {
-      require(itemId(patch.item) && typeof patch.html === "string", "invalid-patch", "An inserted item needs an id and HTML.");
-      const content = parseHTML(patch.html);
-      const node = content.firstElementChild;
-      require(content.childElementCount === 1 && node.id === patch.item && node.hasAttribute("data-placebo-item") &&
-        !Array.from(content.childNodes).some(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim()),
-        "invalid-patch", "Inserted content must be exactly the mounted item.");
-      // The same insert can arrive twice, from a reply and a push. The item
-      // already in the list keeps its node and is reported.
-      const existing = Boolean(find(patch.item));
-      if (!existing) reserve(content);
-      return { commit() {
-        if (superseded()) return;
-        if (find(patch.item)) summary.existingItems.push(patch.item);
-        else {
-          place(node, patch.item);
-          if (read) readItems.add(node);
+    if (!pending.has(old) || (!read && (old === target || old.contains(target)))) continue;
+    skipped.add(old);
+    summary.skippedComponents.push({ target: old.id, reason: "busy" });
+  }
+  // Local units, per component and outside all components, by the rules of a
+  // reply: the reply's own component by its outcome, every other one as a
+  // refresh from another action (edited controls stay). A read form's own
+  // controls are the read's, as a component's are its reply's.
+  const scopes = [[root, incoming, root === target ? root : null]];
+  if (root === target) morphed.push(root);
+  for (const old of root.querySelectorAll("[data-placebo-component]")) {
+    const next = byId(incoming, old.id);
+    if (inSkipped(old) || !next?.hasAttribute("data-placebo-component")) continue;
+    require(old.localName === next.localName, "nested-component",
+      `Component '${old.id}' changed its root element from <${old.localName}> to <${next.localName}>.`, { relatedTarget: old.id });
+    scopes.push([old, next, old]);
+    morphed.push(old);
+    if (old !== target) summary.refreshedComponents.push(old.id);
+  }
+  for (const [oldRoot, newRoot, component] of scopes) {
+    const own = component !== null && component === target;
+    const current = locals(oldRoot);
+    for (const [key, next] of locals(newRoot)) {
+      const old = current.get(key);
+      if (!old || inSkipped(old)) continue;
+      require(old.tagName === next.tagName, "local-shape", `Local key '${key}' changed element type.`);
+      const controls = controlsOf(old);
+      const snapshot = work?.locals?.get(key);
+      const mine = own || (read && snapshot?.node === old);
+      const unchanged = !mine || (snapshot?.node === old && snapshot.edit === (edits.get(old) ?? 0) && snapshot.values === localValues(old));
+      const edited = controls.some(changedFromDefault);
+      const take = controls.length > 0 && unchanged && (!edited || (mine && outcome === "applied" && snapshot.submitted));
+      plans.set(old, { keep: !take, next });
+      if (!own) continue;
+      if (take) summary.refreshedLocal.push(key);
+      else if (controls.length) summary.preservedLocal.push({ key, reason: unchanged ? "unsaved-edits" : "edited-since-submission" });
+    }
+  }
+  return plan;
+}
+
+function morphPage(root, incoming, plan) {
+  // A kept or refreshed local unit must meet its own incoming counterpart,
+  // even if it moved, so each pair shares an id while the morph runs. It
+  // ends with the id it shows: its own if kept, the reply's if refreshed.
+  const paired = [];
+  for (const [old, { keep, next }] of plan.plans) {
+    if (old.id && old.id === next.id) continue;
+    paired.push([old, keep ? old.id : next.id]);
+    old.id = next.id = `placebo-pair-${paired.length}`;
+  }
+  // A feed's element keeps the subscription it has.
+  const clientOwned = (name, element) =>
+    (name === "open" && (element.localName === "dialog" || element.localName === "details")) ||
+    name === "data-placebo-stale" || name === "data-placebo-feed" || (name === "aria-busy" && pending.has(element));
+  try {
+    // The children, not the parent: idiomorph would morph a parent that has
+    // one of its own (a parsed <body>) in as a single child.
+    Idiomorph.morph(root, Array.from(incoming.childNodes), { morphStyle: "innerHTML", restoreFocus: true, callbacks: {
+      beforeNodeMorphed(old, next) {
+        if (old.nodeType !== Node.ELEMENT_NODE) return true;
+        if (plan.skipped.has(old)) return false;
+        const local = plan.plans.get(old);
+        // Any other control the person changed keeps its value too, such as a
+        // note in a plain textarea.
+        const unit = local ? null : localUnit(old);
+        const edited = !local && old.matches("input,textarea,select") && !(unit && plan.plans.has(unit)) && changedFromDefault(old);
+        if (!local?.keep && !edited) {
+          // Idiomorph leaves a file input's files; a unit taking the reply starts empty.
+          if (local) for (const control of controlsOf(old)) if (control.type === "file") control.value = "";
+          return true;
         }
-      } };
-    }
-    case "move-item":
-      require(itemId(patch.item), "invalid-patch", "A moved item needs an id.");
-      return { commit() {
-        if (superseded()) return;
-        const node = find(patch.item);
-        if (node) place(node, patch.item);
-        else summary.missingItems.push(patch.item);
-      } };
-    case "remove-item": {
-      require(itemId(patch.item), "invalid-patch", "A removed item needs an id.");
-      // Earlier parts of the batch may replace the focused element first.
-      const hadFocus = Boolean(find(patch.item)?.contains(document.activeElement));
-      return { commit() {
-        if (superseded()) return;
-        const node = find(patch.item);
-        if (node) removeItem(node, hadFocus);
-        else summary.missingItems.push(patch.item);
-      } };
-    }
-    case "order-items":
-      require(Array.isArray(patch.items) && patch.items.every(itemId) && new Set(patch.items).size === patch.items.length,
-        "invalid-patch", "An item order lists unique item ids.");
-      return { commit() {
-        // Listed items first, in order; items the server did not list keep
-        // their relative order after them.
-        let anchor = list.firstElementChild;
-        for (const id of patch.items) {
-          const node = find(id);
-          if (!node) { summary.missingItems.push(id); continue; }
-          if (node === anchor) anchor = anchor.nextElementSibling;
-          else moveInto(list, node, anchor);
+        // A kept control still takes the reply's validation state.
+        const source = local?.next ?? next;
+        for (const name of SYNCED) {
+          if (source.hasAttribute(name)) old.setAttribute(name, source.getAttribute(name));
+          else old.removeAttribute(name);
         }
-      } };
-  }
-}
-
-// moveBefore keeps focus, open dialogs, and iframes. insertBefore detaches the
-// node first, so restore focus, and the modality of an open modal dialog.
-function moveInto(parent, node, before) {
-  const focused = node.contains(document.activeElement) ? document.activeElement : null;
-  const selection = focused && typeof focused.selectionStart === "number"
-    ? [focused.selectionStart, focused.selectionEnd, focused.selectionDirection] : null;
-  let moved = false;
-  if (typeof parent.moveBefore === "function" && parent.isConnected && node.isConnected) {
-    try { parent.moveBefore(node, before); moved = true; } catch { /* Fall back below. */ }
-  }
-  if (!moved) {
-    const modal = [node, ...node.querySelectorAll("dialog")].filter(dialog => dialog.matches("dialog:modal"));
-    parent.insertBefore(node, before);
-    // Removing the attribute and showing it again fires no close event.
-    for (const dialog of modal) { dialog.removeAttribute("open"); dialog.showModal(); }
-  }
-  // Some engines' moveBefore keeps the dialog but not focus.
-  if (focused?.isConnected && document.activeElement !== focused) {
-    focused.focus({ preventScroll: true });
-    if (selection) focused.setSelectionRange(...selection);
-  }
-}
-
-// A details element's open state and an open popover are the person's, like
-// a draft: a refresh keeps them for the element with the same id. A component
-// refresh covers its own; a read replaces everything in its region, nested
-// components included, so it covers them all.
-function keepDisclosures(root, owned = node => ownedBy(node, root)) {
-  const states = [];
-  for (const node of root.querySelectorAll("details[id],[popover][id]")) {
-    if (!owned(node)) continue;
-    states.push([node.id, node.localName === "details" ? node.open : null, node.matches(":popover-open")]);
-  }
-  return () => {
-    for (const [id, open, shown] of states) {
-      const node = root.querySelector(`#${CSS.escape(id)}`);
-      if (!node || !owned(node)) continue;
-      if (open !== null && node.localName === "details") node.open = open;
-      if (node.hasAttribute("popover") && node.matches(":popover-open") !== shown) {
-        try { shown ? node.showPopover() : node.hidePopover(); } catch { /* A disconnected or invalid popover. */ }
-      }
+        return false;
+      },
+      beforeAttributeUpdated: (name, element) => !clientOwned(name, element),
+    } });
+  } finally {
+    for (const [old, id] of paired) {
+      if (id) old.id = id;
+      else old.removeAttribute("id");
     }
-  };
-}
-
-// Put the incoming contents into the target, with each kept node in place of
-// its incoming counterpart. The incoming contents are connected first, so a
-// kept node moves instead of leaving the document: focus and a modal dialog
-// inside it stay where moveBefore is supported, and are restored elsewhere.
-function graft(target, fragment, kept) {
-  const previous = Array.from(target.childNodes);
-  target.append(fragment);
-  const keptNodes = new Set();
-  for (const [old, next] of kept) {
-    moveInto(next.parentNode, old, next);
-    next.remove();
-    keptNodes.add(old);
   }
-  for (const node of previous) if (node.parentNode === target && !keptNodes.has(node)) node.remove();
 }
 
 const FOCUSABLE = "a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex='-1'])";
 
-// Keep keyboard users in the list: focus moves to a neighbouring item.
-function removeItem(node, hadFocus) {
-  const active = document.activeElement;
-  hadFocus = node.contains(active) || (hadFocus && (!active || active === document.body));
-  const neighbours = [node.nextElementSibling, node.previousElementSibling];
-  node.remove();
-  if (!hadFocus) return;
-  for (const item of neighbours) {
-    const next = item?.matches(FOCUSABLE) ? item : item?.querySelector(FOCUSABLE);
-    if (next) { next.focus({ preventScroll: true }); return; }
-  }
-}
-
 // A node belongs to its nearest component. Nested components own their own
-// contents: a refresh of the outer one refreshes each inner one separately.
-function owner(root) { return root.nodeType === Node.ELEMENT_NODE ? root : null; }
+// contents: the page's morph plans each one separately.
 function ownedBy(node, root) {
   const component = node.closest("[data-placebo-component]");
   return root.nodeType === Node.ELEMENT_NODE && root.hasAttribute("data-placebo-component")
     ? component === root : !component || !root.contains(component);
 }
-function childComponents(root) {
-  return new Map(Array.from(root.querySelectorAll("[data-placebo-component]"))
-    .filter(child => (child.parentElement?.closest("[data-placebo-component]") ?? null) === owner(root))
-    .map(child => [child.id, child]));
-}
 
 function locals(root) {
-  require(!Array.from(root.querySelectorAll("dialog")).some(dialog => ownedBy(dialog, root)), "unstable-dialog",
-    "A dialog inside replaceable component contents would lose its native state and listeners.");
   const found = new Map();
   for (const element of root.querySelectorAll("[data-placebo-local],[data-placebo-field]")) {
     if (!ownedBy(element, root)) continue;
@@ -792,7 +581,15 @@ function locals(root) {
 // Fields are keyed by their form's action, so forms for different actions in
 // one component can reuse a field name.
 function fieldKey(element) {
-  const action = element.closest("form")?.getAttribute("action");
+  const form = element.closest("form");
+  const action = form?.getAttribute("action");
+  if (form && action == null) {
+    // Read forms have no action: they are told apart by their order in their
+    // component or page.
+    const scope = form.parentElement?.closest("[data-placebo-component]") ?? form.getRootNode();
+    const reads = Array.from(scope.querySelectorAll("form:not([action])"));
+    return `read-${reads.indexOf(form)}#${element.dataset.placeboField}`;
+  }
   return `${action == null ? "" : new URL(action, document.baseURI).pathname}#${element.dataset.placeboField}`;
 }
 
@@ -832,144 +629,9 @@ function snapshotLocals(target, form) {
 // Validation state follows the server even when the edited control is kept.
 const SYNCED = ["aria-invalid", "aria-describedby", "aria-errormessage", "disabled", "readonly", "required"];
 
-// A local with edits the server has not accepted keeps its node. Every other
-// local takes the incoming markup: after a successful save, the edits it just
-// submitted; on any reply, locals nobody changed, so they show current state.
-// Locals without form controls are always kept.
-function prepareComponent(target, fragment, mode, snapshots = null) {
-  const current = locals(target);
-  const incoming = locals(fragment);
-  const plans = new Map();
-  const refreshed = [], preserved = [];
-  // Validate the entire match before touching the live DOM.
-  for (const [key, next] of incoming) {
-    const old = current.get(key);
-    if (!old) continue;
-    require(old.tagName === next.tagName, "local-shape", `Local key '${key}' changed element type.`);
-    const controls = controlsOf(old);
-    const snapshot = snapshots?.get(key);
-    const unchanged = !snapshots || (snapshot?.node === old && snapshot.edit === (edits.get(old) ?? 0) && snapshot.values === localValues(old));
-    const edited = controls.some(changedFromDefault);
-    if (controls.length && unchanged && (!edited || (mode === "applied" && snapshot.submitted))) {
-      refreshed.push(key);
-      plans.set(key, !edited && old.outerHTML === next.outerHTML ? "same" : "take");
-    } else {
-      plans.set(key, "keep");
-      if (controls.length) preserved.push({ key, reason: unchanged ? "unsaved-edits" : "edited-since-submission" });
-    }
-  }
-  // A nested component keeps its node. It takes its incoming contents by the
-  // rule for a refresh from another action (edited controls stay), unless it
-  // has its own request in flight, whose reply carries its state.
-  const children = [], components = { refreshed: [], skipped: [] };
-  const currentChildren = childComponents(target);
-  for (const [id, next] of childComponents(fragment)) {
-    const old = currentChildren.get(id);
-    if (!old) continue;
-    require(old.localName === next.localName, "nested-component",
-      `Nested component '${id}' changed its root element from <${old.localName}> to <${next.localName}>.`, { relatedTarget: id });
-    if (pending.has(old)) {
-      components.skipped.push({ target: id, reason: "busy" });
-      children.push({ old, next });
-      continue;
-    }
-    // A versioned nested component takes only contents at least as new as
-    // its own: a push or reply may already show later state.
-    const nextRevision = next.dataset.placeboRevision;
-    if (!componentRevision(old, nextRevision, false)) {
-      components.skipped.push({ target: id, reason: "not-newer", revision: nextRevision, currentRevision: old.dataset.placeboRevision });
-      children.push({ old, next });
-      continue;
-    }
-    const contents = document.createDocumentFragment();
-    contents.append(...next.childNodes);
-    const plan = prepareComponent(old, contents, "external");
-    plan.revision = nextRevision;
-    components.refreshed.push(id, ...plan.components.refreshed);
-    components.skipped.push(...plan.components.skipped);
-    children.push({ old, next, plan });
-  }
-  const live = pairLiveRegions(target, fragment);
-  return { refreshed, preserved, components, commit() {
-    const focused = document.activeElement;
-    const anchor = focusAnchor(target);
-    const kept = [];
-    for (const [key, next] of incoming) {
-      const old = current.get(key);
-      const plan = plans.get(key);
-      if (plan === "keep") {
-        for (const name of SYNCED) {
-          if (next.hasAttribute(name)) old.setAttribute(name, next.getAttribute(name));
-          else old.removeAttribute(name);
-        }
-      }
-      if (plan === "keep" || plan === "same") kept.push([old, next]);
-    }
-    for (const { old, next, plan } of children) {
-      if (plan) {
-        plan.commit();
-        if (plan.revision != null) old.dataset.placeboRevision = plan.revision;
-        settle(old);
-      }
-      kept.push([old, next]);
-    }
-    const disclosures = keepDisclosures(target);
-    keepLiveRegions(live);
-    graft(target, fragment, kept);
-    disclosures();
-    if (!(focused?.isConnected && target.contains(focused))) restoreFocus(target, anchor);
-  } };
-}
-
-function prepareRead(target, fragment) {
-  const live = pairLiveRegions(target, fragment);
-  return { refreshed: [], preserved: [], commit() {
-    const anchor = focusAnchor(target);
-    const disclosures = keepDisclosures(target, () => true);
-    keepLiveRegions(live);
-    target.replaceChildren(fragment);
-    disclosures();
-    restoreFocus(target, anchor);
-  } };
-}
-
-const LIVE = "[aria-live],[role=status],[role=alert],[role=log],output";
-
-// Screen readers announce changes to a live region they already know, not a
-// newly inserted one. Each incoming live region therefore reuses the mounted
-// node it replaces, matched by id or else by order, and takes its contents.
-function pairLiveRegions(root, fragment) {
-  const outermost = scope => Array.from(scope.querySelectorAll(LIVE)).filter(node => {
-    const outer = node.parentElement?.closest(LIVE);
-    return !(outer && scope.contains(outer)) && ownedBy(node, scope) && !node.closest("[data-placebo-local],[data-placebo-field]") &&
-      !node.querySelector("[data-placebo-local],[data-placebo-field],[data-placebo-region]");
-  });
-  const current = outermost(root), incoming = outermost(fragment);
-  const pairs = [];
-  const used = new Set();
-  for (const next of incoming.filter(node => node.id)) {
-    const old = current.find(node => node.id === next.id && node.localName === next.localName);
-    if (old) { pairs.push([old, next]); used.add(old); }
-  }
-  const unnamedOld = current.filter(node => !node.id && !used.has(node));
-  incoming.filter(node => !node.id).forEach((next, i) => {
-    const old = unnamedOld[i];
-    if (old?.localName === next.localName) pairs.push([old, next]);
-  });
-  return pairs;
-}
-
-function keepLiveRegions(pairs) {
-  for (const [old, next] of pairs) {
-    for (const { name } of Array.from(old.attributes)) if (!next.hasAttribute(name)) old.removeAttribute(name);
-    for (const { name, value } of Array.from(next.attributes)) old.setAttribute(name, value);
-    old.replaceChildren(...next.childNodes);
-    next.replaceWith(old);
-  }
-}
-
 function focusable(node) {
-  return node.matches(FOCUSABLE) && !node.closest("[inert],[hidden]");
+  // Also not inside a closed dialog or details, which show nothing to focus.
+  return node.matches(FOCUSABLE) && !node.closest("[inert],[hidden]") && (node.checkVisibility?.() ?? true);
 }
 
 // Remember what had focus inside a subtree about to be replaced, such as the
@@ -1004,56 +666,18 @@ function focusInvalid(work, primary) {
   if (control && control !== active) control.focus({ preventScroll: true });
 }
 
-// Each distinct query gets its own entry, except that successive keystrokes
-// in one text field replace the entry their first keystroke created.
-let lastEntry = null;
-function updateHistory(work) {
-  const url = new URL(location.href);
-  url.search = work.url.search;
-  if (url.href === location.href) return;
-  const trigger = work.historyTrigger;
-  const typing = trigger && (trigger instanceof HTMLTextAreaElement ||
-    (trigger instanceof HTMLInputElement && !["checkbox", "radio"].includes(trigger.type)));
-  if (typing && lastEntry?.trigger === trigger && lastEntry.url === location.href) history.replaceState(history.state, "", url);
-  else history.pushState(history.state, "", url);
-  lastEntry = { trigger: typing ? trigger : null, url: url.href };
-}
-
-// Back and Forward put the entry's query into each history-bound read form,
-// then read again without adding another entry.
-function onPopState() {
-  lastEntry = null;
-  const params = new URLSearchParams(location.search);
-  for (const form of document.querySelectorAll("form[data-placebo]")) {
-    let config;
-    try { config = configFor(form); } catch { continue; }
-    if (config.operation !== "replace-children" || !config.history) continue;
-    for (const control of form.elements) {
-      if (!control.name || control.type === "hidden" || control.type === "file") continue;
-      const values = params.getAll(control.name);
-      const present = params.has(control.name);
-      if (control instanceof HTMLSelectElement) {
-        for (const option of control.options) option.selected = present ? values.includes(option.value) : option.defaultSelected;
-      } else if (control.type === "checkbox" || control.type === "radio") {
-        control.checked = present ? values.includes(control.value) : control.defaultChecked;
-      } else if ("value" in control) control.value = present ? values[0] : control.defaultValue;
-    }
-    schedule(form, false, null, "history");
-  }
-}
-
+// Every reply is a page (or a component's part of one), so it waits for any
+// active IME composition to end.
 function applyOrDefer(work, update) {
-  const refreshed = [work.target, ...(Array.isArray(update?.patches) ? update.patches : [])
-    .filter(patch => patch?.operation === "refresh-component").map(patch => work.effects.get(patch.target)).filter(Boolean)];
-  if (work.config.operation === "refresh-component" &&
-      refreshed.some(target => Array.from(target.querySelectorAll("form")).some(form => composing.has(form)))) {
+  if (Array.from(document.forms).some(form => composing.has(form))) {
     work.deferred = update;
     work.phase = "deferred";
     emit("deferred", work, { reason: "composing" });
     return;
   }
   work.deferred = null;
-  updateFragment(work, update);
+  if (work.method === "GET") showPage(work, update.page, update.rendered, work.pageUrl, { source: work.source });
+  else applyPage(work, update);
 }
 
 async function send(work) {
@@ -1061,16 +685,30 @@ async function send(work) {
   work.phase = "request";
   work.sent = true;
   work.sentAt = performance.now();
+  const mutation = work.method === "POST";
+  // A mutation is answered with the page it was submitted from. A read puts
+  // its query in the address as it goes, so replies and refreshes from now on
+  // render the page at that query.
+  if (mutation) {
+    work.pageUrl = here();
+    sent.set(work.requestId, work);
+    if (sent.size > 64) sent.delete(sent.keys().next().value);
+  } else {
+    work.pageUrl = work.url.pathname + work.url.search;
+    if (work.pageUrl !== here()) history.replaceState(history.state, "", work.url);
+  }
   emit("request", work);
   try {
     const response = await fetch(work.url, {
       method: work.method,
-      headers: { Accept: UPDATE_TYPE, "X-Placebo-Request-Id": work.requestId,
-        ...(work.method === "POST" ? { "X-Placebo-Request": String(VERSION) } : {}),
+      headers: { Accept: "text/html", "X-Placebo-Request-Id": work.requestId,
+        ...(mutation ? { "X-Placebo-Request": String(VERSION), "X-Placebo-Page": work.pageUrl } : { "X-Placebo-Refresh": String(VERSION) }),
         // The server runs a retry only if it would still remember the first attempt.
         ...(work.retryOf ? { "X-Placebo-Retry": String(Math.ceil(work.sentAt - work.firstSentAt)) } : {}) },
       body: work.body,
       credentials: "same-origin",
+      // A page read must not come from the HTTP cache.
+      cache: "no-store",
       // "error" would report a login redirect as a network failure. A manual
       // redirect is opaque: its status and location are not exposed.
       redirect: "manual",
@@ -1085,9 +723,10 @@ async function send(work) {
     if (!isCurrent(work)) return;
     require(!redirected, "redirected", "The server redirected this action instead of answering it, often to a login page after a session expired.");
     const adapter = response.headers.get("x-placebo-action");
-    // An update without the adapter's marker came from a plain Axum route. Other
-    // unmarked responses (proxy errors, login pages) keep their HTTP diagnostics.
-    require(adapter === work.config.action || (adapter === null && work.contentType !== UPDATE_TYPE),
+    // A successful answer to a mutation without the adapter's marker came from
+    // a plain Axum route. Other unmarked responses (proxy errors, login pages)
+    // keep their HTTP diagnostics. A read is answered by its page's route.
+    if (mutation) require(adapter === work.config.action || (adapter === null && !response.ok),
       "unadapted-route", adapter === null
         ? `Action '${work.config.action}' responded without its typed route adapter.`
         : `Action '${work.config.action}' was answered by the adapter for '${adapter}'.`,
@@ -1102,24 +741,41 @@ async function send(work) {
       work.notSaved = true;
       throw new ProtocolError("upload-too-large", `The server refused a file over its field's limit of ${response.headers.get("x-placebo-upload-limit") ?? "?"} bytes before the handler ran. Nothing was saved.`);
     }
+    const outcome = response.headers.get("x-placebo-outcome");
     const expectedOutcome = response.ok ? "applied" : response.status === 422 ? "invalid" : response.status === 409 ? "conflict" : null;
-    require(response.ok || (work.method === "POST" && expectedOutcome), "http-error", `Action returned HTTP ${response.status}.`);
-    require(work.contentType === UPDATE_TYPE,
-      "invalid-content-type", `Expected '${UPDATE_TYPE}'; received '${work.contentType ?? "no content type"}'.`);
-    // Read and parse separately: engines disagree on the error response.json()
-    // throws for malformed JSON (WebKit does not throw a SyntaxError).
+    require(response.ok || (mutation && expectedOutcome), "http-error", `Action returned HTTP ${response.status}.`);
+    require(work.contentType === "text/html",
+      "invalid-content-type", `Expected 'text/html'; received '${work.contentType ?? "no content type"}'.`);
+    if (mutation) require(outcome === expectedOutcome, "invalid-outcome", "Response status and reply outcome disagree.");
+    const navigate = mutation ? response.headers.get("x-placebo-navigate") : null;
+    if (navigate !== null) {
+      require(outcome === "applied", "invalid-update", "Only a successful mutation reply can navigate.");
+      const destination = new URL(navigate, document.baseURI);
+      require(destination.origin === location.origin, "cross-origin-navigation", "A reply can only navigate within this site.");
+      if (!isCurrent(work)) return;
+      work.applied = true;
+      work.outcome = outcome;
+      work.phase = "applied";
+      work.shown = true;
+      settle(work.target);
+      emit("applied", work, { outcome, replayed: Boolean(work.replayed), ...emptyPlan().summary,
+        navigate: destination.pathname + destination.search + destination.hash });
+      location.assign(destination.href);
+      return;
+    }
     let body, update;
     try { body = await response.text(); }
     catch (error) {
       throw new ProtocolError("response-read-error", "Could not finish reading the update response body.", {}, error);
     }
-    // JSON parser messages can contain response-body snippets; omit those.
-    try { update = JSON.parse(body); }
-    catch { throw new ProtocolError("invalid-json", "The update response is not valid JSON (body omitted)."); }
+    const rendered = renderedAt(response);
+    const pageError = response.headers.get("x-placebo-page-error"), pageMissing = response.headers.get("x-placebo-page-missing");
+    if (mutation && (pageError !== null || pageMissing !== null)) update = { alone: body, outcome, pageError, pageMissing };
+    else update = { page: new DOMParser().parseFromString(body, "text/html"), outcome, rendered,
+      unmounted: response.headers.get("x-placebo-unmounted") !== null };
     // Cancellation is an optimization. This check also protects against a
     // transport that delivers an older response despite cancellation.
     if (!isCurrent(work)) return;
-    if (work.method === "POST") require(update.outcome === expectedOutcome, "invalid-outcome", "Response status and update outcome disagree.");
     applyOrDefer(work, update);
   } catch (error) {
     if (work.controller.signal.aborted || !isCurrent(work)) return;
@@ -1154,52 +810,40 @@ function attempt(form) {
     requestId: crypto.randomUUID?.() ?? `p-${Date.now().toString(36)}-${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}` };
 }
 
-function schedule(form, input, submitter = null, source = "user", trigger = null) {
+function schedule(form, input, submitter = null, source = "user") {
   let work;
   try {
     work = attempt(form);
     const config = configFor(form, work);
-    if (input && config.input_delay_ms === null) return;
-    const target = targetFor(config.target);
-    const effects = new Map(config.effects.map(id => [id, targetFor(id)]));
-    // A reply's targets cannot contain one another. Refuse before sending, so
-    // no write happens that the reply could not show.
-    // A List may contain what it moves or removes.
-    const regions = [target, ...effects.values()];
-    const overlaps = (outer, inner) => outer !== inner && outer.contains(inner) && !outer.hasAttribute("data-placebo-list");
-    for (const [id, effect] of effects) {
-      const other = regions.find(region => overlaps(region, effect) || overlaps(effect, region));
-      require(!other, "overlapping-targets", other === target
-        ? `'${id}' ${effect.contains(target) ? "contains" : "is inside"} this form's target '${target.id}', which the reply already refreshes.`
-        : `Declared targets '${id}' and '${other?.id}' overlap.`, { relatedTarget: id });
-    }
+    if (input && config.input_delay_ms == null) return;
+    // A read belongs to its form; a mutation to its component.
+    const read = config.read === true;
+    const target = read ? form : targetFor(config.target);
     const previous = pending.get(target);
-    if (previous?.config.policy === "exclusive") {
+    if (previous && !read) {
       emit("ignored", work, { reason: "busy", activeRequestId: previous.requestId });
       return;
     }
-    if (config.operation === "refresh-component") {
+    if (!read) {
       const nearest = form.closest("[data-placebo-component]");
       require(target.hasAttribute("data-placebo-component") && nearest === target, "invalid-component", nearest && target.contains(nearest)
         ? `This form is inside nested component '${nearest.id}' but targets '${target.id}'. A form belongs to its nearest component.`
         : "A mutation form must belong to its target component.", { relatedTarget: nearest?.id ?? null });
-    } else require(!target.contains(form) || (triggeredBy(config) && config.input_delay_ms === null), "unstable-source",
-      "Place persistent read forms outside their replacement region.");
+    }
     const url = new URL(form.action, document.baseURI);
-    const method = form.method.toUpperCase();
     // Submitting a form whose last attempt has an unknown outcome retries that
     // attempt exactly, so the server can replay it instead of writing twice.
-    const retry = method === "POST" ? uncertain.get(target) : null;
+    const retry = read ? null : uncertain.get(target);
     let body, localSnapshots;
     if (retry?.form === form) {
       body = retry.body;
       localSnapshots = retry.locals;
     } else {
       const data = new FormData(form, submitter);
-      // Each new submission gets its own key. Markup rendered once for many
-      // pages, such as a pushed update, carries the same key everywhere.
-      if (method === "POST" && data.has(KEY_FIELD)) data.set(KEY_FIELD, freshKey());
-      if (method === "POST" && form.enctype === "multipart/form-data") {
+      // Each new submission gets its own key, even from markup a cache or
+      // another page served with the same one.
+      if (!read && data.has(KEY_FIELD)) data.set(KEY_FIELD, freshKey());
+      if (!read && form.enctype === "multipart/form-data") {
         if (!checkUploads(form, work)) return;
         body = data;
       } else {
@@ -1208,26 +852,33 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
           require(typeof value === "string", "unsupported-file", "Files need a mutation form whose payload has an Upload field.");
           fields.append(name, value);
         }
-        if (method === "GET") url.search = fields.toString();
+        if (read) url.search = fields.toString();
         else body = fields;
       }
-      localSnapshots = config.operation === "refresh-component" ? snapshotLocals(target, form) : new Map();
+      localSnapshots = read ? readSnapshot(form) : snapshotLocals(target, form);
     }
-    if (previous) cancel(previous, "superseded");
-    work = { ...work, config, form, target, effects, locals: localSnapshots, url, method, phase: "scheduled",
-      body, controller: new AbortController(),
+    // The newest read on the page wins: one still waiting or in flight is dropped.
+    if (read) for (const other of Array.from(pending.values())) if (other.method === "GET") cancel(other, "superseded");
+    work = { ...work, config, form, target, locals: localSnapshots, url, method: read ? "GET" : "POST", phase: "scheduled",
+      body, controller: new AbortController(), source,
       ...(retry?.form === form ? { retryOf: retry.requestId, firstSentAt: retry.firstSentAt } : {}),
-      previousBusy: target.getAttribute("aria-busy"), timer: null,
-      historyMode: config.history && source === "user" ? "update" : "none", historyTrigger: input ? trigger : null };
+      previousBusy: target.getAttribute("aria-busy"), timer: null };
     pending.set(target, work);
     target.setAttribute("aria-busy", "true");
     emit("scheduled", work, retry?.form === form
       ? { source, retry: true, retryOf: retry.requestId, reason: `retrying request ${retry.requestId} unchanged, with its idempotency key` }
-      : { source, ...(["load", "reveal", "interval"].includes(source) ? { reason: `read on ${source}` } : {}) });
+      : { source, ...(source === "reveal" ? { reason: "read on reveal" } : {}) });
     work.timer = setTimeout(() => send(work), input ? config.input_delay_ms : 0);
   } catch (error) {
     report(work, error, "invalid-action");
   }
+}
+
+// A read form's own controls, which take the page's values unless they
+// change while the read is on its way.
+function readSnapshot(form) {
+  const scope = form.closest("[data-placebo-component]") ?? document.body;
+  return new Map(Array.from(snapshotLocals(scope, form)).filter(([, snapshot]) => form.contains(snapshot.node)));
 }
 
 function freshKey() {
@@ -1273,7 +924,7 @@ function onInput(event) {
   markEdited(event);
   if (event.isComposing) return;
   const form = event.target.form;
-  if (form?.hasAttribute("data-placebo") && !composing.has(form)) schedule(form, true, null, "user", event.target);
+  if (form?.hasAttribute("data-placebo") && !composing.has(form)) schedule(form, true);
 }
 
 function markEdited(event) {
@@ -1290,25 +941,20 @@ function onCompositionStart(event) {
   composing.add(form);
   // Invalidate the previous search while an IME is assembling new text,
   // without submitting intermediate characters to the server.
-  let work;
-  try {
-    work = attempt(form);
-    const config = configFor(form, work);
-    if (config.input_delay_ms === null) return;
-    const previous = pending.get(targetFor(config.target));
-    if (previous) cancel(previous, "composing");
-  } catch (error) {
-    report(work, error, "invalid-action");
-  }
+  const previous = pending.get(form);
+  if (previous?.method === "GET" && previous.config.input_delay_ms != null) cancel(previous, "composing");
 }
 
 function onCompositionEnd(event) {
   const form = event.target.form;
   if (!form || !composing.has(form)) return;
   composing.delete(form);
-  schedule(form, true, null, "user", event.target);
-  const component = form.closest("[data-placebo-component]");
-  if (component && deferredPushes.has(component)) queueMicrotask(() => flushDeferredPush(component));
+  schedule(form, true);
+  if (refreshAfterComposing && !Array.from(document.forms).some(other => composing.has(other))) {
+    const extra = refreshAfterComposing;
+    refreshAfterComposing = null;
+    queueMicrotask(() => refreshPage(extra));
+  }
   for (const work of pending.values()) {
     if (!work.deferred || !isCurrent(work)) continue;
     try { applyOrDefer(work, work.deferred); }
@@ -1322,15 +968,11 @@ function onCompositionEnd(event) {
   }
 }
 
-// Server push. A mounted feed element subscribes the page to its feed's
-// updates, which use the same patches as replies and the same ordering by
-// revision. The subscription lives as long as the element.
+// Server push. A mounted feed element subscribes the page to its feed, whose
+// signal means "what this page shows has changed". The subscription lives as
+// long as the element.
 const feeds = new Map();
 let unloading = false;
-
-function declaredByFeed(config, id) {
-  return config.targets.includes(id) || config.kinds.includes(id.split(":")[0]) && id.includes(":");
-}
 
 function syncFeeds() {
   for (const [element, feed] of feeds) {
@@ -1355,8 +997,7 @@ function openFeed(element) {
     catch { throw new ProtocolError("invalid-feed", "The feed configuration is not valid JSON."); }
     require(config?.version === VERSION, "version-mismatch", `Browser protocol ${VERSION} does not match feed protocol ${config?.version}.`,
       { expectedVersion: VERSION, receivedVersion: config?.version ?? null });
-    require(typeof config.feed === "string" && typeof config.url === "string" && Array.isArray(config.targets) &&
-      Array.isArray(config.kinds), "invalid-feed", "Expected a feed id, URL, and declared targets.");
+    require(typeof config.feed === "string" && typeof config.url === "string", "invalid-feed", "Expected a feed id and URL.");
     const url = new URL(config.url, document.baseURI);
     require(url.origin === location.origin, "cross-origin-action", "A feed must use the document's origin.");
     feed.config = config;
@@ -1379,227 +1020,200 @@ function openFeed(element) {
     feed.warning = setTimeout(() => {
       if (unloading || !feeds.has(element)) return;
       if (source.readyState === EventSource.CLOSED) {
-        report(null, new ProtocolError("push-closed", `Feed '${feed.config.feed}' stopped and will not reconnect. Updates published from now on do not reach this page.`),
+        report(null, new ProtocolError("push-closed", `Feed '${feed.config.feed}' stopped and will not reconnect. Changes from now on do not reach this page.`),
           "push-closed", context());
       } else if (!feed.down) {
         feed.down = true;
-        report(null, new ProtocolError("push-disconnected", `Feed '${feed.config.feed}' lost its connection and is reconnecting. Updates published meanwhile are replayed or resynced when it is back.`),
+        report(null, new ProtocolError("push-disconnected", `Feed '${feed.config.feed}' lost its connection and is reconnecting. A change made meanwhile shows once it is back.`),
           "push-disconnected", context(), "warning");
       }
     }, 50);
   });
-  source.addEventListener("update", event => {
-    let update;
-    try { update = JSON.parse(event.data); }
-    catch {
-      report(null, new ProtocolError("invalid-json", "A pushed update is not valid JSON (body omitted)."), "invalid-json", context({ eventId: event.lastEventId }));
+  source.addEventListener("changed", event => {
+    let signal;
+    try { signal = JSON.parse(event.data); } catch { signal = null; }
+    const extra = context({ eventId: event.lastEventId });
+    try {
+      require(signal?.version === VERSION, "version-mismatch", `Browser protocol ${VERSION} does not match feed protocol ${signal?.version}.`,
+        { expectedVersion: VERSION, receivedVersion: signal?.version ?? null });
+      require(signal.feed === feed.config.feed, "invalid-feed", `A signal for feed '${signal.feed}' arrived on feed '${feed.config.feed}'.`);
+      require(signal.request === undefined || typeof signal.request === "string", "invalid-feed", "A signal's request is an id.");
+    } catch (error) {
+      report(null, error, "invalid-feed", extra);
       return;
     }
-    applyPush(feed, update, context({ eventId: event.lastEventId }), "push");
-  });
-  source.addEventListener("resync", event => resyncFeed(feed, context({ eventId: event.lastEventId })));
-}
-
-// Apply a batch of pushed patches. Targets are looked up now; a declared
-// target this page does not show is skipped and reported.
-function applyPush(feed, update, extra, source) {
-  try {
-    require(update?.version === VERSION, "version-mismatch", `Browser protocol ${VERSION} does not match pushed protocol ${update?.version}.`,
-      { expectedVersion: VERSION, receivedVersion: update?.version ?? null });
-    require(update.feed === feed.config.feed && Array.isArray(update.patches), "invalid-update", "A pushed update must name its feed and carry patches.");
-    const context = batch();
-    const plans = [];
-    for (const patch of update.patches) {
-      require(patch && typeof patch.target === "string" && declaredByFeed(feed.config, patch.target), "undeclared-push",
-        `Feed '${feed.config.feed}' did not declare '${patch?.target}'.`, { relatedTarget: patch?.target ?? null });
-      const matches = document.querySelectorAll(`#${CSS.escape(patch.target)}`);
-      if (!matches.length) { context.summary.missingTargets.push(patch.target); continue; }
-      require(matches.length === 1, "duplicate-target", `Region '${patch.target}' has multiple elements with the same id.`, { relatedTarget: patch.target });
-      require(matches[0].hasAttribute("data-placebo-region"), "undeclared-target", `Element '${patch.target}' is not a declared region.`, { relatedTarget: patch.target });
-      plans.push(planPatch(patch, matches[0], context, { push: feed }));
+    // A signal this page's own save caused: the save answers with its page,
+    // which shows the change, so reading the page again would only replace
+    // the save's reply. If that page does not show, it is read after all.
+    const own = signal.request === undefined ? undefined : sent.get(signal.request);
+    if (own && (own.shown || pending.get(own.target) === own)) {
+      if (!own.shown) own.signalled = { ...extra, source: "push" };
+      emit("push", null, { ...extra, phase: "push-own", requestId: own.requestId });
+      return;
     }
-    for (const plan of plans) plan.commit?.();
-    syncBehaviors();
-    const skipped = plans.filter(plan => plan.skip).map(plan => plan.skip);
-    emit("applied", null, { ...extra, source, outcome: "applied", refreshedLocal: [], preservedLocal: [],
-      skippedRegions: skipped.map(skip => skip.target), skippedSnapshots: skipped, ...context.summary });
-  } catch (error) {
-    report(null, error, "invalid-update", { ...extra, source });
-  }
+    emit("push", null, { ...extra, phase: "push-changed" });
+    refreshPage({ ...extra, source: "push" });
+  });
 }
 
-// A pushed refresh deferred while its component was busy applies once the
-// component's own request settles, if it is still newer.
-function flushDeferredPush(target) {
-  const deferred = deferredPushes.get(target);
-  if (!deferred || !target.isConnected || componentBusy(target)) return;
-  deferredPushes.delete(target);
-  const { feed, patch } = deferred;
-  if (!feeds.has(feed.element)) return;
-  applyPush(feed, { version: VERSION, feed: feed.config.feed, patches: [patch] },
-    { target: feed.config.feed, feed: feed.config.feed, relatedTarget: patch.target }, "push-deferred");
-}
-
-// The server no longer has the updates this page missed. Read the page again
-// and take the declared targets' newer state from it, with the same rules.
-async function resyncFeed(feed, extra) {
-  emit("push", null, { ...extra, phase: "push-resync" });
-  const started = performance.now();
-  let fresh;
-  try {
-    const response = await fetch(location.href, { headers: { Accept: "text/html" }, credentials: "same-origin" });
-    require(response.ok, "http-error", `Reading the page again for feed '${feed.config.feed}' returned HTTP ${response.status}.`, { status: response.status });
-    fresh = new DOMParser().parseFromString(await response.text(), "text/html");
-  } catch (error) {
-    report(null, error, "network-error", { ...extra, phase: "push-resync",
-      hint: "Reload the page to see current data; updates published while it was disconnected are missing." });
+// A feed's signal or a poll reads the page again. Signals that arrive
+// meanwhile are answered by one more read afterwards; a poll lets a slow
+// read finish instead. A refresh waits for an IME composition to end.
+let refreshing = null;
+let refreshAfterComposing = null;
+async function refreshPage(extra, { poll = false } = {}) {
+  if (poll && (refreshing || Array.from(pending.values()).some(work => work.method === "GET"))) {
+    emit("ignored", null, { ...extra, reason: "busy" });
     return;
   }
-  if (!feeds.has(feed.element)) return;
-  applyPush(feed, { version: VERSION, feed: feed.config.feed, patches: resyncPatches(feed.config, fresh, started) }, extra, "resync");
+  if (refreshing) { refreshing.again = extra; return; }
+  refreshing = { again: null };
+  const url = here();
+  try {
+    const response = await fetch(url, { headers: { Accept: "text/html", "X-Placebo-Refresh": String(VERSION) },
+      credentials: "same-origin", cache: "no-store", redirect: "manual" });
+    require(response.type !== "opaqueredirect", "redirected",
+      "Reading the page again was redirected, often to a login page after a session expired.");
+    require(response.ok, "http-error", `Reading the page again returned HTTP ${response.status}.`, { status: response.status });
+    const rendered = renderedAt(response);
+    const page = new DOMParser().parseFromString(await response.text(), "text/html");
+    if (!started) return;
+    if (Array.from(document.forms).some(form => composing.has(form))) { refreshAfterComposing = extra; return; }
+    showPage(null, page, rendered, url, extra);
+  } catch (error) {
+    report(null, error, "network-error", { ...extra, phase: "refresh" });
+  } finally {
+    const again = refreshing.again;
+    refreshing = null;
+    if (again) refreshPage(again);
+  }
 }
 
-// The page read again is the state when it was read. Items pushed while it
-// loaded are newer, and items a read loaded ("load more") lie beyond it, so
-// neither is removed or inserted by it.
-function resyncPatches(config, fresh, started) {
-  const ids = new Set(config.targets);
-  for (const kind of config.kinds) {
-    for (const node of document.querySelectorAll(`[data-placebo-region][id^="${CSS.escape(kind)}:"]`)) ids.add(node.id);
+// When the server began rendering a page, from X-Placebo-Rendered.
+function renderedAt(response) {
+  const rendered = Number(response.headers.get("x-placebo-rendered") ?? NaN);
+  return Number.isSafeInteger(rendered) ? rendered : null;
+}
+
+// A page read at a read form's query, or again, morphs in as a refresh from
+// another action: edited controls, open dialogs, and components with a
+// request in flight keep what they have. A page for a query the address no
+// longer shows, or rendered before the page shown, is dropped.
+function showPage(work, page, rendered, url, extra = {}) {
+  if (work) work.phase = "validating-response";
+  const reason = url !== here() ? "moved" : rendered != null && rendered <= shownRendered ? "older-page" : null;
+  if (reason) {
+    emit("discarded", work, { ...extra, reason });
+    return;
   }
-  const items = [], refreshes = [];
-  for (const id of ids) {
-    const current = document.getElementById(id), next = fresh.getElementById(id);
-    if (!current || !next) continue;
-    if (current.hasAttribute("data-placebo-list")) {
-      const itemsOf = list => Array.from(list.children).filter(node => node.hasAttribute("data-placebo-item") && node.id);
-      const shownNodes = itemsOf(current);
-      const shown = new Set(shownNodes.map(node => node.id));
-      const wanted = itemsOf(next);
-      const wantedIds = new Set(wanted.map(node => node.id));
-      for (const node of shownNodes) {
-        if (!wantedIds.has(node.id) && !readItems.has(node) && !pushedSince(node.id, started)) {
-          items.push({ target: id, operation: "remove-item", item: node.id });
-        }
-      }
-      let previous = null;
-      for (const node of wanted) {
-        if (!shown.has(node.id) && !pushedSince(node.id, started)) items.push({ target: id, operation: "insert-item", item: node.id, html: node.outerHTML,
-          position: previous ? { at: "after", item: previous } : { at: "start" } });
-        previous = node.id;
-      }
-      items.push({ target: id, operation: "order-items", items: wanted.map(node => node.id) });
-    } else if (next.dataset.placeboRevision != null) {
-      const operation = current.hasAttribute("data-placebo-component") ? "refresh-component" : "replace-children";
-      refreshes.push({ node: current, patch: { target: id, operation, revision: next.dataset.placeboRevision, html: next.innerHTML } });
-    }
-  }
-  // A refreshed component already refreshes the targets inside it.
-  return [...items, ...refreshes.filter(({ node }) => !refreshes.some(other => other.node !== node && other.node.contains(node)))
-    .map(({ patch }) => patch)];
+  const plan = planPage(work, document.body, page.body, "applied");
+  if (work) work.phase = "applying";
+  const anchor = focusAnchor(document.body);
+  morphPage(document.body, page.body, plan);
+  if (!work) holding = new WeakSet();
+  shownRendered = Math.max(shownRendered, rendered ?? 0);
+  if (page.title && page.title !== document.title) document.title = page.title;
+  restoreFocus(document.body, anchor);
+  for (const component of plan.morphed) settle(component);
+  if (work) Object.assign(work, { applied: true, outcome: "applied", phase: "applied" });
+  syncBehaviors(work);
+  emit("applied", work, { ...extra, outcome: "applied", ...plan.summary, page: "whole" });
 }
 
 function onPageHide() { unloading = true; }
 function onPageShow() { unloading = false; syncFeeds(); }
 
-// Reads that start themselves: once on load, once when revealed, or on an
-// interval. Each belongs to its form element and ends when the form goes.
-const triggered = new Map();
+// Reads that start themselves: a read form when it scrolls into view, and
+// the page again on an interval while a refresh_every element is on it. Each
+// belongs to its element and ends when the element goes.
+const revealing = new Map();
+const polls = new Map();
 let revealer = null;
 
-function triggeredBy(config) {
-  return Boolean(config.load || config.reveal || config.every_ms != null);
-}
-
-function triggerContext(state, extra) {
-  return { action: state.config.action, target: state.config.target, ...extra };
-}
-
 function syncTriggers() {
-  for (const [form, state] of triggered) {
-    if (!started || !form.isConnected || form.dataset.placebo !== state.raw) stopTrigger(form, state);
+  for (const [form, state] of revealing) {
+    if (started && form.isConnected && form.dataset.placebo === state.raw) continue;
+    revealer?.unobserve(form);
+    revealing.delete(form);
+  }
+  for (const [element, poll] of polls) {
+    if (started && element.isConnected && element.dataset.placeboRefreshEvery === poll.raw) continue;
+    clearTimeout(poll.timer);
+    polls.delete(element);
   }
   if (!started) return;
   for (const form of document.querySelectorAll("form[data-placebo]")) {
-    if (triggered.has(form)) continue;
-    let config;
-    // An invalid configuration is reported when the form is used.
-    try { config = configFor(form); } catch { continue; }
-    if (!triggeredBy(config)) continue;
-    const state = { raw: form.dataset.placebo, config, timer: null, overdue: false, ran: false };
-    triggered.set(form, state);
-    if (config.load) queueMicrotask(() => { if (triggered.get(form) === state) fire(form, state, "load"); });
-    if (config.reveal) {
-      revealer ??= new IntersectionObserver(onReveal, { rootMargin: "200px" });
-      revealer.observe(form);
+    let state = revealing.get(form);
+    if (!state) {
+      let config;
+      // An invalid configuration is reported when the form is used.
+      try { config = configFor(form); } catch { continue; }
+      if (!config.reveal) continue;
+      state = { raw: form.dataset.placebo, watching: false };
+      revealing.set(form, state);
     }
-    if (config.every_ms != null) armInterval(form, state);
+    // Watch while the form asks for more than the page shows. After a read
+    // the page renders the next form; one that failed asks for the same page.
+    if (state.watching || pending.has(form) || readUrl(form) === here()) continue;
+    state.watching = true;
+    revealer ??= new IntersectionObserver(onReveal, { rootMargin: "200px" });
+    revealer.observe(form);
+  }
+  for (const element of document.querySelectorAll("[data-placebo-refresh-every]")) {
+    if (polls.has(element)) continue;
+    const raw = element.dataset.placeboRefreshEvery, interval = Number(raw);
+    const poll = { raw, interval, timer: null, overdue: false };
+    polls.set(element, poll);
+    if (!Number.isInteger(interval) || interval < 500 || interval > 86400000) {
+      report(null, new ProtocolError("invalid-config", `Polling interval '${raw}' is not between 500 ms and a day.`), "invalid-config");
+      continue;
+    }
+    armPoll(element, poll);
   }
 }
 
-function stopTrigger(form, state) {
-  haltTrigger(form, state);
-  triggered.delete(form);
-}
-
-// Ends a trigger while its form stays on the page. The form keeps its entry,
-// so later DOM changes do not register and start it again.
-function haltTrigger(form, state) {
-  clearTimeout(state.timer);
-  revealer?.unobserve(form);
-  state.halted = true;
-}
-
-function fire(form, state, source) {
-  if (source === "interval") {
-    const target = document.getElementById(state.config.target);
-    // Polling ends with its region; a region that was never there is an error.
-    if (!target && state.ran) {
-      haltTrigger(form, state);
-      emit("discarded", null, triggerContext(state, { reason: "target-unmounted", phase: "interval-stopped" }));
-      return;
-    }
-    // Let a slow read finish instead of cancelling it every interval.
-    if (target && pending.has(target)) {
-      emit("ignored", null, triggerContext(state, { reason: "busy" }));
-      return;
-    }
-  }
-  state.ran = true;
-  schedule(form, false, null, source);
-}
-
-function armInterval(form, state) {
-  clearTimeout(state.timer);
-  state.timer = setTimeout(() => {
-    if (triggered.get(form) !== state || state.halted) return;
-    // Paused until the page is shown again, then read once.
-    if (document.visibilityState === "hidden") {
-      state.overdue = true;
-      emit("deferred", null, triggerContext(state, { reason: "page-hidden" }));
-      return;
-    }
-    fire(form, state, "interval");
-    if (triggered.get(form) === state && !state.halted) armInterval(form, state);
-  }, state.config.every_ms);
-}
-
-function onVisibilityChange() {
-  if (document.visibilityState !== "visible") return;
-  for (const [form, state] of triggered) {
-    if (!state.overdue || state.halted) continue;
-    state.overdue = false;
-    fire(form, state, "interval");
-    if (triggered.get(form) === state && !state.halted) armInterval(form, state);
-  }
+function readUrl(form) {
+  const url = new URL(form.action, document.baseURI);
+  url.search = new URLSearchParams(Array.from(new FormData(form), ([name, value]) => [name, String(value)])).toString();
+  return url.pathname + url.search;
 }
 
 function onReveal(entries) {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
     revealer.unobserve(entry.target);
-    const state = triggered.get(entry.target);
-    if (state) fire(entry.target, state, "reveal");
+    const state = revealing.get(entry.target);
+    if (!state) continue;
+    state.watching = false;
+    schedule(entry.target, false, null, "reveal");
+  }
+}
+
+function armPoll(element, poll) {
+  clearTimeout(poll.timer);
+  poll.timer = setTimeout(() => {
+    if (polls.get(element) !== poll) return;
+    // Paused until the page is shown again, then read once.
+    if (document.visibilityState === "hidden") {
+      poll.overdue = true;
+      emit("deferred", null, { source: "interval", reason: "page-hidden" });
+      return;
+    }
+    runPoll(element, poll);
+  }, poll.interval);
+}
+
+function runPoll(element, poll) {
+  refreshPage({ source: "interval" }, { poll: true });
+  armPoll(element, poll);
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState !== "visible") return;
+  for (const [element, poll] of polls) {
+    if (!poll.overdue) continue;
+    poll.overdue = false;
+    runPoll(element, poll);
   }
 }
 
@@ -1612,7 +1226,6 @@ export function start() {
   document.addEventListener("compositionstart", onCompositionStart);
   document.addEventListener("compositionend", onCompositionEnd);
   document.addEventListener("DOMContentLoaded", onContentLoaded);
-  window.addEventListener("popstate", onPopState);
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -1626,7 +1239,7 @@ export function start() {
     syncTriggers();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
-    attributeFilter: ["data-placebo-behavior", "data-placebo-feed", "data-placebo"] });
+    attributeFilter: ["data-placebo-behavior", "data-placebo-feed", "data-placebo", "data-placebo-refresh-every"] });
   syncBehaviors();
   syncFeeds();
   syncTriggers();
@@ -1641,7 +1254,6 @@ export function stop() {
   document.removeEventListener("compositionstart", onCompositionStart);
   document.removeEventListener("compositionend", onCompositionEnd);
   document.removeEventListener("DOMContentLoaded", onContentLoaded);
-  window.removeEventListener("popstate", onPopState);
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("pageshow", onPageShow);
   document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -1652,7 +1264,7 @@ export function stop() {
   composing = new WeakSet();
   edits = new WeakMap();
   uncertain = new WeakMap();
-  deferredPushes = new WeakMap();
+  holding = new WeakSet();
   observer.disconnect();
   for (const work of pending.values()) cancel(work, "runtime-stopped");
   syncBehaviors();

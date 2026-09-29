@@ -114,7 +114,7 @@ async fn home(State(store): State<Store>) -> Markup {
                     details .trace {
                         summary { "Interaction trace" }
                         p { "Both cards use the same action. Duplicate submissions wait for you to try again after the current save settles." }
-                        ol #trace role="log" aria-live="polite" {}
+                        ol #trace role="log" aria-live="polite" data-placebo-local="trace" {}
                     }
                     footer { "Experiment 002 · In-memory edits reset when the server restarts" }
                 }

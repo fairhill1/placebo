@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{UPDATE_TYPE, native::NativeReply};
+use crate::native::NativeReply;
 
 /// A mutation form's hidden field with its idempotency key.
 pub(crate) const KEY: &str = "placebo-key";
@@ -82,7 +82,7 @@ pub enum Claim {
 }
 
 /// A recorded reply: its HTTP status, the headers the handler added (such as
-/// `Set-Cookie`), and its update body.
+/// `Set-Cookie`), and the reply (component, contents, and navigation) as JSON.
 #[derive(Clone, Debug)]
 pub struct Recorded {
     pub status: u16,
@@ -312,24 +312,29 @@ pub(crate) fn recorded_headers(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The recorded reply, again. It becomes a navigation for a native submission.
+/// The recorded reply, again. The adapter turns it into its page, or a
+/// navigation for a native submission, as it did the first time.
 fn replayed(reply: Recorded) -> Response {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::OK);
-    let native = serde_json::from_str::<serde_json::Value>(&reply.body)
-        .ok()
-        .map(|envelope| NativeReply {
-            target: envelope["target"].as_str().unwrap_or_default().to_owned(),
-            html: envelope["html"].as_str().unwrap_or_default().to_owned(),
-            navigate: envelope["navigate"].as_str().map(str::to_owned),
-        });
+    let Ok(native) = serde_json::from_str::<NativeReply>(&reply.body) else {
+        eprintln!(
+            "[placebo:replay-store] A recorded reply could not be read, so its retry cannot \
+             show it. Record replies from this version of Placebo."
+        );
+        return page(
+            StatusCode::CONFLICT,
+            "unknown",
+            "Your changes may already be saved",
+            "The server could not show the result of this form. Reload the page to see \
+             the current state.",
+        );
+    };
     let mut response = (
         status,
         [
-            (header::CONTENT_TYPE, UPDATE_TYPE),
             (header::CACHE_CONTROL, "no-store"),
             (header::HeaderName::from_static(REPLAY_HEADER), "replayed"),
         ],
-        reply.body,
     )
         .into_response();
     for (name, value) in reply.headers {
@@ -340,9 +345,7 @@ fn replayed(reply: Recorded) -> Response {
             response.headers_mut().append(name, value);
         }
     }
-    if let Some(native) = native {
-        response.extensions_mut().insert(native);
-    }
+    response.extensions_mut().insert(native);
     response
 }
 

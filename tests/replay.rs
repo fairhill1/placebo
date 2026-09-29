@@ -151,7 +151,8 @@ async fn a_repeated_submission_replays_the_recorded_reply() {
     assert_eq!(again.status(), StatusCode::OK);
     assert_eq!(again.headers()["x-placebo-replay"], "replayed");
     assert_eq!(again.headers()["x-placebo-action"], "add");
-    assert_eq!(again.headers()["content-type"], placebo::UPDATE_TYPE);
+    assert_eq!(again.headers()["x-placebo-outcome"], "applied");
+    // The same page, rendered again around the recorded reply.
     assert_eq!(text(again).await, first);
     assert_eq!(store.runs.load(Ordering::SeqCst), 1);
     assert_eq!(*store.items.lock().unwrap(), ["Once"]);

@@ -1,25 +1,14 @@
-//! Feeds: declared targets, the subscription mount, replay after a
-//! reconnect, and component revisions in replies.
+//! Feeds: the subscription mount, the "changed" signal, and what a page that
+//! connects late or reconnects is told.
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
 };
 use futures_util::StreamExt;
-use maud::html;
-use placebo::{Component, Feed, FormInput, List, MutationAction, Position, VersionedRegion};
+use placebo::Feed;
 use std::time::Duration;
 use tower::ServiceExt;
-
-const COUNT: VersionedRegion = VersionedRegion::new("count");
-const TASKS: List = List::new("tasks");
-
-fn feed() -> Feed {
-    Feed::new("live", "/live")
-        .affects(COUNT)
-        .affects(TASKS)
-        .affects_kind("task")
-}
 
 /// The feed's position as its mount renders it.
 fn position(feed: &Feed) -> String {
@@ -28,13 +17,16 @@ fn position(feed: &Feed) -> String {
     mount[start..start + mount[start..].find('&').unwrap()].to_owned()
 }
 
-/// Read events from a feed's stream until `count` have arrived.
-async fn events(feed: &Feed, request: Request<Body>, count: usize) -> Vec<String> {
-    let app = Router::new().route(feed.path(), feed.route());
+/// The response to a subscription, checked to be an event stream.
+async fn subscribe(app: Router, request: Request<Body>) -> axum::body::BodyDataStream {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"], "text/event-stream");
-    let mut stream = response.into_body().into_data_stream();
+    response.into_body().into_data_stream()
+}
+
+/// Read events from a stream until `count` have arrived.
+async fn events(stream: &mut axum::body::BodyDataStream, count: usize) -> Vec<String> {
     let mut text = String::new();
     // The stream opens with a comment, then the events.
     while text.matches("\n\n").count() < count + 1 {
@@ -55,138 +47,103 @@ async fn events(feed: &Feed, request: Request<Body>, count: usize) -> Vec<String
         .collect()
 }
 
+/// Whether the stream stays quiet for a moment.
+async fn quiet(stream: &mut axum::body::BodyDataStream) -> bool {
+    let mut text = String::new();
+    while let Ok(Some(chunk)) =
+        tokio::time::timeout(Duration::from_millis(100), stream.next()).await
+    {
+        text.push_str(std::str::from_utf8(&chunk.unwrap()).unwrap());
+    }
+    !text.contains("event:")
+}
+
+fn get(path: &str) -> Request<Body> {
+    Request::get(path).body(Body::empty()).unwrap()
+}
+
 #[test]
-fn the_mount_declares_targets_and_the_position_to_follow_from() {
-    let feed = feed();
+fn the_mount_records_the_position_to_follow_from() {
+    let feed = Feed::new("live", "/live");
     let mount = feed.mount().into_string();
     assert!(mount.starts_with("<div id=\"live\" hidden data-placebo-feed="));
-    assert!(mount.contains("&quot;targets&quot;:[&quot;count&quot;,&quot;tasks&quot;]"));
-    assert!(mount.contains("&quot;kinds&quot;:[&quot;task&quot;]"));
     assert!(position(&feed).ends_with("-0"));
-    feed.push().replace(COUNT, 2, html! { "2" }).send();
+    feed.changed();
     assert!(position(&feed).ends_with("-1"));
 }
 
 #[tokio::test]
-async fn a_page_gets_what_was_published_after_its_position_then_new_updates() {
-    let feed = feed();
+async fn a_page_that_missed_changes_is_told_once_then_follows_new_ones() {
+    let feed = Feed::new("live", "/live");
     let rendered = position(&feed);
-    feed.push().replace(COUNT, 2, html! { "2 tasks" }).send();
-    feed.push()
-        .insert(TASKS.item(3).mount(html! { "Three" }), Position::End)
-        .send();
-    let request = Request::get(format!("/live?after={rendered}"))
-        .body(Body::empty())
-        .unwrap();
+    let instance = rendered.rsplit_once('-').unwrap().0.to_owned();
+    feed.changed();
+    feed.changed();
+    let app = Router::new().route(feed.path(), feed.route());
+    let mut stream = subscribe(app, get(&format!("/live?after={rendered}"))).await;
     let publisher = feed.clone();
     let later = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        publisher
-            .push()
-            .refresh(
-                &Component::new("task", 3).revision(7),
-                html! { "Three, saved" },
-            )
-            .send();
+        publisher.changed();
     });
-    let events = events(&feed, request, 3).await;
+    let events = events(&mut stream, 2).await;
     later.await.unwrap();
-    let instance = rendered.rsplit_once('-').unwrap().0;
-    assert!(events[0].contains("event: update"));
-    assert!(events[0].contains(&format!("id: {instance}-1")));
-    assert!(
-        events[0].contains(r#""target":"count","operation":"replace-children","revision":"2""#)
-    );
-    assert!(events[1].contains(r#""operation":"insert-item""#));
-    assert!(events[1].contains(r#""item":"tasks/3""#));
-    assert!(events[2].contains(&format!("id: {instance}-3")));
-    assert!(
-        events[2].contains(r#""target":"task:3","operation":"refresh-component","revision":"7""#)
-    );
+    // One signal covers both missed changes.
+    assert!(events[0].contains("event: changed"), "{events:?}");
+    assert!(events[0].contains(&format!("id: {instance}-2")));
+    assert!(events[0].contains(r#"data: {"version":6,"feed":"live"}"#));
+    assert!(events[1].contains(&format!("id: {instance}-3")));
 }
 
 #[tokio::test]
-async fn a_reconnect_resumes_from_its_last_event_id() {
-    let feed = feed();
+async fn an_up_to_date_page_is_told_nothing_until_a_change() {
+    let feed = Feed::new("live", "/live");
+    feed.changed();
+    let rendered = position(&feed);
+    let app = Router::new().route(feed.path(), feed.route());
+    let mut stream = subscribe(app.clone(), get(&format!("/live?after={rendered}"))).await;
+    assert!(quiet(&mut stream).await);
+    // Without a position, a page follows from now.
+    let mut stream = subscribe(app, get("/live")).await;
+    assert!(quiet(&mut stream).await);
+}
+
+#[tokio::test]
+async fn a_reconnect_is_told_about_changes_after_its_last_event_id() {
+    let feed = Feed::new("live", "/live");
     let rendered = position(&feed);
     let instance = rendered.rsplit_once('-').unwrap().0.to_owned();
-    for revision in 2..5 {
-        feed.push().replace(COUNT, revision, html! {}).send();
-    }
+    feed.changed();
+    feed.changed();
+    let app = Router::new().route(feed.path(), feed.route());
     // The browser's Last-Event-ID wins over the mount's position.
     let request = Request::get(format!("/live?after={rendered}"))
         .header("last-event-id", format!("{instance}-2"))
         .body(Body::empty())
         .unwrap();
-    let events = events(&feed, request, 1).await;
-    assert!(
-        events[0].contains(&format!("id: {instance}-3")),
-        "{events:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_unknown_position_asks_the_page_to_resync() {
-    let feed = feed();
-    feed.push().replace(COUNT, 2, html! {}).send();
-    // Another server process, or updates older than the feed keeps.
-    let request = Request::get("/live?after=gone-1")
+    let mut stream = subscribe(app.clone(), request).await;
+    assert!(quiet(&mut stream).await);
+    let request = Request::get(format!("/live?after={rendered}"))
+        .header("last-event-id", format!("{instance}-1"))
         .body(Body::empty())
         .unwrap();
-    let events = events(&feed, request, 1).await;
-    assert!(events[0].contains("event: resync"), "{events:?}");
-    assert!(events[0].contains(r#"data: {"version":5,"feed":"live"}"#));
-}
-
-#[test]
-#[should_panic(expected = "needs a revision")]
-fn a_pushed_component_needs_a_revision() {
-    feed()
-        .push()
-        .refresh(&Component::new("task", 1), html! {})
-        .send();
-}
-
-#[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "not declared on feed 'live'")]
-fn a_feed_pushes_only_declared_targets() {
-    feed()
-        .push()
-        .replace(VersionedRegion::new("other"), 1, html! {})
-        .send();
-}
-
-#[allow(dead_code)]
-#[derive(serde::Deserialize, FormInput)]
-struct Save {
-    title: String,
+    let mut stream = subscribe(app, request).await;
+    let events = events(&mut stream, 1).await;
+    assert!(events[0].contains(&format!("id: {instance}-2")), "{events:?}");
 }
 
 #[tokio::test]
-async fn versioned_components_carry_their_revision_in_mounts_and_replies() {
-    use axum::response::IntoResponse;
-    let component = Component::new("task", 1).revision(4);
-    let mount = html! { (component.mount(html! {})) }.into_string();
-    assert!(mount.contains("data-placebo-revision=\"4\""));
-    let other = Component::new("task", 2).revision(9);
-    let action = MutationAction::<Save>::new("save", "/save");
-    let reply = action
-        .bind(&component)
-        .affects(&other)
-        .reply(html! {})
-        .also_refresh(&other, html! {})
-        .into_response();
-    let body = axum::body::to_bytes(reply.into_body(), 4096).await.unwrap();
-    let update: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(update["revision"], "4");
-    assert_eq!(update["patches"][0]["revision"], "9");
+async fn a_position_from_another_server_process_is_told_to_refresh() {
+    let feed = Feed::new("live", "/live");
+    let app = Router::new().route(feed.path(), feed.route());
+    let mut stream = subscribe(app, get("/live?after=gone-7")).await;
+    let events = events(&mut stream, 1).await;
+    assert!(events[0].contains("event: changed"), "{events:?}");
 }
 
 #[tokio::test]
 async fn keyed_feeds_reach_only_the_pages_that_mount_their_key() {
-    let inboxes: placebo::Feeds<String> =
-        placebo::Feeds::new("inbox", "/live/inbox/{key}").affects(COUNT);
+    let inboxes: placebo::Feeds<String> = placebo::Feeds::new("inbox", "/live/inbox/{key}");
     let ada = inboxes.get(&"ada".to_owned());
     let bob = inboxes.get(&"bob smith".to_owned());
     // Each key has its own id and URL, and the same feed on every get.
@@ -204,8 +161,7 @@ async fn keyed_feeds_reach_only_the_pages_that_mount_their_key() {
     assert_eq!(position(&inboxes.get(&"ada".to_owned())), position(&ada));
     let ada_position = position(&ada);
     let bob_position = position(&bob);
-    bob.push().replace(COUNT, 5, html! { "Bob's" }).send();
-    ada.push().replace(COUNT, 2, html! { "Ada's" }).send();
+    bob.changed();
 
     // A handler picks the feed; here from the path.
     let feeds = inboxes.clone();
@@ -218,24 +174,57 @@ async fn keyed_feeds_reach_only_the_pages_that_mount_their_key() {
             },
         ),
     );
-    for (path, position, own, other) in [
-        ("/live/inbox/ada", ada_position, "Ada's", "Bob's"),
-        ("/live/inbox/bob%20smith", bob_position, "Bob's", "Ada's"),
-    ] {
-        let request = Request::get(format!("{path}?after={position}"))
-            .body(Body::empty())
-            .unwrap();
-        let response = app.clone().oneshot(request).await.unwrap();
-        let mut stream = response.into_body().into_data_stream();
-        let mut text = String::new();
-        while !text.contains(own) {
-            let chunk = tokio::time::timeout(Duration::from_secs(2), stream.next())
-                .await
-                .expect("an event arrives")
-                .unwrap()
-                .unwrap();
-            text.push_str(std::str::from_utf8(&chunk).unwrap());
-        }
-        assert!(!text.contains(other), "{text}");
+    let mut stream = subscribe(
+        app.clone(),
+        get(&format!("/live/inbox/bob%20smith?after={bob_position}")),
+    )
+    .await;
+    let events = events(&mut stream, 1).await;
+    assert!(events[0].contains(r#""feed":"inbox:bob%20smith""#), "{events:?}");
+    let mut stream = subscribe(app, get(&format!("/live/inbox/ada?after={ada_position}"))).await;
+    assert!(quiet(&mut stream).await);
+}
+
+#[tokio::test]
+async fn a_signal_from_a_save_names_the_request_that_made_it() {
+    use placebo::{Component, FormInput, Input, MutationAction};
+    #[derive(serde::Deserialize, FormInput)]
+    struct Save {
+        #[allow(dead_code)]
+        title: String,
     }
+    const SAVE: MutationAction<Save> = MutationAction::new("save", "/save");
+    let feed = Feed::new("live", "/live");
+    let rendered = position(&feed);
+    let writer = feed.clone();
+    let app = Router::new()
+        .route(feed.path(), feed.route())
+        .route(
+            SAVE.path(),
+            SAVE.route(move |Input(_): Input<Save>| {
+                let feed = writer.clone();
+                async move {
+                    feed.changed();
+                    SAVE.bind(&Component::new("editor", 1))
+                        .reply(maud::html! { "Saved." })
+                }
+            }),
+        );
+    let mut stream = subscribe(app.clone(), get(&format!("/live?after={rendered}"))).await;
+    let save = Request::post("/save")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("sec-fetch-site", "same-origin")
+        .header("x-placebo-request", "6")
+        .header("x-placebo-request-id", "req-42")
+        .body(Body::from("title=Hello"))
+        .unwrap();
+    app.clone().oneshot(save).await.unwrap();
+    // A change made outside a save names no request.
+    feed.changed();
+    let events = events(&mut stream, 2).await;
+    assert!(
+        events[0].contains(r#"data: {"version":6,"feed":"live","request":"req-42"}"#),
+        "{events:?}"
+    );
+    assert!(events[1].contains(r#"data: {"version":6,"feed":"live"}"#), "{events:?}");
 }

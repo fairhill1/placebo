@@ -118,8 +118,8 @@ test("an attempt the server has not finished is diagnosed and stays stale", asyn
 });
 
 test("each new submission sends its own key, not the one in the markup", async t => {
-  // Markup rendered once for several pages, such as a pushed row, carries the
-  // same key everywhere. Sending it would replay one page's reply to another.
+  // Markup a cache or another page served carries the same key everywhere.
+  // Sending it would replay one page's reply to another.
   const page = await visit(t);
   const bodies = [];
   await page.route("**/actions/add-task", route => { bodies.push(route.request().postData()); return route.continue(); });

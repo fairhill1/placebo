@@ -1,8 +1,13 @@
-//! Form submissions without JavaScript. A mutation form is an ordinary HTML
+//! Every mutation is answered with a page. A mutation form is an ordinary HTML
 //! form, so a browser can post it before the runtime loads, or without it.
-//! The route adapter runs the same handler and turns its reply into what a
-//! browser navigation expects: a redirect after a successful save, or a full
-//! page showing the rejected component with the reply's contents.
+//! The route adapter runs the same handler and turns its reply into a page:
+//!
+//! - From the runtime, the page the form was on, rendered again with the
+//!   submitted component showing the reply's contents. The runtime morphs it
+//!   into the document, so everything else on the page shows current data
+//!   without the handler knowing what else is there.
+//! - Without JavaScript, a redirect after a successful save, or that same page
+//!   for a rejected one.
 use axum::{
     Router,
     body::Body,
@@ -18,9 +23,12 @@ use std::{
     collections::HashMap,
     future::Future,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll, ready},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower::ServiceExt;
 
@@ -48,6 +56,8 @@ pub(crate) struct Submission {
     /// the rendered values' fingerprint the form carried.
     edited: HashMap<String, Edit>,
     focused_invalid: bool,
+    /// The runtime's id for this request, for the feed signals it causes.
+    request: Option<String>,
 }
 
 struct PageOverride {
@@ -55,22 +65,45 @@ struct PageOverride {
     target: String,
     html: String,
     used: bool,
+    native: bool,
 }
 
-/// A rejected reply to a native submission, waiting for its page.
+/// A reply waiting for its page: any reply to the runtime, or a rejected
+/// reply to a native submission.
 #[derive(Clone)]
 struct NativePage {
     target: String,
     html: String,
     path: String,
+    native: bool,
 }
+
+/// Response headers of a page reply to the runtime.
+const OUTCOME: &str = "x-placebo-outcome";
+const NAVIGATE: &str = "x-placebo-navigate";
+/// The target component the rendered page does not mount.
+const UNMOUNTED: &str = "x-placebo-unmounted";
+/// A reply to the runtime without its page shows in its component alone,
+/// and one of these says why: a setup error, or a page that did not render
+/// (such as a record's page after the record was deleted).
+const PAGE_ERROR: &str = "x-placebo-page-error";
+const PAGE_MISSING: &str = "x-placebo-page-missing";
+/// When the reply's page began rendering; see [`render_stamp`].
+const RENDERED: &str = "x-placebo-rendered";
+/// The page the runtime submitted from: its path and query.
+const PAGE_HEADER: &str = "x-placebo-page";
+/// Marks the runtime reading a page: at a read form's query, or again after a
+/// feed's signal or a poll.
+const REFRESH: &str = "x-placebo-refresh";
+const REQUEST_ID: &str = "x-placebo-request-id";
 
 /// Marks requests that pass through [`native_forms`].
 #[derive(Clone)]
 struct PagesEnabled;
 
-/// What an update envelope needs to become a native response.
-#[derive(Clone)]
+/// A mutation handler's reply: the component, its contents, and where to go
+/// instead of the page. Replays keep it as JSON.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct NativeReply {
     pub target: String,
     pub html: String,
@@ -78,14 +111,34 @@ pub(crate) struct NativeReply {
 }
 
 /// Run a mutation's handler, record its reply for replays, and turn the reply
-/// to a native submission into a navigation.
+/// into a page, or a navigation for a native submission.
 pub(crate) async fn run(native: bool, request: Request, next: Next) -> Response {
     let pages = request.extensions().get::<PagesEnabled>().is_some();
+    let back = if native {
+        same_origin_referer(request.headers())
+    } else {
+        request
+            .headers()
+            .get(PAGE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .filter(|path| local_path(path))
+            .map(str::to_owned)
+            .or_else(|| same_origin_referer(request.headers()))
+    };
+    let request_id = request
+        .headers()
+        .get(REQUEST_ID)
+        .and_then(|value| value.to_str().ok())
+        .filter(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        .map(str::to_owned);
     let submission = Submission {
         native,
-        back: native
-            .then(|| same_origin_referer(request.headers()))
-            .flatten(),
+        back,
+        request: request_id,
         ..Submission::default()
     };
     let work = async move {
@@ -105,8 +158,82 @@ pub(crate) async fn run(native: bool, request: Request, next: Next) -> Response 
     if native {
         respond(back, pages, response)
     } else {
-        response
+        respond_page(back, pages, response)
     }
+}
+
+/// Turn a handler's reply to the runtime into its page: the page it was
+/// submitted from, rendered again by [`native_forms`] with the component
+/// showing the reply. A successful reply that navigates only says where to.
+fn respond_page(back: Option<String>, pages: bool, response: Response) -> Response {
+    let Some(reply) = response.extensions().get::<NativeReply>().cloned() else {
+        return response;
+    };
+    let status = response.status();
+    let outcome = match status {
+        StatusCode::UNPROCESSABLE_ENTITY => "invalid",
+        StatusCode::CONFLICT => "conflict",
+        _ => "applied",
+    };
+    let mut page = if let (true, Some(path)) = (status.is_success(), &reply.navigate) {
+        let Ok(path) = HeaderValue::try_from(path.as_str()) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        let mut page = (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        )
+            .into_response();
+        page.headers_mut().insert(NAVIGATE, path);
+        page
+    } else {
+        match (back, pages) {
+            (Some(path), true) => {
+                let mut page = status.into_response();
+                page.extensions_mut().insert(NativePage {
+                    target: reply.target,
+                    html: reply.html,
+                    path,
+                    native: false,
+                });
+                page
+            }
+            (back, _) => {
+                let problem = if back.is_none() {
+                    "the request did not say which page it came from (no X-Placebo-Page or \
+                     same-origin Referer)"
+                } else {
+                    "the router is not wrapped with placebo::native_forms(app), which renders it"
+                };
+                eprintln!(
+                    "[placebo:page-error] The reply to component '{}' needs its page, but {problem}. \
+                     It shows in the component alone.",
+                    reply.target
+                );
+                component_only(status, PAGE_ERROR, problem, reply.html)
+            }
+        }
+    };
+    let headers = page.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(OUTCOME, HeaderValue::from_static(outcome));
+    carry_headers(response.headers(), page.headers_mut());
+    page
+}
+
+/// A reply to the runtime without its page: the body is the reply's contents,
+/// which the runtime shows in the component, and `why` names the reason.
+fn component_only(status: StatusCode, why: &'static str, problem: &str, html: String) -> Response {
+    let mut response = (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        html,
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::try_from(problem) {
+        response.headers_mut().insert(why, value);
+    }
+    response
 }
 
 /// Runs a mutation to its end. The handler runs in the request's task while
@@ -147,27 +274,30 @@ impl<F: Future + Send + 'static> Drop for Finish<F> {
 /// Keep a reply for replays of the claimed submission. Anything else, such as
 /// an error status, releases the claim so a retry runs the handler again.
 async fn record(store: &dyn ReplayStore, id: &str, response: Response) -> Response {
-    if response.extensions().get::<NativeReply>().is_none() {
+    let Some(reply) = response.extensions().get::<NativeReply>() else {
         if let Err(error) = store.release(id).await {
             eprintln!("[placebo:replay-store] Could not release a submission: {error}");
         }
         return response;
-    }
-    let (parts, body) = response.into_parts();
-    let body = match axum::body::to_bytes(body, usize::MAX).await {
-        Ok(body) => body,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let reply = Recorded {
-        status: parts.status.as_u16(),
-        headers: replay::recorded_headers(&parts.headers),
-        body: String::from_utf8_lossy(&body).into_owned(),
+    let recorded = Recorded {
+        status: response.status().as_u16(),
+        headers: replay::recorded_headers(response.headers()),
+        body: serde_json::to_string(reply).expect("a reply serializes"),
     };
-    if let Err(error) = store.record(id, reply).await {
+    if let Err(error) = store.record(id, recorded).await {
         // The write happened; a retry will be told its outcome is unknown.
         eprintln!("[placebo:replay-store] Could not record a reply: {error}");
     }
-    Response::from_parts(parts, Body::from(body))
+    response
+}
+
+/// The runtime's id for the mutation whose handler is running, if any.
+pub(crate) fn current_request() -> Option<String> {
+    SUBMISSION
+        .try_with(|submission| submission.borrow().request.clone())
+        .ok()
+        .flatten()
 }
 
 /// Claim this submission's replay id before its handler runs. `retry` is the
@@ -269,14 +399,15 @@ pub(crate) fn autofocus_invalid() -> bool {
         .unwrap_or(false)
 }
 
-/// While a rejected page renders again, the rejected component shows the
-/// reply's contents instead of the contents the page handler rendered.
-pub(crate) fn mounted_contents(id: &str) -> Option<Markup> {
+/// While a page renders for a reply, the replying component shows the
+/// reply's contents instead of the contents the page handler rendered. The
+/// flag is set for a page rendered again for a native submission.
+pub(crate) fn mounted_contents(id: &str) -> Option<(Markup, bool)> {
     PAGE.try_with(|page| {
         let mut page = page.borrow_mut();
         (page.target == id && !page.used).then(|| {
             page.used = true;
-            PreEscaped(page.html.clone())
+            (PreEscaped(page.html.clone()), page.native)
         })
     })
     .ok()
@@ -329,6 +460,7 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
         target: reply.target,
         html: reply.html,
         path,
+        native: true,
     });
     page
 }
@@ -397,7 +529,7 @@ fn fallback_page(status: StatusCode, reply: &NativeReply) -> Response {
             }
             body style="font: 1.1rem/1.5 system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem" {
                 main {
-                    div id=(reply.target) data-placebo-region data-placebo-component {
+                    div id=(reply.target) data-placebo-component {
                         (PreEscaped(&reply.html))
                     }
                 }
@@ -407,8 +539,7 @@ fn fallback_page(status: StatusCode, reply: &NativeReply) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")], page).into_response()
 }
 
-/// Render the whole page again when a form submitted without JavaScript is
-/// rejected. Wrap the finished router:
+/// Render the page a reply belongs to. Wrap the finished router:
 ///
 /// ```
 /// use axum::{Router, routing::get};
@@ -416,11 +547,14 @@ fn fallback_page(status: StatusCode, reply: &NativeReply) -> Response {
 /// let app = placebo::native_forms(app);
 /// ```
 ///
-/// A save that succeeds redirects back to the page it came from (or to its
-/// `navigate` path). An `invalid` or `conflict` reply renders that page again,
-/// as a GET with the same cookies, and the rejected component shows the
-/// reply's contents, with the reply's HTTP status. Without this wrapper, a
-/// rejected native submission gets a page with only the component.
+/// Every reply to the runtime renders the page its form was on again, as a
+/// GET with the same cookies (plus any the handler set), and the replying
+/// component shows the reply's contents, with the reply's HTTP status. Without
+/// JavaScript, a save that succeeds redirects back to the page it came from
+/// (or to its `navigate` path), and an `invalid` or `conflict` reply renders
+/// that page the same way. Without this wrapper, a reply shows only in its
+/// component, the rest of the page goes out of date, and the runtime reports
+/// `[placebo:page-error]`.
 pub fn native_forms(app: Router) -> Router {
     Router::new()
         .fallback_service(app.clone())
@@ -428,6 +562,16 @@ pub fn native_forms(app: Router) -> Router {
 }
 
 async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> Response {
+    // A page the runtime reads (a search, a refresh) is ordered like a
+    // reply's page.
+    if request.headers().contains_key(REFRESH) {
+        let stamp = render_stamp();
+        let mut response = next.run(request).await;
+        response
+            .headers_mut()
+            .insert(RENDERED, HeaderValue::from(stamp));
+        return response;
+    }
     let headers = request.headers().clone();
     // What layers outside the app and the server attached, such as
     // `ConnectInfo` or a signed-in user, for the page's handler. The POST's
@@ -450,21 +594,26 @@ async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> R
         let name_str = name.as_str();
         let skip = matches!(
             name_str,
-            "content-type" | "content-length" | "transfer-encoding" | "origin" | "accept"
+            "content-type" | "content-length" | "transfer-encoding" | "origin" | "accept" | "cookie"
         ) || name_str.starts_with("x-placebo-")
             || name_str.starts_with("sec-fetch-");
         if !skip {
             get.headers_mut().append(name, value.clone());
         }
     }
+    if let Some(cookie) = cookies_after(&headers, response.headers()) {
+        get.headers_mut().insert(header::COOKIE, cookie);
+    }
     get.headers_mut()
         .insert(header::ACCEPT, HeaderValue::from_static("text/html"));
     let state = RefCell::new(PageOverride {
         path: page.path.clone(),
         target: page.target.clone(),
-        html: page.html,
+        html: page.html.clone(),
         used: false,
+        native: page.native,
     });
+    let stamp = render_stamp();
     let (rendered, used) = PAGE
         .scope(state, async {
             let rendered = app.oneshot(get).await.into_response();
@@ -476,22 +625,118 @@ async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> R
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/html"));
-    if !used || rendered.status() != StatusCode::OK || !html {
+    if rendered.status() != StatusCode::OK || !html {
+        let problem = format!(
+            "rendering '{}' again answered HTTP {}{}",
+            page.path,
+            rendered.status().as_u16(),
+            if html { "" } else { " without an HTML page" }
+        );
         eprintln!(
-            "[placebo:native-page] Rendering '{}' again did not mount component '{}' (HTTP {}), \
-             so the rejected reply gets a page with only the component. Mount the component on \
-             the page its form is on.",
+            "[placebo:page-missing] The reply to component '{}' needs its page, but {problem}. \
+             It shows in the component alone.",
+            page.target
+        );
+        if page.native {
+            return response;
+        }
+        let mut alone = component_only(response.status(), PAGE_MISSING, &problem, page.html);
+        alone
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        carry_headers(response.headers(), alone.headers_mut());
+        return alone;
+    }
+    if !used {
+        eprintln!(
+            "[placebo:page-unmounted] The page '{}' does not mount component '{}', so its reply \
+             is not shown{}. Mount the component on the page its form is on.",
             page.path,
             page.target,
-            rendered.status().as_u16()
+            if page.native {
+                "; the native submission gets a page with only the component"
+            } else {
+                ""
+            }
         );
-        return response;
+        if page.native {
+            return response;
+        }
     }
     let (mut parts, body) = rendered.into_parts();
     parts.status = response.status();
     parts
         .headers
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if !used && let Ok(target) = HeaderValue::try_from(&page.target) {
+        parts.headers.insert(UNMOUNTED, target);
+    }
+    if !page.native {
+        parts.headers.insert(RENDERED, HeaderValue::from(stamp));
+    }
     carry_headers(response.headers(), &mut parts.headers);
     Response::from_parts(parts, body)
+}
+
+/// When a page began rendering, in microseconds since the Unix epoch, and
+/// never the same twice in this process. It is taken after the handler's
+/// write, so a page with a later stamp shows every write whose page has an
+/// earlier one: the runtime lets a later page replace an earlier one, and
+/// never the reverse.
+fn render_stamp() -> u64 {
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_micros() as u64);
+    let previous = LAST
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+            Some(now.max(last + 1))
+        })
+        .unwrap_or_else(|last| last);
+    now.max(previous + 1)
+}
+
+/// The request's cookies with the ones the handler set applied, so a page
+/// rendered for a reply shows what it changed, such as a preference or a new
+/// session. A cookie set to expire (`Max-Age=0`) is left out.
+fn cookies_after(request: &HeaderMap, response: &HeaderMap) -> Option<HeaderValue> {
+    let mut cookies: Vec<(String, String)> = request
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            Some((name.to_owned(), value.to_owned()))
+        })
+        .collect();
+    for set in response.get_all(header::SET_COOKIE) {
+        let Some((pair, attributes)) = set.to_str().ok().map(|set| {
+            let mut parts = set.splitn(2, ';');
+            (parts.next().unwrap_or_default(), parts.next().unwrap_or_default())
+        }) else {
+            continue;
+        };
+        let Some((name, value)) = pair.trim().split_once('=') else {
+            continue;
+        };
+        cookies.retain(|(existing, _)| existing != name);
+        let expired = attributes.split(';').any(|attribute| {
+            attribute.trim().split_once('=').is_some_and(|(key, value)| {
+                key.eq_ignore_ascii_case("max-age")
+                    && value.trim().parse::<i64>().is_ok_and(|age| age <= 0)
+            })
+        });
+        if !expired {
+            cookies.push((name.to_owned(), value.to_owned()));
+        }
+    }
+    let joined = cookies
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    (!joined.is_empty())
+        .then(|| HeaderValue::try_from(joined).ok())
+        .flatten()
 }

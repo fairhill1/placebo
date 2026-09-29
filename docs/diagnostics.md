@@ -5,13 +5,14 @@ The message includes a stable code, the action/target or behavior/element,
 available request context, the consequence, and a suggested next check. The
 structured context and original error object are separate console arguments.
 
-For example, a missing shared summary produces a message of this form:
+For example, a form whose component is missing from the page produces a
+message of this form:
 
 ```text
 [placebo:missing-target] request=<id> action=save-task target=task:1
-relatedTarget=task-count POST /actions/save-task: Region 'task-count' is not mounted.
+relatedTarget=task:1 POST /actions/save-task: Component 'task:1' is not mounted.
 Request: not-started; update: not-applied; write: not-started.
-Next: Mount the named region before submitting, and check that the binding and mounted id agree.
+Next: Mount the component before submitting its form, and check that the binding and mounted id agree.
 ```
 
 The line is wrapped here for readability. IDs and paths describe the failing
@@ -36,11 +37,11 @@ Remove that storage key to disable tracing on future reloads. `trace()` changes
 the current runtime only. Tracing reports scheduling, dispatch, application,
 deferral, ignored duplicate submits, discarded requests, and behavior lifetime.
 Expand the context object for details. Applied updates include the requested
-local resets that were skipped because the user edited again, and the revisions
-of shared snapshots skipped because they were not newer.
+local resets that were skipped because the user edited again, components left
+alone while busy, and whether the whole page applied (`page`).
 
-Ordinary validation, conflicts, obsolete reads, and stale snapshots are not
-console errors. They remain explicit outcomes in the trace. Discarding a
+Ordinary validation, conflicts, obsolete reads, and pages older than the one
+shown are not console errors. They remain explicit outcomes in the trace. Discarding a
 dispatched mutation emits a warning even with tracing off, because aborting
 the browser request cannot undo a server write.
 
@@ -100,6 +101,22 @@ a successful save returned to `/`; keep the default `Referrer-Policy` or reply
 with `.navigate(path)`. The person still sees their values and the feedback in
 both cases.
 
+## Replies without their page
+
+A reply is its page, rendered again. When that fails, the reply shows in its
+component alone and the rest of the page stays as it was:
+
+- `[placebo:page-missing]` (a warning, logged on the server too): the page
+  answered an error, usually because the reply removed what it shows, such as a
+  deleted record. A successful reply can send the person on with
+  `.navigate(path)`.
+- `[placebo:page-error]`: the router is not wrapped with
+  `placebo::native_forms(app)`, or the request did not say which page it came
+  from.
+- `[placebo:unmounted-target]`: the page rendered, but does not mount the
+  replying component, so a rejected reply's feedback could not be shown. Mount
+  the component on the page its form is on, in every render of that page.
+
 ## Buttons that do nothing
 
 A `commandfor` or `popovertarget` button whose target is missing, or a command
@@ -111,16 +128,16 @@ reports each such button once as `[placebo:missing-command-target]` or
 ## Live updates
 
 A feed's connection is traced as `placebo:push` with `push-connected`,
-`push-reconnected`, or `push-resync`. A dropped connection logs one
-`[placebo:push-disconnected]` warning; the browser reconnects by itself and the
-feed replays what the page missed, or the page resyncs by reading itself again.
-A stream the browser gives up on (a missing route, an error status, another
-content type) logs `[placebo:push-closed]`: updates published from then on do
-not reach the page. An update for a target the feed did not declare is
-rejected with `undeclared-push`. Skipped work is not an error: pushed batches
-emit `placebo:applied` with `source: "push"`, listing snapshots and components
-that were not newer, components deferred while busy, and targets this page
-does not show.
+`push-reconnected`, `push-changed`, or `push-own` (a signal this page's own save
+caused, which needs no read). A dropped connection logs one
+`[placebo:push-disconnected]` warning; the browser reconnects by itself, and a
+page that missed a change reads itself again. A stream the browser gives up on
+(a missing route, an error status, another content type) logs
+`[placebo:push-closed]`: changes from then on do not reach the page. A refresh
+whose page could not be read logs `network-error`, `http-error`, or
+`redirected` with phase `push-refresh`. An applied refresh emits
+`placebo:applied` with `source: "push"`; a page older than the one shown is
+discarded with reason `older-page`.
 
 ## Files too large
 
@@ -174,15 +191,15 @@ adding application logging?
 | Injected failure | Console output |
 | --- | --- |
 | Unknown behavior name | Names the behavior and element, explains inactivity, suggests registration/import checks. |
-| Missing region | Names the action, primary/affected targets and path; says the request never started. |
-| Remounted response destination | Identifies the affected region, old ownership, and possible committed write. |
+| Missing component | Names the action, target and path; says the request never started. |
+| Remounted component | Identifies the affected component, old ownership, and possible committed write. |
 | HTTP 500 | Request ID, method/path, status, update/write state, and a server-log correlation hint. |
-| HTML instead of an update | Expected and received content types; suggests login/error-page or extractor rejection checks. |
+| JSON instead of a page | Expected and received content types; suggests login/error-page or extractor rejection checks. |
 | Wrong protocol version | Actual and expected versions with a rebuild/reload hint. |
 | Response lost after a real commit | Reports uncertainty and preserves the cause; the request ID matches the server's completed request. Submitting again replays the recorded reply. |
 | Behavior setup/cleanup exception | Names the behavior and element, preserves the original stack, and suggests the lifecycle check. |
 
-Other tests cover malformed JSON, interrupted body streams, invalid form
+Other tests cover replies without an outcome, interrupted body streams, invalid form
 configuration, mutation unmount warnings, lazy loading, tracing controls,
 input/query omission, and behaviors registered by a later module script. The
 captured console output is written to `test-results/diagnostics-after.json`.

@@ -7,7 +7,7 @@ const fixture = serverFixture("tasks");
 const row = id => `[data-task="${id}"]`;
 const component = id => `[id="task:${id}"]`;
 
-// Replies alone: pushes from this tab's own saves would also show them.
+// Replies alone: a feed signal after this tab's own saves would also refresh the page.
 async function visit(t) {
   const page = await fixture.page(t, { feeds: false });
   await page.goto(fixture.origin);
@@ -128,102 +128,42 @@ test("create validation preserves the draft and does not append", async t => {
   assert.ok(await page.locator("#new-title").evaluate(input => input.closest("dialog").open));
 });
 
-test("out-of-order independent saves cannot roll back a shared snapshot", async t => {
+test("a page rendered before the one shown updates only its own component", async t => {
   const page = await visit(t);
   let releaseFirst;
   const held = new Promise(resolve => { releaseFirst = resolve; });
   t.after(() => releaseFirst());
-  let firstCommitted;
-  const committed = new Promise(resolve => { firstCommitted = resolve; });
+  let firstRendered;
+  const rendered = new Promise(resolve => { firstRendered = resolve; });
   await page.route("**/actions/save-task", async route => {
     if (new URLSearchParams(route.request().postData()).get("id") !== "1") return route.continue();
+    // The server has written task 1 and rendered its page; hold the reply.
     const response = await route.fetch();
-    firstCommitted();
+    firstRendered();
     await held;
     await route.fulfill({ response });
   });
   await edit(page, 1);
-  await page.locator("#done-1").selectOption("true");
-  await submit(page, 1, "Older snapshot delivered last");
-  await committed;
+  await submit(page, 1, "Older page delivered last");
+  await rendered;
   await page.locator(`${row(1)} [data-dialog-close]`).click();
   await edit(page, 2);
-  await page.locator("#done-2").selectOption("true");
-  await submit(page, 2, "Newer snapshot delivered first");
+  const done = await page.locator("#done-2").inputValue();
+  await page.locator("#done-2").selectOption(done === "true" ? "false" : "true");
+  await submit(page, 2, "Newer page delivered first");
   await applied(page, "task:2");
-  const newest = await page.locator("#task-count").innerHTML();
-  const revision = await page.locator("#task-count").getAttribute("data-placebo-revision");
+  // Rendered after task 1's write, so it shows both saves.
+  const count = await page.locator("#task-count").innerHTML();
+  assert.equal(await page.locator(`${row(1)} .task-title`).textContent(), "Older page delivered last");
   releaseFirst();
   await applied(page, "task:1");
-  assert.equal(await page.locator("#task-count").innerHTML(), newest);
-  assert.equal(await page.locator("#task-count").getAttribute("data-placebo-revision"), revision);
-  assert.equal(await page.locator(`${row(1)} .task-title`).textContent(), "Older snapshot delivered last");
-  assert.deepEqual(await page.evaluate(() => window.events.find(e => e.type === "applied" && e.target === "task:1").skippedRegions), ["task-count"]);
-});
-
-test("a malformed additional patch rejects the whole response before changing any DOM", async t => {
-  const page = await visit(t);
-  const summary = await page.locator("#task-count").innerHTML();
-  const title = await page.locator(`${row(1)} .task-title`).textContent();
-  await page.route("**/actions/save-task", async route => {
-    const response = await route.fetch();
-    const update = await response.json();
-    update.patches.at(-1).revision = "invalid";
-    await route.fulfill({ response, body: JSON.stringify(update), contentType: "application/vnd.placebo.update+json" });
-  });
-  await edit(page, 1);
-  const version = await page.locator(`${component(1)} input[name=version]`).inputValue();
-  await submit(page, 1, "Committed but rejected in the browser");
-  await failure(page, "invalid-revision");
-  assert.equal(await page.locator("#task-count").innerHTML(), summary);
-  assert.equal(await page.locator(`${row(1)} .task-title`).textContent(), title);
-  assert.equal(await page.locator(`${component(1)} input[name=version]`).inputValue(), version);
-  assert.equal(await page.locator("#title-1").inputValue(), "Committed but rejected in the browser");
-});
-
-test("remounting an additional region invalidates the response's captured ownership", async t => {
-  const page = await visit(t);
-  await edit(page, 1);
-  await page.locator("#delay-1").selectOption("700");
-  await submit(page, 1, "Do not update a new summary instance");
-  await page.waitForFunction(() => window.events.some(e => e.type === "request"));
-  const title = await page.locator(`${row(1)} .task-title`).textContent();
-  await page.evaluate(() => {
-    const summary = document.querySelector("#task-count");
-    summary.replaceWith(summary.cloneNode(true));
-  });
-  await failure(page, "remounted-target");
-  assert.equal(await page.locator(`${row(1)} .task-title`).textContent(), title);
-  assert.ok(await page.locator(`${row(1)} dialog`).evaluate(dialog => dialog.open));
-});
-
-test("an undeclared target and duplicate append are rejected before primary reset", async t => {
-  const page = await visit(t);
-  await page.route("**/actions/add-task", async route => {
-    const response = await route.fetch();
-    const update = await response.json();
-    // An item id that is already some other element on the page.
-    update.patches[0].item = "title-1";
-    update.patches[0].html = '<div id="title-1" data-placebo-item>Duplicate</div>';
-    await route.fulfill({ response, body: JSON.stringify(update), contentType: "application/vnd.placebo.update+json" });
-  });
-  const count = await page.locator(".task-row").count();
-  await page.locator("#add-task").click();
-  await page.locator("#new-title").fill("Duplicate append rejected");
-  await page.locator("#new-title").press("Enter");
-  await failure(page, "duplicate-append");
-  assert.equal(await page.locator("#new-title").inputValue(), "Duplicate append rejected");
-  assert.equal(await page.locator(".task-row").count(), count);
-  await page.unroute("**/actions/add-task");
-  await page.route("**/actions/add-task", async route => {
-    const response = await route.fetch();
-    const update = await response.json();
-    update.patches[0].target = "task:1";
-    await route.fulfill({ response, body: JSON.stringify(update), contentType: "application/vnd.placebo.update+json" });
-  });
-  await page.locator("#new-title").press("Enter");
-  await failure(page, "invalid-patch");
-  assert.equal(await page.locator(".task-row").count(), count);
+  // The held page still shows task 2 as it was, but only task 1's editor takes it.
+  assert.equal(await page.locator("#task-count").innerHTML(), count);
+  assert.equal(await page.locator(`${row(2)} .task-title`).textContent(), "Newer page delivered first");
+  assert.match(await page.locator("#feedback-1").textContent(), /Saved/);
+  const events = await page.evaluate(() => window.events.filter(e => e.type === "applied"));
+  assert.equal(events.find(e => e.target === "task:2").page, "whole");
+  assert.equal(events.find(e => e.target === "task:1").page, "older");
 });
 
 test("composition defers the entire update and keeps the new draft when it finishes", async t => {
@@ -338,52 +278,7 @@ test("mounted dialog survives invalid, successful and repeated creates as the sa
   assert.ok(await page.evaluate(() => !composerDialog.open));
 });
 
-test("dialog nested in replaceable contents fails before sending a write", async t => {
-  const page = await visit(t);
-  const requests = [];
-  page.on("request", request => { if (request.method() === "POST") requests.push(request.url()); });
-  await page.evaluate(() => {
-    const component = document.getElementById("composer:new");
-    const wrapper = document.createElement("div");
-    for (const name of ["id", "data-placebo-region", "data-placebo-component"]) {
-      wrapper.setAttribute(name, component.getAttribute(name)); component.removeAttribute(name);
-    }
-    component.before(wrapper); wrapper.append(component);
-    window.unsafeDialog = component;
-    component.showModal();
-  });
-  await page.locator("#new-title").fill("Never send this write");
-  await page.locator("#new-title").press("Enter");
-  await failure(page, "unstable-dialog");
-  assert.equal(requests.length, 0);
-  assert.ok(await page.evaluate(() => unsafeDialog.isConnected && unsafeDialog.open));
-  const diagnostic = await page.evaluate(() => events.find(e => e.code === "unstable-dialog"));
-  assert.equal(diagnostic.target, "composer:new");
-  assert.equal(diagnostic.writeState, "not-started");
-  assert.match(diagnostic.hint, /mount_dialog/);
-});
-
-test("incoming dialog wrapper rejects the entire update and retains the open dialog", async t => {
-  const page = await visit(t);
-  await page.route("**/actions/add-task", async route => {
-    const response = await route.fetch();
-    const update = await response.json();
-    update.html = `<dialog>${update.html}</dialog>`;
-    await route.fulfill({ response, body: JSON.stringify(update) });
-  });
-  const count = await page.locator(".task-row").count();
-  const summary = await page.locator("#task-count").innerHTML();
-  await page.locator("#add-task").click();
-  await page.locator("#new-title").fill("Committed but malformed reply");
-  await page.locator("#new-title").press("Enter");
-  await failure(page, "unstable-dialog");
-  assert.equal(await page.locator(".task-row").count(), count);
-  assert.equal(await page.locator("#task-count").innerHTML(), summary);
-  assert.equal(await page.locator("#new-title").inputValue(), "Committed but malformed reply");
-  assert.ok(await page.locator('[id="composer:new"]').evaluate(dialog => dialog.open));
-});
-
-const order = page => page.$$eval("#tasks > [data-placebo-item]", items => items.map(item => item.id));
+const order = page => page.$$eval("#tasks > .task-row", rows => rows.map(row => row.id));
 
 async function addTask(page, title) {
   await page.locator("#add-task").click();
@@ -409,14 +304,14 @@ test("moving a task keeps its row node, the draft in its dialog, and focus on th
   const index = before.indexOf("tasks/2");
   await page.locator(`${row(2)} button[aria-label="Move up task 2"]`).focus();
   await page.keyboard.press("Enter");
-  await page.waitForFunction(index => document.querySelectorAll("#tasks > [data-placebo-item]")[index - 1]?.id === "tasks/2", index);
+  await page.waitForFunction(index => document.querySelectorAll("#tasks > .task-row")[index - 1]?.id === "tasks/2", index);
   const after = await order(page);
   assert.deepEqual(after, [...before.slice(0, index - 1), "tasks/2", before[index - 1], ...before.slice(index + 1)]);
   assert.ok(await page.evaluate(() => moved === document.getElementById("tasks/2") && draft === document.querySelector("#title-2")));
   assert.equal(await page.locator("#title-2").inputValue(), "Draft while moving");
   assert.ok(await page.evaluate(() => document.activeElement.matches('[data-task="2"] button[aria-label="Move up task 2"]')));
   await page.locator(`${row(2)} button[aria-label="Move down task 2"]`).click();
-  await page.waitForFunction(before => JSON.stringify(Array.from(document.querySelectorAll("#tasks > [data-placebo-item]"), n => n.id)) === JSON.stringify(before), before);
+  await page.waitForFunction(before => JSON.stringify(Array.from(document.querySelectorAll("#tasks > .task-row"), n => n.id)) === JSON.stringify(before), before);
 });
 
 test("deleting a task removes its row, updates the count, and moves focus to a neighbour", async t => {
@@ -431,83 +326,32 @@ test("deleting a task removes its row, updates the count, and moves focus to a n
   assert.equal(await page.locator(".task-row").count(), count - 1);
   assert.notEqual(await page.locator("#task-count").textContent(), total);
   // It was the last row, so focus moves to the row before it.
-  assert.ok(await page.evaluate(() => document.activeElement.closest("[data-placebo-item]") === document.querySelector("#tasks > [data-placebo-item]:last-child")));
+  assert.ok(await page.evaluate(() => document.activeElement.closest(".task-row") === document.querySelector("#tasks > .task-row:last-child")));
   assert.equal(await page.locator("dialog[open]").count(), 0);
 });
 
-test("an item order places listed items first and reports items that are gone", async t => {
-  const page = await visit(t);
-  const before = await order(page);
-  const reversed = [...before].reverse();
-  await page.route("**/actions/move-task", async route => {
-    const response = await route.fetch();
-    const update = await response.json();
-    update.patches.push({ target: "tasks", operation: "order-items", items: [...reversed, "tasks/999"] },
-      { target: "tasks", operation: "remove-item", item: "tasks/998" });
-    await route.fulfill({ response, body: JSON.stringify(update) });
-  });
-  const first = before[0].split("/")[1];
-  await page.locator(`${row(first)} button[aria-label="Move up task ${first}"]`).click();
-  await applied(page, `task-order:${first}`);
-  assert.deepEqual(await order(page), reversed);
-  assert.deepEqual(await page.evaluate(() => window.events.find(e => e.type === "applied").missingItems), ["tasks/999", "tasks/998"]);
-  await page.unroute("**/actions/move-task");
-  // Put the server's order back for the other tests.
-  await page.reload();
-});
-
-test("a reply can refresh another declared component, keeping only its edited fields", async t => {
-  const page = await visit(t);
-  await edit(page, 1);
-  const done = await page.locator("#done-1").inputValue();
+test("another action's page refreshes an editor but keeps its edited fields", async t => {
+  const first = await visit(t);
+  const second = await visit(t);
+  await edit(second, 1);
+  const done = await second.locator("#done-1").inputValue();
   const other = done === "true" ? "false" : "true";
-  await page.locator("#done-1").selectOption(other);
-  await page.locator(`${row(1)} [data-dialog-close]`).click();
-  const { incoming, revision } = await page.evaluate(() => {
-    const form = document.querySelector('[id="task-order:1"] form');
-    const config = JSON.parse(form.dataset.placebo);
-    for (const node of document.querySelectorAll('[id="task-order:1"] form')) node.dataset.placebo = JSON.stringify({ ...config, effects: [...config.effects, "task:1"] });
-    const copy = document.getElementById("task:1").cloneNode(true);
-    copy.querySelector("#title-1").setAttribute("value", "Title from another write");
-    copy.querySelector("#feedback-1").textContent = "Refreshed by another action.";
-    // The editor is versioned, so another action's refresh must be newer.
-    return { incoming: copy.innerHTML, revision: String(Number(copy.dataset.placeboRevision) + 1) };
-  });
-  let withRevision = false;
-  await page.route("**/actions/move-task", async route => {
-    const response = await route.fetch();
-    const update = await response.json();
-    update.patches.push({ target: "task:1", operation: "refresh-component", html: incoming, ...(withRevision ? { revision } : {}) });
-    await route.fulfill({ response, body: JSON.stringify(update) });
-  });
-  await page.locator(`${row(1)} button[aria-label="Move down task 1"]`).click();
-  await failure(page, "missing-revision");
-  assert.equal(await page.locator("#title-1").getAttribute("value") === "Title from another write", false);
-  withRevision = true;
-  await page.reload();
-  await page.locator(`${row(1)} [data-dialog-open]`).click();
-  await page.locator("#done-1").selectOption(other);
-  await page.locator(`${row(1)} [data-dialog-close]`).click();
-  await page.evaluate(() => {
-    const config = JSON.parse(document.querySelector('[id="task-order:1"] form').dataset.placebo);
-    for (const node of document.querySelectorAll('[id="task-order:1"] form')) node.dataset.placebo = JSON.stringify({ ...config, effects: [...config.effects, "task:1"] });
-  });
-  await page.locator(`${row(1)} button[aria-label="Move down task 1"]`).click();
-  await applied(page, "task-order:1");
-  const event = await page.evaluate(() => window.events.find(e => e.type === "applied" && e.target === "task-order:1"));
-  // The delete form is a component nested in the editor.
-  assert.deepEqual(event.refreshedComponents, ["task:1", "task-delete:1"]);
-  assert.equal(await page.locator('[id="task:1"]').getAttribute("data-placebo-revision"), revision);
-  assert.equal(await page.locator("#title-1").inputValue(), "Title from another write");
-  assert.equal(await page.locator("#done-1").inputValue(), other);
-  assert.equal(await page.locator("#feedback-1").textContent(), "Refreshed by another action.");
-  await page.unroute("**/actions/move-task");
-  // Both moves committed on the server; put the order back.
-  await page.reload();
-  for (const count of [1, 2]) {
-    await page.locator(`${row(1)} button[aria-label="Move up task 1"]`).click();
-    await applied(page, "task-order:1", "applied", count);
-  }
+  await second.locator("#done-1").selectOption(other);
+  await second.locator(`${row(1)} [data-dialog-close]`).click();
+  await edit(first, 1);
+  await submit(first, 1, "Title from another tab");
+  await applied(first, "task:1");
+  // Moving a row in the second tab answers with the page, task 1's editor included.
+  await second.locator(`${row(1)} button[aria-label="Move down task 1"]`).click();
+  await applied(second, "task-order:1");
+  const event = await second.evaluate(() => window.events.find(e => e.type === "applied" && e.target === "task-order:1"));
+  assert.ok(event.refreshedComponents.includes("task:1"), JSON.stringify(event.refreshedComponents));
+  assert.equal(await second.locator(`${row(1)} .task-title`).textContent(), "Title from another tab");
+  assert.equal(await second.locator("#title-1").inputValue(), "Title from another tab");
+  assert.equal(await second.locator("#done-1").inputValue(), other);
+  // Put the order back for the other tests.
+  await second.locator(`${row(1)} button[aria-label="Move up task 1"]`).click();
+  await applied(second, "task-order:1", "applied", 2);
 });
 
 test("a conflict shows the other tab's status when this tab only changed the title", async t => {
@@ -539,9 +383,7 @@ test("a successful reply can navigate within the site, and nowhere else", async 
   let destination = "//example.com/";
   await page.route("**/actions/save-task", async route => {
     const response = await route.fetch();
-    const update = await response.json();
-    update.navigate = destination;
-    await route.fulfill({ response, body: JSON.stringify(update) });
+    await route.fulfill({ status: 200, headers: { ...response.headers(), "x-placebo-navigate": destination }, body: "" });
   });
   await edit(page, 1);
   const title = await page.locator(`${row(1)} .task-title`).textContent();
@@ -565,7 +407,6 @@ test("moving a task without JavaScript redirects back to the page in its new ord
   const navigation = page.waitForNavigation();
   await page.locator(`${row(first)} button[aria-label="Move down task ${first}"]`).click();
   assert.equal((await navigation).status(), 200);
-  // The reply's also_move is moot: the redirected page renders the new order.
   assert.deepEqual(await order(page), [before[1], before[0], ...before.slice(2)]);
   const back = page.waitForNavigation();
   await page.locator(`${row(first)} button[aria-label="Move up task ${first}"]`).click();

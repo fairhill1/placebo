@@ -29,7 +29,7 @@ test("two runtime instances bind one reusable server action", async t => {
   assert.deepEqual(configs.map(c => c.target), ["editor:1", "editor:2"]);
 });
 
-test("validation refreshes surrounding markup while retaining input identity, focus and selection", async t => {
+test("validation updates the markup in place, keeping input identity, focus and selection", async t => {
   const page = await visit(t);
   const heading = await page.locator(`${card(1)} h2`).textContent();
   await page.locator("#title-2").fill("Other editor's unsaved draft");
@@ -38,6 +38,7 @@ test("validation refreshes surrounding markup while retaining input identity, fo
     const input = document.querySelector("#title-1");
     window.originalInput = input;
     window.originalHeading = document.querySelector('[id="editor:1"] h2');
+    window.originalFeedback = document.querySelector("#feedback-1");
     input.setSelectionRange(0, 1);
     input.form.requestSubmit();
   });
@@ -45,13 +46,17 @@ test("validation refreshes surrounding markup while retaining input identity, fo
   assert.equal(await page.locator(`${card(1)} h2`).textContent(), heading);
   assert.equal(await page.locator("#title-2").inputValue(), "Other editor's unsaved draft");
   assert.match(await page.locator("#feedback-1").textContent(), /3 and 80/);
+  // The morph changes what differs and keeps the nodes, so a screen reader
+  // announces the feedback in the live region it already knows.
   assert.deepEqual(await page.evaluate(() => ({
     sameInput: document.querySelector("#title-1") === window.originalInput,
-    newHeading: document.querySelector('[id="editor:1"] h2') !== window.originalHeading,
+    sameHeading: document.querySelector('[id="editor:1"] h2') === window.originalHeading,
+    sameFeedback: document.querySelector("#feedback-1") === window.originalFeedback,
+    invalid: window.originalInput.getAttribute("aria-invalid"),
     focused: document.activeElement === window.originalInput,
     selection: [window.originalInput.selectionStart, window.originalInput.selectionEnd],
     value: window.originalInput.value,
-  })), { sameInput: true, newHeading: true, focused: true, selection: [0, 1], value: "x" });
+  })), { sameInput: true, sameHeading: true, sameFeedback: true, invalid: "true", focused: true, selection: [0, 1], value: "x" });
 });
 
 test("typing during a save survives its older server-rendered response", async t => {
@@ -144,15 +149,18 @@ test("duplicate local keys reject a response before altering the live component"
   const page = await visit(t);
   await page.route("**/actions/save-title", async route => {
     const response = await route.fetch();
-    const update = await response.json();
-    update.html = update.html.replace("</form>", '<input name="title" data-placebo-field="title"></form>');
-    await route.fulfill({ response, body: JSON.stringify(update), contentType: "application/vnd.placebo.update+json" });
+    // The reply is the page; editor 1's form comes first.
+    const body = (await response.text()).replace("</form>", '<input name="title" data-placebo-field="title"></form>');
+    await route.fulfill({ response, body });
   });
   const heading = await page.locator(`${card(1)} h2`).textContent();
   await save(page, 1, "x");
   await page.waitForFunction(() => window.events.some(e => e.type === "error" && e.code === "duplicate-local"));
   assert.equal(await page.locator(`${card(1)} h2`).textContent(), heading);
   assert.equal(await page.locator("#title-1").inputValue(), "x");
+  // The invalid reply's message would show; nothing of the page was applied.
+  assert.doesNotMatch(await page.locator("#feedback-1").textContent(), /3 and 80/);
+  assert.equal(await page.locator(`${card(1)} [name="title"]`).count(), 1);
 });
 
 test("mutation endpoint rejects a form posted from another site", async t => {

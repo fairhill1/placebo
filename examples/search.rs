@@ -1,14 +1,10 @@
-use axum::{
-    Router,
-    extract::State,
-    http::{HeaderMap, header},
-    response::{IntoResponse, Response},
-    routing::get,
-};
+//! A live search that reads its own page: typing reads `/?q=…`, the address
+//! follows, and the page morphs in with the results. Adding a book answers
+//! with the page at the current query, so a match shows up at once.
+use axum::{Router, extract::State, response::IntoResponse, routing::get};
 use maud::{DOCTYPE, Markup, html};
 use placebo::{
-    Component, Control, FormInput, Input, MutationAction, MutationBinding, ReadAction, Region,
-    UPDATE_TYPE, fields,
+    Component, Control, FormInput, Input, MutationAction, MutationBinding, Read, fields,
 };
 use serde::Deserialize;
 use std::{
@@ -17,22 +13,12 @@ use std::{
 };
 mod support;
 
-const BOOKS: Region = Region::new("book-results");
-const PLACES: Region = Region::new("place-results");
-const SEARCH_BOOKS: ReadAction<Search> = ReadAction::new("search-books", "/search/books");
-const SEARCH_PLACES: ReadAction<Search> = ReadAction::new("search-places", "/search/places");
 const ADD_BOOK: MutationAction<AddBook> = MutationAction::new("add-book", "/actions/add-book");
 const BOOK_TITLES: &[&str] = &[
     "Rust in Action",
     "The Rust Programming Language",
     "A Philosophy of Software Design",
     "Designing Data-Intensive Applications",
-];
-const PLACE_NAMES: &[&str] = &[
-    "Oslo, Norway",
-    "Bergen, Norway",
-    "Copenhagen, Denmark",
-    "Kyoto, Japan",
 ];
 
 type Books = Arc<Mutex<Vec<String>>>;
@@ -43,71 +29,58 @@ struct AddBook {
     title: String,
 }
 
+/// The page's query: the page renders from it, and the search form sends it.
 #[derive(Default, Deserialize, FormInput)]
 #[serde(deny_unknown_fields)]
 struct Search {
     #[serde(default)]
     q: String,
+    // A slower answer, to watch the newest search win.
     #[serde(default)]
     delay_ms: u64,
 }
 
-fn results(items: &[impl AsRef<str>], q: &str) -> Markup {
+fn results(books: &[String], q: &str) -> Markup {
     let needle = q.to_lowercase();
-    let matches: Vec<_> = items
+    let matches: Vec<_> = books
         .iter()
-        .map(AsRef::as_ref)
-        .filter(|item| item.to_lowercase().contains(&needle))
+        .filter(|book| book.to_lowercase().contains(&needle))
         .collect();
     html! {
-        p .result-count { (matches.len()) " results" }
-        @if matches.is_empty() {
-            p .empty { "No matches for “" (q) "”. Try another search." }
-        } @else {
-            ul {
-                @for item in matches {
-                    li { span { (item) } span .arrow aria-hidden="true" { "↗" } }
+        div #book-results .results {
+            p .result-count { (matches.len()) " results" }
+            @if matches.is_empty() {
+                p .empty { "No matches for “" (q) "”. Try another search." }
+            } @else {
+                ul {
+                    @for book in matches {
+                        li { span { (book) } span .arrow aria-hidden="true" { "↗" } }
+                    }
                 }
             }
         }
     }
 }
 
-fn panel(
-    title: &str,
-    id: &str,
-    binding: placebo::ReadBinding<Search>,
-    region: Region,
-    items: &[impl AsRef<str>],
-    q: &str,
-) -> Markup {
+fn search_form(search: &Search) -> Markup {
+    // The select shows the query's delay; any other value reads as none.
+    let delay = if search.delay_ms >= 800 { 800 } else { 0 };
     let fields = fields! { Search {
-        label for=(id) { "Search " (title.to_lowercase()) }
+        label for="books-query" { "Search books" }
         .search {
-            @field q = Control::search(q).id(id).placeholder("Start typing…").autocomplete("off");
+            @field q = Control::search(search.q.as_str()).id("books-query").placeholder("Start typing…").autocomplete("off");
             button type="submit" { "Search" }
         }
         .network {
-            label for=(format!("{id}-delay")) { "Response delay" }
-            @field delay_ms = Control::select(0, [(0, "None"), (800, "800 ms")]).id(&format!("{id}-delay"));
+            label for="books-delay" { "Response delay" }
+            @field delay_ms = Control::select(delay, [(0, "None"), (800, "800 ms")]).id("books-delay");
         }
     } };
-    html! {
-        section .panel {
-            h2 { (title) }
-            (binding.form(fields))
-            (region.mount(results(items, q)))
-        }
-    }
-}
-
-// The Books search follows history, so the page renders its query too.
-fn books_binding() -> placebo::ReadBinding<Search> {
-    SEARCH_BOOKS.bind(BOOKS).on_input(120).history()
+    Read::new().on_input(120).form(fields)
 }
 
 fn add_binding() -> MutationBinding<AddBook> {
-    ADD_BOOK.bind(&Component::new("add-book", 1)).affects(BOOKS)
+    ADD_BOOK.bind(&Component::new("add-book", 1))
 }
 
 fn add_form(feedback: &str) -> Markup {
@@ -122,7 +95,7 @@ fn add_form(feedback: &str) -> Markup {
     add_binding().form(fields)
 }
 
-fn page(books: &[String], books_q: &str, places_q: &str) -> Markup {
+fn page(books: &[String], search: &Search) -> Markup {
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -142,16 +115,20 @@ fn page(books: &[String], books_q: &str, places_q: &str) -> Markup {
                     }
                     .intro {
                         p .eyebrow { "HTML, with an agreement." }
-                        h1 { "Small updates." br; "Clear boundaries." }
-                        p .lede { "Two independent searches, rendered on the server. Keep typing while a response is pending. The latest search gets the final word." }
+                        h1 { "One page." br; "Always current." }
+                        p .lede { "A search reads this page again at its query, rendered on the server. Keep typing while a response is pending. The latest search gets the final word." }
                     }
                     .panels {
-                        (panel("Books", "books-query", books_binding(), BOOKS, books, books_q))
-                        (panel("Places", "places-query", SEARCH_PLACES.bind(PLACES).on_input(120), PLACES, PLACE_NAMES, places_q))
-                    }
-                    section .panel {
-                        p { "A new book shows up in the Books results if it matches the current search." }
-                        (Component::new("add-book", 1).mount(add_form("")))
+                        section .panel {
+                            h2 { "Books" }
+                            (search_form(search))
+                            (results(books, &search.q))
+                        }
+                        section .panel {
+                            h2 { "Add a book" }
+                            p { "A new book shows up in the results if it matches the current search." }
+                            (Component::new("add-book", 1).mount(add_form("")))
+                        }
                     }
                     aside .notes {
                         label for="draft" { "A little local state" }
@@ -160,58 +137,24 @@ fn page(books: &[String], books_q: &str, places_q: &str) -> Markup {
                     details .trace {
                         summary { "Interaction trace" }
                         p { "Scheduled → request → applied. Superseded work is discarded. Protocol errors are reported here and in the console." }
-                        ol #trace role="log" aria-live="polite" {}
+                        // The browser writes the trace, so the page keeps it through every morph.
+                        ol #trace role="log" aria-live="polite" data-placebo-local="trace" {}
                     }
-                    footer { "Experiment 001 · HTML fragments + explicit update contracts" }
+                    footer { "Experiment 001 · whole pages, morphed" }
                 }
             }
         }
     }
 }
 
-async fn home(State(books): State<Books>, Input(query): Input<Search>) -> Markup {
-    page(&books.lock().unwrap(), &query.q, "")
+// Every render of the page, a search's included, comes from its query.
+async fn home(State(books): State<Books>, Input(search): Input<Search>) -> Markup {
+    tokio::time::sleep(Duration::from_millis(search.delay_ms.min(1500))).await;
+    page(&books.lock().unwrap(), &search)
 }
 
-async fn search_books(
-    State(books): State<Books>,
-    headers: HeaderMap,
-    Input(query): Input<Search>,
-) -> Response {
-    tokio::time::sleep(Duration::from_millis(query.delay_ms.min(1500))).await;
-    let books = books.lock().unwrap().clone();
-    if wants_update(&headers) {
-        books_binding()
-            .reply(results(&books, &query.q))
-            .into_response()
-    } else {
-        page(&books, &query.q, "").into_response()
-    }
-}
-
-async fn search_places(
-    State(books): State<Books>,
-    headers: HeaderMap,
-    Input(query): Input<Search>,
-) -> Response {
-    tokio::time::sleep(Duration::from_millis(query.delay_ms.min(1500))).await;
-    if wants_update(&headers) {
-        SEARCH_PLACES
-            .bind(PLACES)
-            .reply(results(PLACE_NAMES, &query.q))
-            .into_response()
-    } else {
-        page(&books.lock().unwrap(), "", &query.q).into_response()
-    }
-}
-
-fn wants_update(headers: &HeaderMap) -> bool {
-    headers.get(header::ACCEPT).and_then(|h| h.to_str().ok()) == Some(UPDATE_TYPE)
-}
-
-// The reply does not know what the Books search currently shows; asking the
-// browser to run it again keeps the filter the person typed.
-async fn add_book(State(books): State<Books>, Input(input): Input<AddBook>) -> Response {
+// The reply's page renders the results for the query in the address.
+async fn add_book(State(books): State<Books>, Input(input): Input<AddBook>) -> impl IntoResponse {
     let title = input.title.trim().to_owned();
     if title.is_empty() {
         return add_binding()
@@ -219,10 +162,7 @@ async fn add_book(State(books): State<Books>, Input(input): Input<AddBook>) -> R
             .into_response();
     }
     books.lock().unwrap().push(title);
-    add_binding()
-        .reply(add_form("Added."))
-        .also_refetch(&BOOKS)
-        .into_response()
+    add_binding().reply(add_form("Added.")).into_response()
 }
 
 #[tokio::main]
@@ -232,8 +172,6 @@ async fn main() {
     ));
     let app = Router::new()
         .route("/", get(home))
-        .route(SEARCH_BOOKS.path(), SEARCH_BOOKS.route(search_books))
-        .route(SEARCH_PLACES.path(), SEARCH_PLACES.route(search_places))
         .route(ADD_BOOK.path(), ADD_BOOK.route(add_book))
         .route("/placebo.js", get(placebo::runtime))
         .route(

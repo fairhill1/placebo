@@ -8,17 +8,13 @@ use axum::{
 use maud::{DOCTYPE, Markup, Render, html};
 use std::marker::PhantomData;
 
-use crate::{
-    Applied, Config, EndsWithInput, Envelope, FormFields, FormInput, RegionTarget, Rejected,
-    VERSION, native,
-};
+use crate::{Applied, EndsWithInput, FormFields, FormInput, Rejected, Reply, VERSION, native};
 
 /// Identity is scoped by component kind and a runtime instance key. This is
 /// UI addressing, not authorization to modify the record with that key.
 pub struct Component {
     id: String,
     class: Option<String>,
-    revision: Option<u64>,
 }
 
 /// An initial component mount, renderable inside `html!`, not reply contents.
@@ -56,7 +52,6 @@ impl Component {
         Self {
             id: format!("{kind}:{key}"),
             class: None,
-            revision: None,
         }
     }
 
@@ -67,48 +62,32 @@ impl Component {
         self
     }
 
-    /// The server revision of the data these contents show, such as the
-    /// record's version. A versioned component orders every refresh by it: a
-    /// reply to its own form applies unless it is older than what the page
-    /// shows, and a refresh from another action or a push applies only when
-    /// newer. Give it to every mount and binding of a component that other
-    /// actions or a [`crate::Feed`] refresh, taken from the record the contents
-    /// render (after the write, for a successful reply).
-    pub fn revision(mut self, revision: u64) -> Self {
-        self.revision = Some(revision);
-        self
-    }
-
     pub fn id(&self) -> &str {
         &self.id
     }
 
-    pub(crate) fn revision_value(&self) -> Option<u64> {
-        self.revision
-    }
-
     pub fn mount(&self, content: Markup) -> MountedComponent {
-        let content = native::mounted_contents(self.id()).unwrap_or(content);
+        let content = native::mounted_contents(self.id()).map_or(content, |(reply, _)| reply);
         MountedComponent(
-            html! { div id=(self.id()) class=[&self.class] data-placebo-region data-placebo-component data-placebo-revision=[self.revision] { (content) } },
+            html! { div id=(self.id()) class=[&self.class] data-placebo-component { (content) } },
         )
     }
 
-    /// Mount the native dialog itself as the persistent component root.
-    /// Replies replace its contents, preserving the dialog node, open state,
-    /// native modality and listeners. Include the labelled heading in every
-    /// render of the contents. Opening and closing remain application behavior.
-    /// Alternatively, mount a normal component *inside* a persistent dialog.
+    /// Mount the native dialog itself as the component root, so a reply shows
+    /// in the dialog and the person's open or closed state stays. Include the
+    /// labelled heading in every render of the contents. Opening and closing
+    /// are native: buttons with `command="show-modal"` and `command="close"`.
     pub fn mount_dialog(&self, labelled_by: &str, content: Markup) -> MountedComponent {
         assert!(!labelled_by.is_empty(), "a dialog needs a heading id");
         // A page rendered again for a rejected native submission opens the
-        // dialog, so the person sees the feedback without JavaScript.
+        // dialog, so the person sees the feedback without JavaScript. With
+        // the runtime, the dialog keeps the open state the person gave it.
         let (content, open) = match native::mounted_contents(self.id()) {
-            Some(reply) => (reply, true),
+            Some((reply, native)) => (reply, native),
             None => (content, false),
         };
         MountedComponent(html! {
-            dialog id=(self.id()) class=[&self.class] open[open] aria-labelledby=(labelled_by) data-placebo-region data-placebo-component data-placebo-revision=[self.revision] { (content) }
+            dialog id=(self.id()) class=[&self.class] open[open] aria-labelledby=(labelled_by) data-placebo-component { (content) }
         })
     }
 
@@ -159,8 +138,6 @@ impl<I: FormInput> MutationAction<I> {
         MutationBinding {
             action: self,
             target: component.id().to_owned(),
-            revision: component.revision,
-            effects: Vec::new(),
         }
     }
 
@@ -195,39 +172,26 @@ async fn require_mutation(request: Request, next: Next) -> Response {
     native::run(mutation.native, Request::from_parts(parts, body), next).await
 }
 
-/// A mutation form and its replies, for one component instance. Build the view's
-/// form and the handler's replies from one function that returns the binding,
-/// so both agree on `affects`:
+/// A mutation form and its replies, for one component instance. The reply is
+/// the component's contents; the page around it is rendered again, so a
+/// handler never names anything else it changed:
 ///
 /// ```
-/// use placebo::{Component, FormInput, MutationAction, MutationBinding, VersionedRegion};
+/// use placebo::{Component, FormInput, MutationAction};
 /// use maud::html;
 /// #[derive(serde::Deserialize, FormInput)]
 /// struct Save { title: String }
 /// const SAVE: MutationAction<Save> = MutationAction::new("save", "/save");
-/// const COUNTS: VersionedRegion = VersionedRegion::new("counts");
-/// fn save_binding(id: u64) -> MutationBinding<Save> {
-///     SAVE.bind(&Component::new("editor", id)).affects(COUNTS)
-/// }
-/// // The handler replies through the same binding as the view's form.
-/// save_binding(1).reply(html! {}).also_replace(COUNTS, 2, html! { "3 items" });
+/// let binding = SAVE.bind(&Component::new("editor", 1));
+/// // The view renders binding.form(..); the handler, after the write:
+/// binding.reply(html! { p { "Saved." } });
 /// ```
 pub struct MutationBinding<I: FormInput> {
     action: MutationAction<I>,
     target: String,
-    revision: Option<u64>,
-    effects: Vec<String>,
 }
 
 impl<I: FormInput> MutationBinding<I> {
-    /// Declare additional mounted regions this form's response may update.
-    /// Their DOM identities are captured when the request is scheduled.
-    pub fn affects(mut self, region: impl RegionTarget) -> Self {
-        assert!(!self.effects.iter().any(|id| id == region.id()));
-        self.effects.push(region.id().to_owned());
-        self
-    }
-
     /// The form works without JavaScript too: see [`crate::native_forms`].
     pub fn form(&self, fields: FormFields<I>) -> Markup {
         let (content, base) = fields.into_parts(native::submitted_from(&self.target));
@@ -235,14 +199,6 @@ impl<I: FormInput> MutationBinding<I> {
             version: VERSION,
             action: self.action.name,
             target: &self.target,
-            policy: "exclusive",
-            operation: "refresh-component",
-            input_delay_ms: None,
-            history: false,
-            load: false,
-            reveal: false,
-            every_ms: None,
-            effects: self.effects.iter().map(String::as_str).collect(),
         };
         let config = serde_json::to_string(&config).expect("configuration serializes");
         // The values the server rendered, so a native reply can tell which
@@ -262,36 +218,30 @@ impl<I: FormInput> MutationBinding<I> {
     }
 
     pub fn reply(&self, content: Markup) -> Applied {
-        Applied {
-            envelope: self.envelope(StatusCode::OK, content),
-            effects: self.effects.clone(),
-        }
+        Applied(self.reply_with(StatusCode::OK, content))
     }
     pub fn invalid(&self, content: Markup) -> Rejected {
-        self.rejected(StatusCode::UNPROCESSABLE_ENTITY, content)
+        Rejected(self.reply_with(StatusCode::UNPROCESSABLE_ENTITY, content))
     }
     pub fn conflict(&self, content: Markup) -> Rejected {
-        self.rejected(StatusCode::CONFLICT, content)
+        Rejected(self.reply_with(StatusCode::CONFLICT, content))
     }
 
-    fn rejected(&self, status: StatusCode, content: Markup) -> Rejected {
-        Rejected {
-            envelope: self.envelope(status, content),
-            effects: self.effects.clone(),
+    fn reply_with(&self, status: StatusCode, content: Markup) -> Reply {
+        Reply {
+            target: self.target.clone(),
+            html: content.into_string(),
+            status,
+            navigate: None,
         }
     }
+}
 
-    fn envelope(&self, status: StatusCode, content: Markup) -> Envelope {
-        let mut envelope = Envelope::new(
-            self.action.name,
-            &self.target,
-            "refresh-component",
-            status,
-            content,
-        );
-        envelope.revision = self.revision.map(|revision| revision.to_string());
-        envelope
-    }
+#[derive(serde::Serialize)]
+struct Config<'a> {
+    version: u8,
+    action: &'static str,
+    target: &'a str,
 }
 
 /// The checks every mutation request passes before its handler runs.
@@ -380,10 +330,9 @@ mod tests {
         let action = MutationAction::<Input>::new("save", "/save");
         for id in [7, 19] {
             let component = Component::new("editor", id);
-            let response =
-                serde_json::to_value(action.bind(&component).reply(html! {}).envelope).unwrap();
-            assert_eq!(response["target"], format!("editor:{id}"));
-            assert_eq!(response["action"], "save");
+            let response = action.bind(&component).reply(html! {}).into_response();
+            let reply = response.extensions().get::<native::NativeReply>().unwrap();
+            assert_eq!(reply.target, format!("editor:{id}"));
         }
         let input: Input = serde_json::from_str(r#"{"title":"typed"}"#).unwrap();
         assert_eq!(input.title, "typed");

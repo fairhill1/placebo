@@ -29,8 +29,9 @@ ul { list-style: none; padding: 0; margin: 0; }
 li { border-top: 1px solid #e4e7df; padding: 14px 0; display: flex; gap: 12px; justify-content: space-between; font-size: 14px; line-height: 1.45; }
 .arrow { color: #8c9c86; }
 .empty { color: #65726a; font-size: 14px; line-height: 1.6; }
-[data-placebo-region] { min-height: 210px; transition: opacity 100ms; }
-[aria-busy="true"] { opacity: .5; }
+.results { min-height: 210px; transition: opacity 100ms; }
+/* While a search is on its way, its results fade; so does a component that is saving. */
+.panel:has(form[aria-busy="true"]) .results, [data-placebo-component][aria-busy="true"] { opacity: .5; }
 .notes { margin: 26px 0; }
 textarea { width: 100%; padding: 14px; min-height: 80px; resize: vertical; font-size: 14px; }
 .trace { border-top: 1px solid #d9ddd2; border-bottom: 1px solid #d9ddd2; padding: 18px 0; color: #59655e; font-size: 13px; }

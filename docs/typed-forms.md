@@ -118,20 +118,6 @@ let action = MutationAction::<SaveTitle>::new("save", "/save");
 let route: axum::routing::MethodRouter<()> = action.route(wrong);
 ```
 
-Read handlers obey the same rule:
-
-```compile_fail,E0631
-use placebo::{FormInput, Input, ReadAction};
-use serde::Deserialize;
-#[derive(Deserialize, FormInput)]
-struct Search { query: String }
-#[derive(Deserialize, FormInput)]
-struct Other { query: String }
-async fn wrong(_headers: axum::http::HeaderMap, Input(_input): Input<Other>) {}
-let action = ReadAction::<Search>::new("search", "/search");
-let route: axum::routing::MethodRouter<()> = action.route(wrong);
-```
-
 A required field cannot live inside a branch that might omit it:
 
 ```compile_fail
@@ -336,11 +322,14 @@ let fields = fields! { Attach { @field cover = Control::hidden(String::new()); }
 A read submits its fields in the URL, so its payload cannot have a file field:
 
 ```compile_fail,E0080
-use placebo::{FormInput, ReadAction, Upload};
+use placebo::{Control, FormInput, Read, Upload, fields};
 use serde::Deserialize;
 #[derive(Deserialize, FormInput)]
 struct Search { q: String, sample: Option<Upload> }
-const SEARCH: ReadAction<Search> = ReadAction::new("search", "/search");
+let form = Read::new().form(fields! { Search {
+    @field q = Control::search("");
+    @field sample = Control::file();
+} });
 ```
 
 Several files need `#[serde(default)]`, like other `Vec` fields:

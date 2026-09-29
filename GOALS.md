@@ -90,8 +90,9 @@ verify. Useful compiler checks reduce mistakes, but generated machinery should
 not make everyday edits or error messages difficult to understand.
 
 Exercise these qualities on complete interactions and realistic changes:
-renaming a field, adding an editor, handling validation, updating several
-regions, and diagnosing a request that did not update the page.
+renaming a field, adding an editor, handling validation, adding a search or a
+panel that shows saved data, and diagnosing a request that did not update the
+page.
 
 ## Keep implementation choices open
 
@@ -139,9 +140,9 @@ individual mechanisms stronger while making the overall experience harder.
 
 ## Current evidence and gaps
 
-The prototype has typed forms and handlers, guarded fragment updates, explicit
-local retention/reset, shared snapshot revisions, behavior lifecycle hooks,
-and a rebuild/reload workflow. Tests exercise both normal and adverse cases.
+The prototype has typed forms and handlers, whole-page replies morphed into the
+document, explicit local retention/reset, behavior lifecycle hooks, and a
+rebuild/reload workflow. Tests exercise both normal and adverse cases.
 
 The [debugging evaluation](docs/diagnostics.md) established console diagnostics
 for missing/remounted targets, HTTP and protocol failures, lost mutation
@@ -156,8 +157,10 @@ result against Datastar or the other comparison stacks has been established.
 
 The broader authoring model is still being evaluated. Forms now work without
 JavaScript through the same handlers, retries after uncertain writes are
-idempotent, components can nest, component revisions order replies against
-server push, and reads can start themselves. Each has tests for its adverse
+idempotent, components can nest, pages are ordered by when they were rendered,
+server push is a "changed" signal, and a search reads its own page. nfi-film, the
+first app outside the examples, lost 104 lines of update bookkeeping when saves
+began answering with the page, and kept its 19 flows passing in three browsers. Each has tests for its adverse
 cases, but none has been compared with the other stacks yet. The examples do not
 yet establish that Placebo makes a complete production application simpler than
 the comparison stack.

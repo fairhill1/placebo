@@ -1,6 +1,7 @@
-//! A small task list: coordinated fragments, revisioned summaries, dialogs,
-//! and a keyed list whose rows can be added, deleted, and reordered. Every
-//! change is pushed to the other open tabs.
+//! A small task list: dialogs, a count, and rows that can be added, edited,
+//! deleted, and reordered. Every save answers with the page, so the count and
+//! the rows follow without the handlers naming them, and every change tells
+//! the other open tabs to refresh.
 use axum::{
     Router,
     extract::State,
@@ -10,8 +11,7 @@ use axum::{
 };
 use maud::{DOCTYPE, Markup, html};
 use placebo::{
-    Component, Control, Feed, FormEnum, FormInput, Input, List, MutationAction, MutationBinding,
-    Position, VersionedRegion, fields,
+    Component, Control, Feed, FormEnum, FormInput, Input, MutationAction, MutationBinding, fields,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,8 +21,6 @@ use std::{
 };
 mod support;
 
-const LIST: List = List::new("tasks");
-const SUMMARY: VersionedRegion = VersionedRegion::new("task-count");
 const ADD: MutationAction<AddTask> = MutationAction::new("add-task", "/actions/add-task");
 const SAVE: MutationAction<SaveTask> = MutationAction::new("save-task", "/actions/save-task");
 const DELETE: MutationAction<DeleteTask> =
@@ -74,7 +72,6 @@ struct Task {
 struct Tasks {
     items: BTreeMap<u64, Task>,
     order: Vec<u64>,
-    revision: u64,
     next_id: u64,
 }
 
@@ -90,51 +87,31 @@ struct App {
     live: Feed,
 }
 
-// Every open page follows this feed. Publish under the tasks lock, so the
-// feed's order matches the revisions.
+// Every open page follows this feed and refreshes when it signals.
 fn live_feed() -> Feed {
     Feed::new("tasks-live", "/live/tasks")
-        .affects(LIST)
-        .affects(SUMMARY)
-        .affects_kind("task-summary")
-        .affects_kind("task")
 }
 
-// The editor carries the task's version as its revision, so a pushed refresh
-// and a reply to its own save apply in version order.
-fn task_component(task: &Task) -> Component {
-    Component::new("task", task.id).revision(task.version)
+fn task_component(id: u64) -> Component {
+    Component::new("task", id)
 }
 
-fn row_summary(task: &Task) -> VersionedRegion {
-    VersionedRegion::keyed("task-summary", task.id)
+// The view's forms and the handlers' replies share these bindings.
+fn save_binding(id: u64) -> MutationBinding<SaveTask> {
+    SAVE.bind(&task_component(id))
 }
 
-// The view's forms and the handlers' replies share these bindings, so the
-// regions a form declares are the ones its replies may patch.
-fn save_binding(task: &Task) -> MutationBinding<SaveTask> {
-    SAVE.bind(&task_component(task))
-        .affects(row_summary(task))
-        .affects(SUMMARY)
-}
-
-// Deleting is its own component, nested in the editor, so its reply needs
-// no revision and the editor's refreshes keep it.
+// Deleting is its own component, nested in the editor.
 fn delete_binding(id: u64) -> MutationBinding<DeleteTask> {
-    DELETE
-        .bind(&Component::new("task-delete", id))
-        .affects(LIST)
-        .affects(SUMMARY)
+    DELETE.bind(&Component::new("task-delete", id))
 }
 
 fn move_binding(id: u64) -> MutationBinding<MoveTask> {
-    MOVE.bind(&Component::new("task-order", id)).affects(LIST)
+    MOVE.bind(&Component::new("task-order", id))
 }
 
 fn add_binding() -> MutationBinding<AddTask> {
     ADD.bind(&Component::new("composer", "new"))
-        .affects(LIST)
-        .affects(SUMMARY)
 }
 
 fn count(tasks: &Tasks) -> Markup {
@@ -206,7 +183,7 @@ fn edit_form(task: &Task, draft: &str, done: bool, feedback: &str) -> Markup {
             h2 id=(format!("dialog-title-{}", task.id)) { "Make it yours." }
             p { "Save updates the list. Cancel keeps your draft for later." }
         }
-        (save_binding(task).form(fields))
+        (save_binding(task.id).form(fields))
         (Component::new("task-delete", task.id).mount(delete_binding(task.id).form(delete)))
     }
 }
@@ -226,18 +203,18 @@ fn order_controls(id: u64) -> Markup {
     }
 }
 
-fn row(task: &Task) -> placebo::MountedItem {
-    let component = task_component(task);
-    LIST.item(task.id).mount(html! {
-        article .task-row data-placebo-behavior="dialog" data-owner=(component.id()) data-task=(task.id) {
-            (row_summary(task).mount(task.version, summary(task)))
+fn row(task: &Task) -> Markup {
+    let component = task_component(task.id);
+    html! {
+        article .task-row id=(format!("tasks/{}", task.id)) data-placebo-behavior="dialog" data-owner=(component.id()) data-task=(task.id) {
+            div id=(format!("task-summary:{}", task.id)) { (summary(task)) }
             (Component::new("task-order", task.id).class("task-order").mount(order_controls(task.id)))
             (component.mount_dialog(
                 &format!("dialog-title-{}", task.id),
                 edit_form(task, &task.title, task.done, "Use 3–80 characters."),
             ))
         }
-    })
+    }
 }
 
 fn add_form(draft: &str, feedback: &str) -> Markup {
@@ -290,11 +267,11 @@ async fn home(State(app): State<App>) -> Markup {
                                 (Component::new("composer", "new").mount_dialog("add-heading", add_form("", "Use 3–80 characters.")))
                             }
                         }
-                        (SUMMARY.mount(tasks.revision, count(&tasks)))
-                        (LIST.mount(html! { @for task in tasks.in_order() { (row(task)) } }))
+                        div #task-count { (count(&tasks)) }
+                        div #tasks { @for task in tasks.in_order() { (row(task)) } }
                     }
                     p .hint { "Tip: Cancel keeps an unfinished edit. Save accepts the cleaned-up title unless you’ve already started typing something newer." }
-                    details .trace { summary { "Interaction trace" } p { "Follow requests and applied updates while you try the list." } ol #trace role="log" aria-label="Interaction events" {} }
+                    details .trace { summary { "Interaction trace" } p { "Follow requests and applied updates while you try the list." } ol #trace role="log" aria-label="Interaction events" data-placebo-local="trace" {} }
                     footer { "Experiment 003 · In-memory tasks reset when the server restarts · Open a second tab to see changes arrive" }
                     // Mounted under the same lock as the tasks it follows.
                     (app.live.mount())
@@ -319,36 +296,29 @@ async fn add(State(app): State<App>, Input(input): Input<AddTask>) -> Response {
     let mut tasks = app.tasks.lock().unwrap();
     let id = tasks.next_id;
     tasks.next_id += 1;
-    let task = Task {
+    tasks.items.insert(
         id,
-        title,
-        done: false,
-        version: 1,
-    };
-    let new_row = row(&task);
-    let pushed_row = row(&task);
-    tasks.items.insert(id, task);
+        Task {
+            id,
+            title,
+            done: false,
+            version: 1,
+        },
+    );
     tasks.order.push(id);
-    tasks.revision += 1;
-    app.live
-        .push()
-        .insert(pushed_row, Position::End)
-        .replace(SUMMARY, tasks.revision, count(&tasks))
-        .send();
+    app.live.changed();
     binding
         .reply(add_form("", "Ready for the next task."))
-        .also_insert(new_row, Position::End)
-        .also_replace(SUMMARY, tasks.revision, count(&tasks))
         .into_response()
 }
 
 async fn save(State(app): State<App>, Input(input): Input<SaveTask>) -> Response {
     tokio::time::sleep(Duration::from_millis(input.delay_ms.min(1500))).await;
     let mut tasks = app.tasks.lock().unwrap();
+    let binding = save_binding(input.id);
     let Some(task) = tasks.items.get_mut(&input.id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let binding = save_binding(task);
     let Some(title) = normalized(&input.title) else {
         return binding
             .invalid(edit_form(
@@ -361,64 +331,39 @@ async fn save(State(app): State<App>, Input(input): Input<SaveTask>) -> Response
     };
     if input.version != task.version {
         // The saved task: fields this person edited keep their edits.
-        let response = binding.conflict(edit_form(task, &task.title, task.done,
-            "This task changed elsewhere. Your draft is safe. Review the current task in the list before saving again."))
-            .also_replace(row_summary(task), task.version, summary(task));
-        return response
-            .also_replace(SUMMARY, tasks.revision, count(&tasks))
+        return binding
+            .conflict(edit_form(task, &task.title, task.done,
+                "This task changed elsewhere. Your draft is safe. Review the current task in the list before saving again."))
             .into_response();
     }
     task.title = title;
     task.done = input.done;
     task.version += 1;
-    // Other tabs: the edited fields of an open editor keep their edits.
-    let push = app
-        .live
-        .push()
-        .replace(row_summary(task), task.version, summary(task))
-        .refresh(
-            &task_component(task),
-            edit_form(task, &task.title, task.done, "Updated in another tab."),
-        );
-    // Built again after the write, so the reply carries the new revision.
-    let response = save_binding(task)
+    app.live.changed();
+    binding
         .reply(edit_form(
             task,
             &task.title,
             task.done,
             "Saved. Any newer draft is still yours to edit.",
         ))
-        .also_replace(row_summary(task), task.version, summary(task));
-    tasks.revision += 1;
-    push.replace(SUMMARY, tasks.revision, count(&tasks)).send();
-    response
-        .also_replace(SUMMARY, tasks.revision, count(&tasks))
         .into_response()
 }
 
 async fn delete(State(app): State<App>, Input(input): Input<DeleteTask>) -> Response {
     let mut tasks = app.tasks.lock().unwrap();
-    let binding = delete_binding(input.id);
-    // Deleting twice, from two tabs, removes a row that is already gone.
+    // Deleting twice, from two tabs, deletes nothing the second time.
     if tasks.items.remove(&input.id).is_some() {
         tasks.order.retain(|id| *id != input.id);
-        tasks.revision += 1;
-        app.live
-            .push()
-            .remove(&LIST.item(input.id))
-            .replace(SUMMARY, tasks.revision, count(&tasks))
-            .send();
+        app.live.changed();
     }
-    binding
+    delete_binding(input.id)
         .reply(html! { p { "Deleted." } })
-        .also_remove(&LIST.item(input.id))
-        .also_replace(SUMMARY, tasks.revision, count(&tasks))
         .into_response()
 }
 
 async fn move_task(State(app): State<App>, Input(input): Input<MoveTask>) -> Response {
     let mut tasks = app.tasks.lock().unwrap();
-    let binding = move_binding(input.id);
     let Some(from) = tasks.order.iter().position(|id| *id == input.id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -426,23 +371,12 @@ async fn move_task(State(app): State<App>, Input(input): Input<MoveTask>) -> Res
         Direction::Up => from.saturating_sub(1),
         Direction::Down => (from + 1).min(tasks.order.len() - 1),
     };
-    let reply = binding.reply(order_controls(input.id));
-    if from == to {
-        return reply.into_response();
+    if from != to {
+        tasks.order.swap(from, to);
+        app.live.changed();
     }
-    tasks.order.swap(from, to);
-    // Placing it next to its new neighbour is enough; also_order(&LIST, ...)
-    // would send the whole order instead.
-    let position = match input.direction {
-        Direction::Up => Position::Before(LIST.item(tasks.order[to + 1])),
-        Direction::Down => Position::After(LIST.item(tasks.order[to - 1])),
-    };
-    app.live
-        .push()
-        .move_to(&LIST.item(input.id), position.clone())
-        .send();
-    reply
-        .also_move(&LIST.item(input.id), position)
+    move_binding(input.id)
+        .reply(order_controls(input.id))
         .into_response()
 }
 
@@ -473,7 +407,6 @@ async fn main() {
         .map(|task| (task.id, task))
         .collect(),
         order: vec![1, 2, 3],
-        revision: 1,
         next_id: 4,
     }));
     let live = live_feed();

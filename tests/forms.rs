@@ -4,7 +4,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use maud::html;
-use placebo::{Component, Control, FormInput, Input, MutationAction, ReadAction, Region, fields};
+use placebo::{Component, Control, FormInput, Input, MutationAction, Read, fields};
 use serde::Deserialize;
 use tower::ServiceExt;
 
@@ -202,14 +202,12 @@ async fn action_request_ids_are_echoed_on_extractor_errors_and_invalid_ids_are_i
 }
 
 #[tokio::test]
-async fn read_adapter_and_builder_share_the_input_type() {
-    let action = ReadAction::<Renamed>::new("read", "/read");
-    let form = action
-        .bind(Region::new("results"))
-        .form(fields())
-        .into_string();
+async fn a_read_form_and_its_page_share_the_input_type() {
+    let form = Read::new().form(fields()).into_string();
     assert!(form.contains("method=\"get\""));
-    let app = Router::new().route(action.path(), action.route(save));
+    assert!(form.contains("name=\"display-title\""));
+    // The page the form is on decodes the same names from its query.
+    let app = Router::new().route("/read", axum::routing::get(save));
     let response = app
         .oneshot(
             Request::builder()
@@ -220,7 +218,6 @@ async fn read_adapter_and_builder_share_the_input_type() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-placebo-action"], "read");
     assert_eq!(
         to_bytes(response.into_body(), 4096).await.unwrap(),
         "7:Query:0"
@@ -446,10 +443,9 @@ async fn read_queries_use_the_same_decoding_rules() {
         labels: Vec<String>,
         limit: Option<u32>,
     }
-    let action = ReadAction::<Filter>::new("filter", "/filter");
     let app = Router::new().route(
-        action.path(),
-        action.route(|Input(input): Input<Filter>| async move { format!("{input:?}") }),
+        "/filter",
+        axum::routing::get(|Input(input): Input<Filter>| async move { format!("{input:?}") }),
     );
     for (query, expected) in [
         (

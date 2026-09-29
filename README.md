@@ -3,8 +3,12 @@
 **Type-checked HTML over the wire for Rust and Axum.**
 
 An experimental framework for Rust + Axum server-rendered apps. Rust renders
-HTML with Maud; Placebo updates the page while preserving browser-owned drafts.
-Maud is the current renderer, and the framework's name and API are provisional.
+HTML with Maud. Every save answers with the page it came from, rendered again,
+and the browser changes only what differs, keeping what the person owns:
+unsaved drafts, focus, open dialogs. A handler checks the input, writes, and
+returns its component's contents; it never tracks what else on the page shows
+the data. Maud is the current renderer, and the framework's name and API are
+provisional.
 
 **Build forms with `fields!`, bind them to actions, and register handlers with
 `action.route(handler)`.** These APIs connect your Rust payload, HTML controls,
@@ -179,59 +183,55 @@ the same item from two tabs. Data lives in memory. This file is
 
 These apply to people and coding agents alike.
 
+- **How the screen updates:** every save answers with the page it came from,
+  rendered again, and the browser changes only what differs. A handler checks
+  the input, writes, and returns its component's contents. It never lists what
+  else on the page shows the data: render every page from current data and it
+  follows.
 - **Forms:** derive `FormInput` on the payload struct and write the form with
   `fields!` and typed `Control` values. Render it with
-  `ACTION.bind(&component).form(fields)` for mutations or
-  `ACTION.bind(region).form(fields)` for reads. Don't write `data-placebo`
-  attributes, named inputs for payload fields, or protocol headers by hand.
+  `ACTION.bind(&component).form(fields)` for saves or
+  `Read::new().form(fields)` for searches and filters. Don't write
+  `data-placebo` attributes, named inputs for payload fields, or protocol
+  headers by hand.
 - **Routes:** register every action with `.route(ACTION.path(), ACTION.route(handler))`
-  and wrap the finished router with `placebo::native_forms(app)`. The handler
-  takes any Axum extractors (state, session), then `Input<Payload>` last, and
-  also answers forms sent without JavaScript; don't branch on that. A plain
-  route such as `post(save)` skips decoding and the request checks; the browser
-  reports it as `unadapted-route`. Other pages and assets are ordinary routes.
-- **Reads:** use `ReadAction` with `.on_input(ms)` for live search, and
-  `.on_load()`, `.on_reveal()`, or `.every(ms)` for reads that start themselves.
-  Don't rebuild them with `fetch` or manual DOM replacement. Add `.history()` to
-  keep the query in the URL, and render the page from the same query
-  (`Input<Search>` in the page handler) so reloads and bookmarks work.
+  and wrap the finished router with `placebo::native_forms(app)`, which renders
+  each reply's page. The handler takes any Axum extractors (state, session),
+  then `Input<Payload>` last, and also answers forms sent without JavaScript;
+  don't branch on that. A plain route such as `post(save)` skips decoding and
+  the request checks; the browser reports it as `unadapted-route`. Other pages
+  and assets are ordinary routes.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
-  including the form and its feedback, never another mount. Contents may mount
-  other components; each keeps its node and drafts when the outer one refreshes.
-- **Drafts:** typed controls keep what the person typed by themselves. A reply
-  replaces everything except controls with edits the server has not accepted;
-  after a successful save, the submitted controls show the saved values.
-  Render the submitted values in `invalid` and the saved record in `conflict`.
-  Use `data-placebo-local` only for controls that must stay together as one
-  unit or controls a behavior renders.
+  including the form and its feedback, never another mount. Mount the
+  component on the page its form is on, in every render of that page.
+- **Drafts:** a control the person changed keeps its value by itself, on the
+  whole page. After a successful save, the submitted controls show the saved
+  values. Render the submitted values in `invalid` and the saved record in
+  `conflict`. Use `data-placebo-local` only for controls that must stay
+  together as one unit or controls a behavior renders.
 - **Validation:** mark a rejected control with `.invalid(true)` and link its
   message with `.described_by(id)`. Put feedback in a `role="status"` (or
   `role="alert"`) element; an invalid reply focuses the first invalid control.
   Use `.required()` for fields the browser can check before submitting.
+- **Reads:** a search or filter is a read form, `Read::new().on_input(ms).form(fields)`,
+  which reads the page it is on with the form's fields as the query and puts
+  the query in the address. Render every page from its query (`Input<Q>` in
+  the page handler) and build each read form on it from that same `Q`,
+  rendering the fields it does not change as hidden controls. "Load more" is
+  a read form asking for a longer page (`?shown=40`), with `.on_reveal()` to
+  read as it scrolls into view. To poll, render `placebo::refresh_every(ms)`
+  while there is something to wait for. Don't rebuild these with `fetch` or
+  manual DOM replacement.
 - **Dialogs and local UI:** make a dialog the component root with `mount_dialog`,
-  or keep it outside the refreshed component, and open and close it with
-  `command`/`commandfor` buttons, which work without JavaScript. Use
-  `popovertarget` and `details` for other local UI; with an id, their open state
-  survives replies. Use `behavior()` for intent such as closing after a save,
-  and listen for `placebo:applied` on `document`.
-- **Shared counts and summaries:** use `VersionedRegion`, mount it with
-  `region.mount(revision, contents)`, declare it with `.affects(region)`, and
-  reply with `.also_replace(region, revision, contents)`. Return the binding
-  from one function that the view's form and the handler's reply both use.
-  Increment the revision with the data under the same lock or transaction.
-- **Lists:** use a `List` when items are added, removed, or reordered. Mount
-  each item with `LIST.item(key).mount(contents)`, declare `.affects(LIST)`,
-  and reply with `also_insert`, `also_move`, `also_remove`, or `also_order`; a
-  read reply may `also_insert` (a "load more" list). To show a new record in
-  filtered search results, reply with `.also_refetch(&region)` instead.
-- **Other components, pages, and tabs:** refresh another component with
-  `.affects(&component)` and `.also_refresh(&component, contents)`. After
-  creating or deleting a record, reply with `.navigate("/path")`. To update
-  other open pages, publish the same updates on a `Feed` (`feed.push()...send()`
-  under the write's lock) that the page mounts with `feed.mount()`. A component
-  that other actions or a feed refresh needs `.revision(n)` on every mount and
-  binding, from the record rendered.
+  and open and close it with `command`/`commandfor` buttons, which work without
+  JavaScript. Use `popovertarget` and `details` for other local UI; their open
+  state is the person's and survives replies. Use `behavior()` for intent such
+  as closing after a save, and listen for `placebo:applied` on `document`.
+- **Other pages and tabs:** after creating or deleting a record, reply with
+  `.navigate("/path")`. To update other open pages, call `feed.changed()` after
+  the write, on a `Feed` the pages mount with `feed.mount()`; each page reads
+  itself again.
 - **Verify in a browser:** compiling proves the Rust side agrees. Run the app and
   exercise the changed flows: valid saves, invalid input, independent drafts,
   conflicts, and any dialog or search. Placebo logs every failure in the console
@@ -252,20 +252,28 @@ The quickstart uses the following form, action, and component APIs.
 | Generate the form and request configuration | `SAVE.bind(&component).form(fields)` |
 | Deserialize the payload and check that the request is same-origin | `SAVE.route(save)`, with `Input<SaveTitle>` as the handler's last argument |
 | Render the initial component wrapper | `component.mount(editor(...))` |
-| Refresh that component's contents | `binding.reply(editor(...))`, `.invalid(...)`, or `.conflict(...)` |
-| Answer forms submitted without JavaScript with pages | `placebo::native_forms(app)` |
+| Answer with that component's contents | `binding.reply(editor(...))`, `.invalid(...)`, or `.conflict(...)` |
+| Render each reply's page, with or without JavaScript | `placebo::native_forms(app)` |
+
+**A save answers with its page.** `native_forms` renders the page the form was
+on again, as a GET with the person's cookies, with the replying component
+showing the reply's contents. The runtime morphs that page into the document
+with [idiomorph](https://github.com/bigskysoftware/idiomorph): nodes, focus,
+and scroll stay, and only what differs changes. So a header, a count, or
+another panel that shows the saved data follows by itself. A page rendered
+before the one already shown never replaces it; a late reply then shows only
+in its own component. If the page cannot be rendered (for example, the record
+was deleted and its page answers 404), the reply shows in its component alone
+and the console says why. See [how pages update](docs/interactions.md).
 
 Dynamic record IDs work with the typed APIs. Adding a dialog does not require
 replacing them either: keep the typed form, mount the dialog with
-`mount_dialog`, and open it with a `command="show-modal"` button. See [coordinated updates and dialogs](docs/interactions.md)
-and the complete [task example](examples/tasks.rs).
+`mount_dialog`, and open it with a `command="show-modal"` button. See the
+complete [task example](examples/tasks.rs).
 
-**Mount on the page; reply with contents.** A refresh keeps the existing outer
-component element. Passing `component.mount(...)` into `reply`, `invalid`, or
-`conflict` now fails to compile: mounting returns `MountedComponent`, while replies
-accept `Markup`. Contents may mount other components: a refresh keeps each
-nested component's node and refreshes it by its own rules (see
-[nested components](docs/interactions.md#nested-components)). All three responses should
+**Mount on the page; reply with contents.** Passing `component.mount(...)` into
+`reply`, `invalid`, or `conflict` fails to compile: mounting returns
+`MountedComponent`, while replies accept `Markup`. All three responses should
 render the complete component contents, including the form and feedback;
 returning only an error paragraph would remove the form and its draft.
 
@@ -292,33 +300,28 @@ writes that must survive a restart, implement `placebo::replay::ReplayStore` on 
 install it with `.layer(placebo::replays(store))`. See
 [idempotent retries](docs/protocol.md#idempotent-retries).
 
-**Other tabs update live.** A `Feed` pushes the same updates a reply can make
-(versioned regions, versioned components, list items) to every page that mounts
-it, over Server-Sent Events, ordered against replies by revision. Mount it with
-`feed.mount()`, register `feed.route()`, and publish with `feed.push()...send()`
-under the write's lock. A reconnecting page gets what it missed, or resyncs by
-reading itself again. `Feeds` gives each person or document a feed of its own,
-for updates only they may see or markup rendered for them. See
+**Other tabs update live.** A `Feed` tells every page that mounts it that
+something changed, over Server-Sent Events; each page reads itself again and
+morphs it in, by the same rules as a reply. Mount it with `feed.mount()`,
+register `feed.route()`, and call `feed.changed()` after a write. The page
+that saved skips the signal its own save caused, since the save's reply is
+already that page. A page that reconnects after missing a change reads itself
+again. `Feeds` gives each person
+or document a feed of its own. See
 [live updates](docs/interactions.md#live-updates-across-tabs); the task example
 keeps two tabs in step.
 
-**Keep the dialog root persistent.** Use
+**Dialogs and disclosures stay as the person left them.** Use
 `component.mount_dialog("heading-id", contents)` to make the native dialog the
-component root, or put `component.mount(contents)` inside a dialog. A
-`mount_dialog` component may sit inside another component's contents; it keeps
-its node, open state, and modality when the outer one refreshes. The browser
-rejects other dialogs inside replaceable component contents with
-`unstable-dialog`, before sending a mutation or applying a malformed response.
-This also applies to dialogs inside local subtrees. Open and close dialogs with
-`command`/`commandfor` buttons, which work without JavaScript; popovers and
-`details` with an id keep their open state across replies. See
-[local UI state](docs/interactions.md#local-ui-state).
+component root, and open and close it with `command`/`commandfor` buttons,
+which work without JavaScript. An open dialog, `details`, or popover stays
+open or closed across replies. See [local UI state](docs/interactions.md#local-ui-state).
 
 **Edits survive replies; everything else follows the server.** Each typed
-control is retained on its own. A control keeps its node, value, focus, and
-selection while it differs from the value the server last rendered, that is,
-while it holds an edit the server has not accepted. Every other control shows
-the reply's markup. After a successful save, the submitted controls show the
+control on the page is retained on its own. A control keeps its node, value,
+focus, and selection while it differs from the value the server last rendered,
+that is, while it holds an edit the server has not accepted. Every other control
+shows the page's markup. After a successful save, the submitted controls show the
 saved (normalized) values, unless the person edited them again while the save
 was in flight. So render the submitted values in `invalid` and the saved record
 in `conflict`: in a conflict, the fields this person changed keep their edits
@@ -348,44 +351,17 @@ Applications still own runtime validation, authentication, and authorization.
 Handlers take any Axum extractors before `Input<T>`, so a session extractor can
 identify the user and the handler can check what they may change.
 
-For server search, use `ReadAction<Input>`, bind it to a `Region`, and register
-its handler with `action.route(handler)`. `.on_input(120)` adds debounced search;
-the runtime prevents older responses from overwriting newer results. A read
-handler can take `HeaderMap` before `Input<Search>` to return a full page for a
-normal GET or an update for an enhanced request. See the [search example](examples/search.rs).
+A search or filter is a read form: `Read::new().on_input(120).form(fields)`.
+It has no handler of its own. It reads the page it is on with its fields as
+the query, puts the query in the address, and morphs the page in, keeping what
+the person is typing; the newest read wins. The page handler takes
+`Input<Search>` and renders from it, so a reload, a bookmark, a save's reply,
+and a live update show the same results. See the [search example](examples/search.rs).
 
-Add `.history()` to a read binding to keep its query in the page URL. Each new
-query gets a history entry (keystrokes in one text field share one), Back and
-Forward put the entry's values back into the form and read again, and the page
-handler renders the same query on reload.
-
-Reads can also start themselves: `.on_load()` fills in a slow section after the
-page shows, `.on_reveal()` reads when a form scrolls into view, and `.every(ms)`
-polls while the page is visible. A read reply can insert items into a list its
-binding declares with `.affects(LIST)`, which makes an infinite list from a
-"load more" form. See [reads that start themselves](docs/interactions.md#reads-that-start-themselves)
-and the [triggers example](examples/triggers.rs).
-
-For shared summaries/counts, declare a `VersionedRegion`, mount it with
-`counts.mount(revision, contents)`, declare `.affects(counts)`, and reply with
-`.also_replace(counts, revision, contents)`. A plain `Region` cannot be passed to
-`also_replace`; use plain regions for reads or `.also_append(...)` collections.
-
-For collections whose items are added, removed, or reordered, use a `List`:
-mount items with `LIST.item(key).mount(contents)`, declare `.affects(LIST)`, and
-reply with `also_insert(item, Position::End)`, `also_move(&item, Position::Before(other))`,
-`also_remove(&item)`, or `also_order(&LIST, items)`. Existing items keep their
-nodes, so drafts, open editors, focus, and behaviors inside them survive. A
-missing item or anchor is skipped and reported in the applied event instead of
-rejecting a reply whose write already committed. `also_refetch(&region)` runs a
-region's read form again with its current input, `also_refresh(&component, contents)`
-refreshes another declared component, and `navigate("/path")` goes to another
-page after a successful write.
-The server must increment the snapshot revision with each corresponding change.
-Build the form and the handler's replies from one function that returns the
-binding, so both declare the same regions; debug builds panic when a reply
-patches a region its binding did not declare.
-[Coordinated updates](docs/interactions.md) explains revisions and ownership.
+"Load more" is a read form asking for a longer page, with `.on_reveal()` to
+read as it scrolls into view; entries already shown keep their nodes. To poll,
+render `placebo::refresh_every(ms)` while there is something to wait for. See
+[reads](docs/interactions.md#reads) and the [triggers example](examples/triggers.rs).
 
 ## Development rebuild and reload
 
@@ -441,7 +417,7 @@ installed into your new app:
 
 ```sh
 cargo dev    # Two editors, with rebuild/reload: http://127.0.0.1:4318
-cargo tasks  # Tasks, counts, dialogs, and live updates: http://127.0.0.1:4319
+cargo tasks  # Tasks, a count, dialogs, and live updates: http://127.0.0.1:4319
 
 # Search, with rebuild/reload: http://127.0.0.1:4317
 cargo run --features dev --bin placebo -- dev --example search --features dev
@@ -450,7 +426,7 @@ cargo run --features dev --bin placebo -- dev --example search --features dev
 cargo run --example editors
 cargo run --example uploads  # File fields: http://127.0.0.1:4321
 cargo run --example nested   # Nested components: http://127.0.0.1:4322
-cargo run --example triggers # Lazy, polled, and infinite reads: http://127.0.0.1:4323
+cargo run --example triggers # Polling and "load more": http://127.0.0.1:4323
 ```
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
@@ -517,24 +493,22 @@ servers and run in Chromium, Firefox, and WebKit; `npm test` uses Chromium, and
 `PLACEBO_BROWSER=firefox` or `webkit` selects another engine. They cover adverse request
 ordering, remounts, independent instances, draft/focus preservation, validation,
 conflicts, static reload, Rust rebuild, compile-error recovery, and supervisor
-cleanup. Task tests additionally cover coordinated updates, reversed response
-delivery, guarded refreshes, conflicts that show another tab's values in
-untouched fields, list inserts, moves, reorders, and deletes, cross-component
-refreshes, navigation, malformed batches, remounted extra targets, dialog and
-button focus, live-region identity, and behavior teardown/restart. Search tests
-cover history and refetching. Native tests submit saves, validation, conflicts,
-moves, and searches with JavaScript disabled or before the runtime loads. Replay
-tests lose responses after and before the write, retry, and submit twice.
-Upload tests send files through the runtime and natively, keep a chosen file
-across a rejected reply, and refuse oversized files in the browser and server.
-Nested tests refresh a component around busy, edited, removed, and dialog
-components. Push tests keep two tabs in step through saves, drafts, inserts,
-moves, and deletes, skip stale snapshots, drop and resume the stream, and
-resync a page whose position is gone. Trigger tests load a lazy section,
-poll, pause while hidden, stop with the region, and scroll an infinite list.
-Local UI tests open dialogs without JavaScript, keep details and popovers across
-replies, and report command buttons without a target. The dev-loop test creates
-and removes a temporary application.
+cleanup. Task tests cover whole-page replies: the row, count, and dialogs
+following a save, replies arriving out of order, conflicts that show another
+tab's values in untouched fields, adding, moving, and deleting rows,
+navigation, dialog and button focus, and behavior teardown/restart. Search
+tests cover latest-wins ordering, the address, and saves racing a search. Native tests submit saves, validation,
+conflicts, moves, and searches with JavaScript disabled or before the runtime
+loads. Replay tests lose responses after and before the write, retry, and
+submit twice. Upload tests send files through the runtime and natively, keep a
+chosen file across a rejected reply, and refuse oversized files in the browser
+and server. Nested tests reply around busy, edited, and dialog components. Push
+tests keep two tabs in step through saves, drafts, adds, moves, and deletes,
+and drop and resume the stream. Trigger tests poll, pause while hidden, stop
+when the poll element goes, and scroll an infinite list. Local UI tests
+open dialogs without JavaScript, keep details and popovers across replies, and
+report command buttons without a target. The dev-loop test creates and removes
+a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
@@ -543,14 +517,14 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 Generated protocol definitions; resumable or streamed uploads; feeds shared by
 several server processes (a feed lives in one process);
 replay claims inside the application's own transaction; richer state ownership;
-general morphing; and an authoring layer evaluated against the Maud baseline. Current verification uses
+and an authoring layer evaluated against the Maud baseline. Current verification uses
 Playwright's Chromium, Firefox, and WebKit builds on macOS and Linux. WebKit there
 approximates Safari; real Safari, mobile browsers, and other platforms are untested.
 
 ## References
 
 - [Axum response integration](https://docs.rs/axum/latest/axum/response/index.html)
-- [DOM child replacement](https://developer.mozilla.org/en-US/docs/Web/API/Element/replaceChildren)
+- [idiomorph](https://github.com/bigskysoftware/idiomorph), vendored in `client/idiomorph.js`
 - [Focus restoration](https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus)
 - [tower-livereload](https://docs.rs/tower-livereload/0.10.3/tower_livereload/)
 

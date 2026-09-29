@@ -57,7 +57,13 @@ Payload fields cannot use names starting with `placebo-`.
 
 `replace-children` replaces a read region's contents. `refresh-component`
 replaces component contents while retaining matching local units. Both keep
-the target element.
+the target element. Components nested in the contents keep their nodes and
+take their incoming contents as a `refresh-component` patch would, unless they
+have a request in flight (reported in `skippedComponents` as `busy`); a
+nested component's root element type must not change. Local units and live
+regions belong to their nearest component. The incoming contents are inserted
+before kept nodes move into place, with `moveBefore` where supported; a moved
+open modal dialog is shown modally again elsewhere.
 
 A local unit is a typed control (`data-placebo-field`, keyed by its form's
 action path and field name) or an explicit `data-placebo-local` subtree, which
@@ -137,7 +143,7 @@ submission. `placebo:scheduled` carries `retry: true` and `retryOf`, and
 `placebo:applied` carries `replayed`.
 
 The runtime emits `placebo:scheduled`, `request`, `applied`, `discarded`,
-`deferred`, `ignored`, and `error` events (each prefixed with `placebo:`).
+`deferred`, `ignored`, `warning`, and `error` events (each prefixed with `placebo:`).
 Details contain action/target names and outcome, reason, or error code where
 applicable. `applied` also carries `refreshedLocal`, `preservedLocal` (each
 with a `reason`), `skippedRegions`, `refreshedComponents`, `skippedComponents`,

@@ -53,7 +53,7 @@ export function serverFixture(example) {
         }
       };
       window.events = [];
-      for (const type of ["scheduled", "request", "applied", "discarded", "deferred", "ignored", "error"]) {
+      for (const type of ["scheduled", "request", "applied", "discarded", "deferred", "ignored", "warning", "error"]) {
         document.addEventListener(`placebo:${type}`, ({ detail }) => window.events.push({ type, ...detail }));
       }
     });

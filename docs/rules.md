@@ -8,11 +8,13 @@ These apply to people and coding agents alike.
   `ACTION.bind(region).form(fields)` for reads. Don't write `data-placebo`
   attributes, named inputs for payload fields, or protocol headers by hand.
 - **Routes:** register every action with its adapter:
-  `.route(ACTION.path(), ACTION.route(handler))`. The handler takes any Axum
-  extractors (state, session) and then `Input<Payload>` last. A plain Axum route such as
-  `post(save)` skips payload decoding and the mutation request check; the
-  browser reports it as `unadapted-route`. Unrelated pages, assets, and JSON
-  endpoints are ordinary Axum routes.
+  `.route(ACTION.path(), ACTION.route(handler))`, and wrap the finished router
+  with `placebo::native_forms(app)`. The handler takes any Axum extractors
+  (state, session) and then `Input<Payload>` last. The same handler answers
+  forms submitted before the runtime loads or without JavaScript; don't branch
+  on it. A plain Axum route such as `post(save)` skips payload decoding and the
+  mutation request check; the browser reports it as `unadapted-route`.
+  Unrelated pages, assets, and JSON endpoints are ordinary Axum routes.
 - **Search:** use `ReadAction` with `.on_input(ms)` for live server search. Don't
   rebuild it with `fetch`, `DOMParser`, or manual DOM replacement. Add
   `.history()` to keep the query in the URL, and render the page from the same

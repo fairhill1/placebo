@@ -139,7 +139,7 @@ test("invalid form configuration retains useful preflight context", async t => {
   });
   const { detail } = await error(audit, "version-mismatch");
   assert.equal(detail.action, "save-task");
-  assert.equal(detail.expectedVersion, 4);
+  assert.equal(detail.expectedVersion, 5);
   assert.equal(detail.receivedVersion, 999);
   assert.equal(detail.requestState, "not-started");
 });
@@ -179,7 +179,7 @@ for (const [scenario, code, status, contentType, adapter = "save-task"] of [
       assert.match(detail.hint, /ACTION\.route\(handler\)/);
     }
     if (scenario === "version-mismatch") {
-      assert.equal(detail.expectedVersion, 4);
+      assert.equal(detail.expectedVersion, 5);
       assert.equal(detail.receivedVersion, 999);
     }
   });

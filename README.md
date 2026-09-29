@@ -159,6 +159,8 @@ async fn main() {
         .route("/placebo.js", get(placebo::runtime))
         .route(SAVE.path(), SAVE.route(save))
         .with_state(store);
+    // Saves also work before the runtime loads, or without JavaScript.
+    let app = placebo::native_forms(app);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .unwrap();
@@ -183,11 +185,13 @@ These apply to people and coding agents alike.
   `ACTION.bind(region).form(fields)` for reads. Don't write `data-placebo`
   attributes, named inputs for payload fields, or protocol headers by hand.
 - **Routes:** register every action with its adapter:
-  `.route(ACTION.path(), ACTION.route(handler))`. The handler takes any Axum
-  extractors (state, session) and then `Input<Payload>` last. A plain Axum route such as
-  `post(save)` skips payload decoding and the mutation request check; the
-  browser reports it as `unadapted-route`. Unrelated pages, assets, and JSON
-  endpoints are ordinary Axum routes.
+  `.route(ACTION.path(), ACTION.route(handler))`, and wrap the finished router
+  with `placebo::native_forms(app)`. The handler takes any Axum extractors
+  (state, session) and then `Input<Payload>` last. The same handler answers
+  forms submitted before the runtime loads or without JavaScript; don't branch
+  on it. A plain Axum route such as `post(save)` skips payload decoding and the
+  mutation request check; the browser reports it as `unadapted-route`.
+  Unrelated pages, assets, and JSON endpoints are ordinary Axum routes.
 - **Search:** use `ReadAction` with `.on_input(ms)` for live server search. Don't
   rebuild it with `fetch`, `DOMParser`, or manual DOM replacement. Add
   `.history()` to keep the query in the URL, and render the page from the same
@@ -246,6 +250,7 @@ The quickstart uses the following form, action, and component APIs.
 | Deserialize the payload and check the mutation request header | `SAVE.route(save)`, with `Input<SaveTitle>` as the handler's last argument |
 | Render the initial component wrapper | `component.mount(editor(...))` |
 | Refresh that component's contents | `binding.reply(editor(...))`, `.invalid(...)`, or `.conflict(...)` |
+| Answer forms submitted without JavaScript with pages | `placebo::native_forms(app)` |
 
 Dynamic record IDs work with the typed APIs. Adding a dialog does not require
 replacing them either: keep the typed form and add a local browser behavior for
@@ -259,6 +264,17 @@ accept `Markup`. Wrapping a mount in arbitrary `html!` erases that distinction;
 the browser still rejects nested components. All three responses should
 render the complete component contents, including the form and feedback;
 returning only an error paragraph would remove the form and its draft.
+
+**Forms work without JavaScript.** A mutation form is a plain HTML form, so a
+save submitted before the runtime loads, or with JavaScript off, posts natively
+and runs the same handler. A successful reply becomes a redirect back to the
+page (or to its `navigate` path), which shows the saved state. An `invalid` or
+`conflict` reply becomes that whole page again with the reply's status:
+`placebo::native_forms(app)` renders the page the form was on, and the rejected
+component shows the reply's contents. Fields the person edited keep what they
+typed and the first invalid control takes focus, following the same rule as the
+runtime. Reads are GET forms and navigate natively. See the
+[protocol](docs/protocol.md) for the redirect, same-origin, and page rules.
 
 **Keep the dialog root persistent.** Use
 `component.mount_dialog("heading-id", contents)` to make the native dialog the
@@ -464,16 +480,15 @@ delivery, guarded refreshes, conflicts that show another tab's values in
 untouched fields, list inserts, moves, reorders, and deletes, cross-component
 refreshes, navigation, malformed batches, remounted extra targets, dialog and
 button focus, live-region identity, and behavior teardown/restart. Search tests
-cover history and refetching. The dev-loop test creates
+cover history and refetching. Native tests submit saves, validation, conflicts,
+moves, and searches with JavaScript disabled or before the runtime loads. The dev-loop test creates
 and removes a temporary application.
 IME tests dispatch composition events; they do not drive an OS input method.
 An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 
 ## Still open
 
-Saves without JavaScript (a save submitted before the runtime loads is refused
-with a page explaining that nothing was saved); file uploads and generated
-protocol definitions; richer state ownership;
+File uploads and generated protocol definitions; richer state ownership;
 idempotency and recovery after uncertain mutations (a component whose write
 may have committed is only marked `data-placebo-stale`); nested components;
 revisions for components refreshed by other actions; streaming; general morphing; and an

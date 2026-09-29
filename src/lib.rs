@@ -32,14 +32,16 @@ pub use placebo_macros::{FormEnum, FormInput};
 
 mod component;
 mod diagnostics;
+mod native;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
+pub use native::native_forms;
 
 #[cfg(all(feature = "dev", debug_assertions))]
 pub mod dev;
 
-pub const VERSION: u8 = 4;
+pub const VERSION: u8 = 5;
 pub const UPDATE_TYPE: &str = "application/vnd.placebo.update+json";
 pub const RUNTIME: &str = include_str!("../client/placebo.js");
 
@@ -508,7 +510,7 @@ impl Envelope {
 
 impl IntoResponse for Envelope {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             self.status,
             [
                 (header::CONTENT_TYPE, UPDATE_TYPE),
@@ -516,7 +518,14 @@ impl IntoResponse for Envelope {
             ],
             serde_json::to_string(&self).expect("HTML update serializes"),
         )
-            .into_response()
+            .into_response();
+        // A native submission's adapter turns the reply into a navigation.
+        response.extensions_mut().insert(native::NativeReply {
+            target: self.target,
+            html: self.html,
+            navigate: self.navigate,
+        });
+        response
     }
 }
 

@@ -1,6 +1,6 @@
-// Protocol v4. HTML is trusted server-rendered content, not a sanitizer input.
+// Protocol v5. HTML is trusted server-rendered content, not a sanitizer input.
 // Scheduling belongs to the actual mounted target node, not its reusable id.
-const VERSION = 4;
+const VERSION = 5;
 const UPDATE_TYPE = "application/vnd.placebo.update+json";
 const pending = new Map();
 let composing = new WeakSet();

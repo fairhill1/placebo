@@ -222,6 +222,11 @@ including local subtrees, produces `unstable-dialog`. The runtime checks the
 mounted shape before sending and the incoming shape before applying any patches.
 Keep dialogs at the component root or outside the refreshed component.
 
+Without JavaScript, a rejected save renders the page again with its component
+showing the reply. A `mount_dialog` root is rendered `open` then, so the person
+sees the feedback. A component inside a dialog the application renders cannot
+open that dialog, so prefer `mount_dialog` for dialog forms.
+
 This guards native dialog lifetime, not arbitrary application structure. A reply
 that omits a heading, button or form can still be valid HTML and wrong UI. Browser
 flow tests are still required. Plain read regions have replacement semantics;

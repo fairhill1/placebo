@@ -212,6 +212,8 @@ The typed adapters decode requests the way browsers submit them:
 - `Vec` fields collect repeated values. With nothing selected the browser
   submits nothing, so `Vec` fields need `#[serde(default)]`.
 - Any other repeated value is a decoding error, not a silent first/last choice.
+- Line breaks decode as `\n`. Browsers submit a textarea's line breaks as CRLF
+  and the runtime keeps LF; the handler sees the same value either way.
 
 `radios` and `checkboxes` render one `<label>` per option inside a
 `radiogroup`/`group` element; `.id()`, `.class()` and `.described_by()` apply to
@@ -320,7 +322,8 @@ programmatic construction and is what the macro uses internally.
 
 Every declared field needs a control, including fields marked `serde(default)`;
 defaults still apply to incoming requests. Per-field
-`serde(rename = "...")` supplies the wire name. Unsupported serde transforms
+`serde(rename = "...")` supplies the wire name. Names starting with `placebo-`
+are reserved for the fields Placebo adds to forms. Unsupported serde transforms
 such as flatten, skip, rename_all, and custom codecs are rejected.
 
 The implementation requires concrete, nonempty structs with named fields.

@@ -247,8 +247,26 @@ the feed tells the page to resync: the runtime reads the page again and takes
 each declared target's state from it by the same rules (newer revisions only,
 list items inserted, removed, and ordered to match).
 
-A feed broadcasts to every subscriber. Keep per-user data in feeds of their
-own and guard a feed's route like any other route. Polling (a read with
+A feed broadcasts to every subscriber, with markup rendered once for all of
+them. For data only some people may see, or markup that depends on the viewer
+(an Edit button for the owner), use `Feeds`, a family of feeds with one per key:
+
+```rust
+let inboxes: Feeds<u64> = Feeds::new("inbox", "/live/inbox").affects(UNREAD);
+// Page, for the signed-in person
+(inboxes.get(&user.id).mount())
+// Route: the handler picks the person's own feed
+.route(inboxes.path(), get(|user: User, request: Request| async move {
+    inboxes.get(&user.id).stream(&request)
+}))
+// Handler, after a write, for each person it concerns
+inboxes.get(&recipient).push().replace(UNREAD, count, unread(count)).send();
+```
+
+A path with `{key}`, such as `/live/boards/{key}`, puts the key in each feed's
+URL instead; check that the person may follow it, as on any other route. A
+keyed feed nobody has followed or mounted for ten minutes is dropped, so get
+it when you mount or push rather than keeping it. Polling (a read with
 `.every(ms)`) suits data that changes on its own schedule or a page that must
 not hold a connection; a feed suits changes caused by writes in this app.
 
@@ -344,6 +362,12 @@ without the runtime:
 - **Popovers:** `<button popovertarget="help-1">` and `<div popover id="help-1">`
   for help text and menus.
 - **Disclosures:** `<details id="advanced-1">` for optional parts of a form.
+
+Browsers without invoker commands ignore `command` and `commandfor`; there
+the runtime runs the built-in commands (`show-modal`, `close`,
+`request-close`, and the popover commands) for these buttons, so they work
+wherever the runtime does. Custom `--` commands need the browser's own
+support.
 
 A reply that re-renders a `details` or popover with the same id keeps its open
 state: like a draft, it is the person's until they change it. To reset it from

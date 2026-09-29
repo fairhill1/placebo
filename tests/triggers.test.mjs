@@ -104,3 +104,29 @@ test("without JavaScript the forms are plain links to longer pages", async t => 
   await page.waitForURL("**/entries?shown=20");
   assert.equal(await page.locator("#entries > [data-placebo-item]").count(), 30);
 });
+
+test("a poll keeps the open state of details inside a component in its region", async t => {
+  const page = await fixture.page(t);
+  // The clock's contents gain a component with a details, closed as rendered.
+  const card = '<div id="card:1" data-placebo-component><details id="card-more-1"><summary>More</summary><p>Details</p></details></div>';
+  await page.route("**/*", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.resourceType() === "document") {
+      const response = await route.fetch();
+      const body = (await response.text()).replace(/(<p id="ticks">.*?<\/p>)/, `$1${card}`);
+      return route.fulfill({ response, body });
+    }
+    if (path !== "/clock") return route.fallback();
+    const response = await route.fetch();
+    const update = await response.json();
+    for (const patch of update.patches ?? []) if (typeof patch.html === "string") patch.html += card;
+    if (typeof update.html === "string") update.html += card;
+    return route.fulfill({ response, body: JSON.stringify(update) });
+  });
+  await page.goto(fixture.origin);
+  await page.locator("#card-more-1 > summary").click();
+  const ticks = await page.evaluate(() => window.events.filter(e => e.type === "applied" && e.action === "tick").length);
+  await page.waitForFunction(count => window.events.filter(e => e.type === "applied" && e.action === "tick").length >= count + 2, ticks);
+  assert.equal(await page.locator("#card-more-1").evaluate(node => node.open), true);
+});

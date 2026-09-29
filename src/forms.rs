@@ -27,7 +27,8 @@ pub trait FormInput: DeserializeOwned + Sized + 'static {
 /// an input-derived builder after every field has been emitted once.
 pub struct FormFields<I> {
     markup: Markup,
-    base: String,
+    base: Vec<(String, String)>,
+    echoes: Vec<private::Echo>,
     input: PhantomData<fn() -> I>,
 }
 
@@ -36,9 +37,28 @@ impl<I> FormFields<I> {
         self.markup
     }
 
-    /// The markup and the encoded [`BASE`] of its visible controls.
-    pub(crate) fn into_parts(self) -> (Markup, String) {
-        (self.markup, self.base)
+    /// The markup and the encoded [`BASE`] of its visible controls. `echo`
+    /// shows a native submission's edited values; only the form it was
+    /// submitted from shows them.
+    pub(crate) fn into_parts(self, echo: bool) -> (Markup, String) {
+        let Self {
+            markup: PreEscaped(mut html),
+            mut base,
+            echoes,
+            ..
+        } = self;
+        if echo {
+            for echo in echoes {
+                html = html.replacen(&echo.plain, &echo.echoed, 1);
+                if let Some((_, value)) = base.iter_mut().find(|(name, _)| *name == echo.name) {
+                    *value = echo.base;
+                }
+            }
+        }
+        let base = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(&base)
+            .finish();
+        (PreEscaped(html), base)
     }
 }
 
@@ -50,6 +70,10 @@ pub(crate) const RESERVED: &str = "placebo-";
 /// rendered value. A native submission compares it with the submitted values
 /// to find the fields the person edited, the same rule the runtime uses.
 pub(crate) const BASE: &str = "placebo-base";
+
+/// The component a mutation form is bound to, so a native submission's
+/// values show again only in the form they came from.
+pub(crate) const TARGET: &str = "placebo-target";
 
 /// The page a form is on, rendered only when the address shows another path:
 /// on a page rendered for a native submission. See `native::current_page`.
@@ -412,8 +436,7 @@ impl<T> Control<T> {
         }
     }
 
-    #[doc(hidden)]
-    pub fn render_named(self, name: &str) -> Markup {
+    fn render_named(&self, name: &str) -> Markup {
         let Self {
             kind,
             id,
@@ -432,6 +455,7 @@ impl<T> Control<T> {
             autofocus,
             ..
         } = self;
+        let (required, autofocus) = (*required, *autofocus);
         // Every visible control is its own retained unit, keyed by field name,
         // so a reply keeps its unsaved edits and replaces everything around it.
         let field = name;
@@ -439,7 +463,7 @@ impl<T> Control<T> {
         match kind {
             Kind::Hidden(value) => html! { input type="hidden" name=(name) value=(value); },
             Kind::Text(value, kind) => html! {
-                input type=(kind) name=(name) value=(value) id=[id] class=[class] autofocus[autofocus] required[required]
+                input type=(*kind) name=(name) value=(value) id=[id] class=[class] autofocus[autofocus] required[required]
                     maxlength=[max_length] aria-invalid=[invalid] aria-describedby=[described_by]
                     autocomplete=[autocomplete] placeholder=[placeholder] data-placebo-field=(field);
             },
@@ -455,14 +479,14 @@ impl<T> Control<T> {
                     autocomplete=[autocomplete] placeholder=[placeholder] data-placebo-field=(field);
             },
             Kind::Checkbox(checked) => html! {
-                input type="checkbox" name=(name) value="true" checked[checked] id=[id] class=[class]
+                input type="checkbox" name=(name) value="true" checked[*checked] id=[id] class=[class]
                     autofocus[autofocus] required[required] aria-invalid=[invalid] aria-describedby=[described_by] data-placebo-field=(field);
             },
             Kind::Select(options) => html! {
                 select name=(name) id=[id] class=[class] autofocus[autofocus] required[required] aria-invalid=[invalid]
                     aria-describedby=[described_by] autocomplete=[autocomplete] data-placebo-field=(field) {
                     @for (value, label, selected) in options {
-                        option value=(value) selected[selected] { (label) }
+                        option value=(value) selected[*selected] { (label) }
                     }
                 }
             },
@@ -470,23 +494,23 @@ impl<T> Control<T> {
                 select multiple name=(name) id=[id] class=[class] autofocus[autofocus] required[required] aria-invalid=[invalid]
                     aria-describedby=[described_by] data-placebo-field=(field) {
                     @for (value, label, selected) in options {
-                        option value=(value) selected[selected] { (label) }
+                        option value=(value) selected[*selected] { (label) }
                     }
                 }
             },
             Kind::Radios(options) => html! {
                 div role="radiogroup" id=[id] class=[class] aria-required=[required.then_some("true")]
                     aria-invalid=[invalid] aria-describedby=[described_by] data-placebo-field=(field) {
-                    @for (i, (value, label, checked)) in options.into_iter().enumerate() {
-                        label { input type="radio" name=(name) value=(value) checked[checked] autofocus[autofocus && i == 0] required[required]; " " (label) }
+                    @for (i, (value, label, checked)) in options.iter().enumerate() {
+                        label { input type="radio" name=(name) value=(value) checked[*checked] autofocus[autofocus && i == 0] required[required]; " " (label) }
                     }
                 }
             },
             Kind::Checkboxes(options) => html! {
                 div role="group" id=[id] class=[class] aria-invalid=[invalid] aria-describedby=[described_by]
                     data-placebo-field=(field) {
-                    @for (i, (value, label, checked)) in options.into_iter().enumerate() {
-                        label { input type="checkbox" name=(name) value=(value) checked[checked] autofocus[autofocus && i == 0]; " " (label) }
+                    @for (i, (value, label, checked)) in options.iter().enumerate() {
+                        label { input type="checkbox" name=(name) value=(value) checked[*checked] autofocus[autofocus && i == 0]; " " (label) }
                     }
                 }
             },
@@ -495,7 +519,7 @@ impl<T> Control<T> {
                 multiple,
                 max_bytes,
             } => html! {
-                input type="file" name=(name) multiple[multiple] accept=[accept] id=[id] class=[class]
+                input type="file" name=(name) multiple[*multiple] accept=[accept] id=[id] class=[class]
                     autofocus[autofocus] required[required] aria-invalid=[invalid] aria-describedby=[described_by]
                     data-placebo-field=(field) data-placebo-max-bytes=(max_bytes);
             },
@@ -505,12 +529,16 @@ impl<T> Control<T> {
 
 impl<T: crate::upload::FileValue> Control<T> {
     /// A file input. A `Vec` field lets the person choose several files.
-    /// The field's `Upload<MAX_BYTES>` sets the size limit.
+    /// The field's `Upload<MAX_BYTES>` sets the size limit. An `Upload`
+    /// field, not an `Option` or `Vec`, is `required`: a submission without
+    /// the file would fail decoding before the handler could answer.
     pub fn file() -> Self {
-        Self::new(Kind::File {
+        let mut control = Self::new(Kind::File {
             multiple: T::MULTIPLE,
             max_bytes: T::MAX_BYTES,
-        })
+        });
+        control.required = matches!(T::ABSENT, private::Absent::Required);
+        control
     }
 
     /// The file types the browser offers to choose, such as `image/*` or
@@ -769,7 +797,11 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.as_str())
         };
-        crate::native::record_submission::<I>(field(PAGE), edited_fields::<I>(&pairs));
+        crate::native::record_submission::<I>(
+            field(PAGE),
+            field(TARGET),
+            edited_fields::<I>(&pairs),
+        );
         // A repeated submission gets the recorded reply; its handler does not
         // run. A claim whose request fails to decode is released afterwards.
         if let Some(key) = field(crate::replay::KEY).filter(|key| valid_key(key)) {
@@ -911,6 +943,18 @@ pub mod private {
     pub struct FormBuffer {
         html: String,
         base: Vec<(String, String)>,
+        echoes: Vec<Echo>,
+    }
+
+    /// A control a native submission's handler renders with the submitted
+    /// values, and the markup it replaces. The form is not known until
+    /// `.form()`, and only the submitted form takes the echo.
+    pub(crate) struct Echo {
+        pub(crate) name: String,
+        pub(crate) plain: String,
+        pub(crate) echoed: String,
+        /// The fingerprint the submitted form carried, so the field stays edited.
+        pub(crate) base: String,
     }
 
     /// Render one payload control. During a native submission's handler, a
@@ -921,18 +965,23 @@ pub mod private {
         mut control: Control<T>,
         name: &str,
     ) {
-        let edit = crate::native::resubmitted::<I>(name);
-        if let Some(edit) = &edit {
-            control.resubmit(&edit.values);
-        }
         if control.invalid && crate::native::autofocus_invalid() {
             control.autofocus = true;
         }
         if let Some(values) = control.rendered_values() {
-            let base = edit.map_or_else(|| fingerprint(&values), |edit| edit.base);
-            buffer.base.push((name.to_owned(), base));
+            buffer.base.push((name.to_owned(), fingerprint(&values)));
         }
-        buffer.push(control.render_named(name));
+        let plain = control.render_named(name).into_string();
+        if let Some(edit) = crate::native::resubmitted::<I>(name) {
+            control.resubmit(&edit.values);
+            buffer.echoes.push(Echo {
+                name: name.to_owned(),
+                plain: plain.clone(),
+                echoed: control.render_named(name).into_string(),
+                base: edit.base,
+            });
+        }
+        buffer.html.push_str(&plain);
     }
 
     impl FormBuffer {
@@ -968,9 +1017,8 @@ pub mod private {
     pub fn finish<I: FormInput>(body: FormBuffer) -> FormFields<I> {
         FormFields {
             markup: PreEscaped(body.html),
-            base: form_urlencoded::Serializer::new(String::new())
-                .extend_pairs(&body.base)
-                .finish(),
+            base: body.base,
+            echoes: body.echoes,
             input: PhantomData,
         }
     }

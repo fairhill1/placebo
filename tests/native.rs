@@ -152,6 +152,7 @@ async fn a_successful_native_save_redirects_back_to_its_page() {
         ("version", "1"),
         ("title", "Second"),
         ("placebo-base", &base),
+        ("placebo-target", "editor:1"),
     ]);
     let response = app
         .clone()
@@ -193,6 +194,7 @@ async fn an_invalid_native_save_renders_the_whole_page_with_the_reply() {
         ("title", "x"),
         ("done", "true"),
         ("placebo-base", &base),
+        ("placebo-target", "editor:1"),
     ]);
     let response = app
         .oneshot(native_post(body, Some("http://app.example/")))
@@ -227,6 +229,7 @@ async fn a_native_conflict_keeps_edited_fields_and_shows_the_saved_rest() {
         ("version", "1"),
         ("title", "My edit"),
         ("placebo-base", &base),
+        ("placebo-target", "editor:1"),
     ]);
     let response = app
         .clone()
@@ -252,6 +255,7 @@ async fn a_native_conflict_keeps_edited_fields_and_shows_the_saved_rest() {
         ("title", "My edit"),
         ("done", "true"),
         ("placebo-base", &base),
+        ("placebo-target", "editor:1"),
     ]);
     let response = app
         .oneshot(native_post(body, Some("http://app.example/")))
@@ -355,4 +359,77 @@ async fn forms_on_a_rejected_page_remember_the_page_they_are_on() {
     // Pages rendered normally carry no page field.
     let home = text(router(store()).oneshot(page_request("/")).await.unwrap()).await;
     assert!(!home.contains("placebo-page"));
+}
+
+/// Rows of one payload type, each bound to its own component.
+fn row(id: u64) -> Markup {
+    let fields = fields! { Save {
+        @field id = Control::hidden(id);
+        @field version = Control::hidden(1);
+        @field title = Control::text(format!("Task {id}"));
+        @field done = Control::checkbox(false);
+    } };
+    SAVE.bind(&Component::new("row", id)).form(fields)
+}
+
+#[tokio::test]
+async fn a_rejected_native_save_shows_its_values_only_in_its_own_form() {
+    async fn rename(Input(input): Input<Save>) -> Response {
+        SAVE.bind(&Component::new("row", input.id))
+            .invalid(html! { (row(1)) (row(2)) })
+            .into_response()
+    }
+    let app = Router::new().route(SAVE.path(), SAVE.route(rename));
+    let rendered = row(2).into_string();
+    let start = rendered.find("name=\"placebo-base\" value=\"").unwrap() + 27;
+    let base = rendered[start..start + rendered[start..].find('"').unwrap()].replace("&amp;", "&");
+    let body = form_body(&[
+        ("id", "2"),
+        ("version", "1"),
+        ("title", "Mine"),
+        ("placebo-base", &base),
+        ("placebo-target", "row:2"),
+    ]);
+    let page = text(
+        app.oneshot(native_post(body, Some("http://app.example/")))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(page.matches("value=\"Mine\"").count(), 1, "{page}");
+    assert!(page.contains("value=\"Task 1\""), "{page}");
+    assert!(!page.contains("value=\"Task 2\""), "{page}");
+}
+
+#[derive(Clone)]
+struct Viewer(&'static str);
+
+#[tokio::test]
+async fn a_rejected_page_is_rendered_with_the_requests_extensions() {
+    async fn page(
+        axum::Extension(Viewer(name)): axum::Extension<Viewer>,
+        axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+        State(store): State<Store>,
+    ) -> Markup {
+        let item = store.lock().unwrap();
+        html! {
+            h1 { "Hello " (name) " at " (uri.path()) }
+            (Component::new("editor", 1).mount(editor(&item, &item.title, item.done, "")))
+        }
+    }
+    let app = Router::new()
+        .route("/", get(page))
+        .route(SAVE.path(), SAVE.route(save))
+        .with_state(store());
+    // A layer outside the app, such as authentication, adds the viewer.
+    let app = placebo::native_forms(app).layer(axum::Extension(Viewer("Ada")));
+    let body = form_body(&[("id", "1"), ("version", "1"), ("title", "x")]);
+    let response = app
+        .oneshot(native_post(body, Some("http://app.example/")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let page = text(response).await;
+    assert!(page.contains("<h1>Hello Ada at /</h1>"), "{page}");
+    assert!(page.contains("Too short."), "{page}");
 }

@@ -182,3 +182,51 @@ async fn versioned_components_carry_their_revision_in_mounts_and_replies() {
     assert_eq!(update["revision"], "4");
     assert_eq!(update["patches"][0]["revision"], "9");
 }
+
+#[tokio::test]
+async fn keyed_feeds_reach_only_the_pages_that_mount_their_key() {
+    let inboxes: placebo::Feeds<String> = placebo::Feeds::new("inbox", "/live/inbox/{key}").affects(COUNT);
+    let ada = inboxes.get(&"ada".to_owned());
+    let bob = inboxes.get(&"bob smith".to_owned());
+    // Each key has its own id and URL, and the same feed on every get.
+    assert!(ada.mount().into_string().starts_with("<div id=\"inbox:ada\" hidden"));
+    assert_eq!(bob.path(), "/live/inbox/bob%20smith");
+    assert!(bob.mount().into_string().contains("id=\"inbox:bob%20smith\""));
+    assert_eq!(position(&inboxes.get(&"ada".to_owned())), position(&ada));
+    let ada_position = position(&ada);
+    let bob_position = position(&bob);
+    bob.push().replace(COUNT, 5, html! { "Bob's" }).send();
+    ada.push().replace(COUNT, 2, html! { "Ada's" }).send();
+
+    // A handler picks the feed; here from the path.
+    let feeds = inboxes.clone();
+    let app: Router = Router::new().route(
+        inboxes.path(),
+        axum::routing::get(
+            move |axum::extract::Path(key): axum::extract::Path<String>,
+                  request: axum::extract::Request| async move {
+                feeds.get(&key).stream(&request)
+            },
+        ),
+    );
+    for (path, position, own, other) in [
+        ("/live/inbox/ada", ada_position, "Ada's", "Bob's"),
+        ("/live/inbox/bob%20smith", bob_position, "Bob's", "Ada's"),
+    ] {
+        let request = Request::get(format!("{path}?after={position}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let mut stream = response.into_body().into_data_stream();
+        let mut text = String::new();
+        while !text.contains(own) {
+            let chunk = tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("an event arrives")
+                .unwrap()
+                .unwrap();
+            text.push_str(std::str::from_utf8(&chunk).unwrap());
+        }
+        assert!(!text.contains(other), "{text}");
+    }
+}

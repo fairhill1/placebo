@@ -42,7 +42,7 @@ pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
 pub use native::native_forms;
-pub use push::{Feed, Push, PushTarget};
+pub use push::{Feed, Feeds, Push, PushTarget};
 pub use replay::{Claim, MemoryReplays, Recorded, ReplayStore, Replays, StoreFuture, replays};
 pub use upload::{DEFAULT_MAX_BYTES, FileValue, Upload};
 

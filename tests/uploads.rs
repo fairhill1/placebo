@@ -224,3 +224,13 @@ fn file_fields_make_the_form_multipart_and_render_their_limits() {
     // Files cannot be shown again, so they take no part in the edit hash.
     assert!(!form.contains("cover%3D") && !form.contains("files%3D"));
 }
+
+#[test]
+fn a_required_file_field_renders_required() {
+    let fields = fields! { Required { @field file = Control::file(); } };
+    let form = REQUIRED
+        .bind(&Component::new("upload", 1))
+        .form(fields)
+        .into_string();
+    assert!(form.contains("<input type=\"file\" name=\"file\" required"), "{form}");
+}

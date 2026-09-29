@@ -42,6 +42,8 @@ pub(crate) struct Submission {
     /// The page the form was on: its `placebo-page` field, else the Referer.
     back: Option<String>,
     input: Option<TypeId>,
+    /// The component the submitted form was bound to.
+    target: Option<String>,
     /// The fields the person changed, by wire name: the submitted values and
     /// the rendered values' fingerprint the form carried.
     edited: HashMap<String, Edit>,
@@ -188,9 +190,13 @@ pub(crate) struct Edit {
     pub base: String,
 }
 
-/// Record the submitted page and which fields the person edited, for the
-/// replies this handler renders.
-pub(crate) fn record_submission<I: 'static>(page: Option<&str>, edited: HashMap<String, Edit>) {
+/// Record the submitted page, the form's component, and which fields the
+/// person edited, for the replies this handler renders.
+pub(crate) fn record_submission<I: 'static>(
+    page: Option<&str>,
+    target: Option<&str>,
+    edited: HashMap<String, Edit>,
+) {
     let _ = SUBMISSION.try_with(|submission| {
         let mut submission = submission.borrow_mut();
         if !submission.native {
@@ -200,6 +206,7 @@ pub(crate) fn record_submission<I: 'static>(page: Option<&str>, edited: HashMap<
             submission.back = Some(page.to_owned());
         }
         submission.input = Some(TypeId::of::<I>());
+        submission.target = target.map(str::to_owned);
         submission.edited = edited;
     });
 }
@@ -225,8 +232,9 @@ fn local_path(path: &str) -> bool {
 
 /// The submitted values for a field the person edited, while a native
 /// submission's handler renders a form for the same payload type. The form
-/// keeps the original rendered fingerprint, so the field stays edited, as a
-/// control the runtime keeps keeps its original defaults.
+/// shows them only if it is the one submitted (see [`submitted_from`]), and
+/// keeps the original rendered fingerprint, so the field stays edited, as the
+/// runtime keeps an edited control's original defaults.
 pub(crate) fn resubmitted<I: 'static>(name: &str) -> Option<Edit> {
     SUBMISSION
         .try_with(|submission| {
@@ -237,6 +245,15 @@ pub(crate) fn resubmitted<I: 'static>(name: &str) -> Option<Edit> {
         })
         .ok()
         .flatten()
+}
+
+/// Whether a form bound to `target` is the one a native submission came
+/// from, so it shows the submitted values. Other forms of the same payload
+/// type show what the handler rendered.
+pub(crate) fn submitted_from(target: &str) -> bool {
+    SUBMISSION
+        .try_with(|submission| submission.borrow().target.as_deref() == Some(target))
+        .unwrap_or(false)
 }
 
 /// Natively, the first invalid control of a rejected reply takes focus.
@@ -271,7 +288,6 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
     let status = response.status();
     if status.is_success() {
         let location = reply.navigate.or(back).unwrap_or_else(|| {
-            #[cfg(debug_assertions)]
             eprintln!(
                 "[placebo:native-no-referer] A form submitted without JavaScript was saved, but the \
                  browser sent no same-origin Referer, so it returns to '/'. Keep the default \
@@ -286,7 +302,6 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
     let path = match back {
         Some(path) => path,
         None => {
-            #[cfg(debug_assertions)]
             eprintln!(
                 "[placebo:native-no-referer] A rejected form submitted without JavaScript cannot \
                  render its page again: the browser sent no same-origin Referer. It gets a page \
@@ -298,7 +313,6 @@ fn respond(back: Option<String>, pages: bool, response: Response) -> Response {
         }
     };
     if !pages {
-        #[cfg(debug_assertions)]
         eprintln!(
             "[placebo:native-page] A rejected form submitted without JavaScript gets a page with \
              only component '{}'. Wrap the finished router with placebo::native_forms(app) to \
@@ -412,12 +426,19 @@ pub fn native_forms(app: Router) -> Router {
 
 async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> Response {
     let headers = request.headers().clone();
+    // What layers outside the app and the server attached, such as
+    // `ConnectInfo` or a signed-in user, for the page's handler. The POST's
+    // own routing is left behind; the app routes the GET afresh.
+    let mut extensions = request.extensions().clone();
+    extensions.remove::<axum::extract::OriginalUri>();
+    extensions.remove::<axum::extract::MatchedPath>();
     request.extensions_mut().insert(PagesEnabled);
     let response = next.run(request).await;
     let Some(page) = response.extensions().get::<NativePage>().cloned() else {
         return response;
     };
     let mut get = Request::new(Body::empty());
+    *get.extensions_mut() = extensions;
     *get.uri_mut() = match page.path.parse() {
         Ok(uri) => uri,
         Err(_) => return response,
@@ -453,7 +474,6 @@ async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> R
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/html"));
     if !used || rendered.status() != StatusCode::OK || !html {
-        #[cfg(debug_assertions)]
         eprintln!(
             "[placebo:native-page] Rendering '{}' again did not mount component '{}' (HTTP {}), \
              so the rejected reply gets a page with only the component. Mount the component on \

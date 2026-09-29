@@ -230,7 +230,7 @@ impl<I: FormInput> MutationBinding<I> {
 
     /// The form works without JavaScript too: see [`crate::native_forms`].
     pub fn form(&self, fields: FormFields<I>) -> Markup {
-        let (content, base) = fields.into_parts();
+        let (content, base) = fields.into_parts(native::submitted_from(&self.target));
         let config = Config {
             version: VERSION,
             action: self.action.name,
@@ -251,6 +251,7 @@ impl<I: FormInput> MutationBinding<I> {
             form method="post" action=(self.action.path) enctype=[I::MULTIPART.then_some("multipart/form-data")] data-placebo=(config) {
                 (content)
                 input type="hidden" name=(crate::forms::BASE) value=(base);
+                input type="hidden" name=(crate::forms::TARGET) value=(self.target);
                 // A fresh idempotency key for each rendered form.
                 input type="hidden" name=(crate::replay::KEY) value=(crate::replay::new_key());
                 @if let Some(page) = native::current_page() {

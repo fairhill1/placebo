@@ -90,8 +90,9 @@ application-authored error messages remain the application's responsibility.
 
 ## Forms submitted without JavaScript
 
-A native submission has no browser runtime to report problems, so debug builds
-log them on the server. `[placebo:native-page]` means a rejected reply got a page
+A native submission has no browser runtime to report problems, so the server
+logs them, in release builds too: the person gets a lesser page, and nothing
+else would show it. `[placebo:native-page]` means a rejected reply got a page
 with only its component: the router is not wrapped with `native_forms`, or the
 page the form was on did not mount that component when rendered again.
 `[placebo:native-no-referer]` means the browser sent no same-origin `Referer`, so

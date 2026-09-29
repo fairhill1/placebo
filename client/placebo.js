@@ -115,6 +115,30 @@ function auditCommands() {
   }
 }
 
+// Browsers without invoker commands get the built-in ones from the runtime,
+// so the same buttons open and close dialogs and popovers everywhere the
+// runtime runs. Custom "--" commands need the browser's CommandEvent.
+const nativeCommands = "commandForElement" in HTMLButtonElement.prototype;
+function onCommandClick(event) {
+  const button = event.target.closest?.("button[commandfor]");
+  if (event.defaultPrevented || !button || button.disabled || (button.form && button.type !== "button")) return;
+  const target = document.getElementById(button.getAttribute("commandfor"));
+  const command = (button.getAttribute("command") ?? "").toLowerCase();
+  const value = button.hasAttribute("value") ? button.value : undefined;
+  if (!target) return;
+  try {
+    if (target.localName === "dialog") {
+      if (command === "show-modal" && !target.open) target.showModal();
+      if (command === "close" && target.open) target.close(value);
+      if (command === "request-close" && target.open) typeof target.requestClose === "function" ? target.requestClose(value) : target.close(value);
+    }
+    if (target.hasAttribute("popover")) {
+      const shown = target.matches(":popover-open");
+      if (command === "toggle-popover" || (command === "show-popover" && !shown) || (command === "hide-popover" && shown)) target.togglePopover();
+    }
+  } catch { /* A disconnected target; the audit reports a missing one. */ }
+}
+
 function auditBehaviors() {
   clearTimeout(behaviorAudit);
   if (!started || !contentLoaded) return;
@@ -648,17 +672,19 @@ function moveInto(parent, node, before) {
 }
 
 // A details element's open state and an open popover are the person's, like
-// a draft: a refresh keeps them for the element with the same id.
-function keepDisclosures(root) {
+// a draft: a refresh keeps them for the element with the same id. A component
+// refresh covers its own; a read replaces everything in its region, nested
+// components included, so it covers them all.
+function keepDisclosures(root, owned = node => ownedBy(node, root)) {
   const states = [];
   for (const node of root.querySelectorAll("details[id],[popover][id]")) {
-    if (!ownedBy(node, root)) continue;
+    if (!owned(node)) continue;
     states.push([node.id, node.localName === "details" ? node.open : null, node.matches(":popover-open")]);
   }
   return () => {
     for (const [id, open, shown] of states) {
       const node = root.querySelector(`#${CSS.escape(id)}`);
-      if (!node || !ownedBy(node, root)) continue;
+      if (!node || !owned(node)) continue;
       if (open !== null && node.localName === "details") node.open = open;
       if (node.hasAttribute("popover") && node.matches(":popover-open") !== shown) {
         try { shown ? node.showPopover() : node.hidePopover(); } catch { /* A disconnected or invalid popover. */ }
@@ -854,7 +880,7 @@ function prepareRead(target, fragment) {
   const live = pairLiveRegions(target, fragment);
   return { refreshed: [], preserved: [], commit() {
     const anchor = focusAnchor(target);
-    const disclosures = keepDisclosures(target);
+    const disclosures = keepDisclosures(target, () => true);
     keepLiveRegions(live);
     target.replaceChildren(fragment);
     disclosures();
@@ -1525,6 +1551,7 @@ export function start() {
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   document.addEventListener("visibilitychange", onVisibilityChange);
+  if (!nativeCommands) document.addEventListener("click", onCommandClick);
   observer = new MutationObserver(() => {
     for (const work of pending.values()) {
       if (!work.form.isConnected || !work.target.isConnected) cancel(work, "unmounted");
@@ -1553,6 +1580,7 @@ export function stop() {
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("pageshow", onPageShow);
   document.removeEventListener("visibilitychange", onVisibilityChange);
+  document.removeEventListener("click", onCommandClick);
   clearTimeout(behaviorAudit);
   unknownBehaviors = new WeakMap();
   unresolvedCommands = new WeakMap();

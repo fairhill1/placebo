@@ -43,7 +43,10 @@ decoding. `placebo-base` holds a hash of each visible control's rendered value
 (hidden and password controls excluded). For a native submission, a field whose
 submitted values hash differently is edited: the handler's reply renders the
 submitted values for it instead of its own, the same rule the runtime applies,
-and the first control marked invalid gets `autofocus`. `placebo-page` appears only
+and the first control marked invalid gets `autofocus`. `placebo-target` names
+the component the form is bound to, so only the submitted form shows those
+values; other forms of the same payload type in the reply show what the
+handler rendered. `placebo-page` appears only
 on forms rendered for a native submission, whose address is the action path.
 Payload fields cannot use names starting with `placebo-`.
 
@@ -158,6 +161,8 @@ aborting a POST cannot undo a committed write.
 {"version": 5, "feed": "tasks-live", "url": "/live/tasks?after=3f2a9c1b7d4e-41",
  "targets": ["tasks", "task-count"], "kinds": ["task-summary", "task"]}
 ```
+
+A keyed feed of `Feeds` has the id `kind:key` and its own URL and position.
 
 The runtime opens an `EventSource` for each mounted feed element and closes it
 when the element goes. The stream sends `update` events whose data is

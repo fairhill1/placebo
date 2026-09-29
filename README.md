@@ -297,8 +297,10 @@ install it with `.layer(placebo::replays(store))`. See
 it, over Server-Sent Events, ordered against replies by revision. Mount it with
 `feed.mount()`, register `feed.route()`, and publish with `feed.push()...send()`
 under the write's lock. A reconnecting page gets what it missed, or resyncs by
-reading itself again. See [live updates](docs/interactions.md#live-updates-across-tabs);
-the task example keeps two tabs in step.
+reading itself again. `Feeds` gives each person or document a feed of its own,
+for updates only they may see or markup rendered for them. See
+[live updates](docs/interactions.md#live-updates-across-tabs); the task example
+keeps two tabs in step.
 
 **Keep the dialog root persistent.** Use
 `component.mount_dialog("heading-id", contents)` to make the native dialog the
@@ -539,7 +541,7 @@ An existing Playwright installation can be selected with `PLAYWRIGHT_MODULE`.
 ## Still open
 
 Generated protocol definitions; resumable or streamed uploads; feeds shared by
-several server processes (a feed lives in one process) and per-user feeds;
+several server processes (a feed lives in one process);
 replay claims inside the application's own transaction; richer state ownership;
 general morphing; and an authoring layer evaluated against the Maud baseline. Current verification uses
 Playwright's Chromium, Firefox, and WebKit builds on macOS and Linux. WebKit there

@@ -67,3 +67,22 @@ test("a button whose command target is missing or the wrong kind is reported", a
   await page.waitForTimeout(50);
   assert.equal(await page.evaluate(() => window.events.filter(e => e.type === "error").length), 3);
 });
+
+test("in a browser without command support, the runtime opens and closes dialogs and popovers", async t => {
+  const page = await fixture.page(t, { feeds: false });
+  // Hide the browser's support, and cancel its own handling of the buttons.
+  await page.addInitScript(() => {
+    delete HTMLButtonElement.prototype.commandForElement;
+    window.addEventListener("click", event => { if (event.target.closest?.("button[commandfor]")) event.preventDefault(); });
+  });
+  await page.goto(fixture.origin);
+  const dialog = page.locator('[id="task:1"]');
+  await page.locator(`${row(1)} [data-dialog-open]`).click();
+  assert.ok(await dialog.evaluate(node => node.open && node.matches(":modal")));
+  await page.locator(`${row(1)} [data-dialog-close]`).first().click();
+  assert.equal(await dialog.evaluate(node => node.open), false);
+  await page.evaluate(() => document.body.insertAdjacentHTML("beforeend",
+    '<button id="tip-button" type="button" command="toggle-popover" commandfor="tip">Tip</button><div id="tip" popover>Hi</div>'));
+  await page.locator("#tip-button").click();
+  assert.ok(await page.locator("#tip").evaluate(node => node.matches(":popover-open")));
+});

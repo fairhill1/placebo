@@ -697,15 +697,26 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
             )
                 .into_response());
         }
+        let path = request.uri().path().to_owned();
+        let headers = request.headers().clone();
+        let store = crate::replay::store(request.extensions());
         let body = Bytes::from_request(request, state)
             .await
             .map_err(IntoResponse::into_response)?;
         let pairs: Vec<(String, String)> = form_urlencoded::parse(&body).into_owned().collect();
-        let page = pairs
-            .iter()
-            .find(|(key, _)| key == PAGE)
-            .map(|(_, page)| page.as_str());
-        crate::native::record_submission::<I>(page, edited_fields::<I>(&pairs));
+        let field = |name: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        crate::native::record_submission::<I>(field(PAGE), edited_fields::<I>(&pairs));
+        // A repeated submission gets the recorded reply; its handler does not
+        // run. A claim whose request fails to decode is released afterwards.
+        if let Some(key) = field(crate::replay::KEY).filter(|key| valid_key(key)) {
+            let id = crate::replay::submission_id(key, &path, &headers, &[&body]);
+            crate::native::claim(store, id).await?;
+        }
         decode(&body).map(Self).map_err(|error| {
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -714,6 +725,10 @@ impl<I: FormInput, S: Send + Sync> FromRequest<S> for Input<I> {
                 .into_response()
         })
     }
+}
+
+fn valid_key(key: &str) -> bool {
+    (16..=64).contains(&key.len()) && key.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 /// Decode an urlencoded body or query string into its input. Repeated keys fill

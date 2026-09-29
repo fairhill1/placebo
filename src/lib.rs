@@ -33,10 +33,12 @@ pub use placebo_macros::{FormEnum, FormInput};
 mod component;
 mod diagnostics;
 mod native;
+mod replay;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
 };
 pub use native::native_forms;
+pub use replay::{Claim, MemoryReplays, Recorded, ReplayStore, Replays, StoreFuture, replays};
 
 #[cfg(all(feature = "dev", debug_assertions))]
 pub mod dev;

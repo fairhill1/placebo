@@ -66,9 +66,14 @@ The console context separates three facts:
 | `writeState` | `not-applicable` for reads, `not-started`, `unknown`, or the valid applied response's `acknowledged`/`rejected` outcome. |
 
 A lost or rejected mutation response leaves the write outcome unknown. The
-application may have committed even when the UI did not update. Read current
-server state before retrying; neither an HTTP status nor a diagnostic implements
-transaction rollback or idempotent retries.
+application may have committed even when the UI did not update, so the component
+gets `data-placebo-stale`. Submitting its form again retries safely: the runtime
+resends the same request with its idempotency key, and the server replays the
+reply it recorded instead of writing again, or runs the write for the first time
+if the first attempt never arrived. The retry is traced as `scheduled` with
+`retry` and `retryOf`, and `applied` reports `replayed`. `replay-pending` means
+the server has the first attempt but not its result (it is still running, or
+stopped); wait and submit again, or reload. See [idempotent retries](protocol.md#idempotent-retries).
 
 A redirect is reported as `redirected`, not as a network failure. The usual
 cause is authentication middleware sending an expired session to a login page,
@@ -140,7 +145,7 @@ adding application logging?
 | HTTP 500 | Request ID, method/path, status, update/write state, and a server-log correlation hint. |
 | HTML instead of an update | Expected and received content types; suggests login/error-page or extractor rejection checks. |
 | Wrong protocol version | Actual and expected versions with a rebuild/reload hint. |
-| Response lost after a real commit | Reports uncertainty and preserves the cause; the request ID matches the server's completed request. |
+| Response lost after a real commit | Reports uncertainty and preserves the cause; the request ID matches the server's completed request. Submitting again replays the recorded reply. |
 | Behavior setup/cleanup exception | Names the behavior and element, preserves the original stack, and suggests the lifecycle check. |
 
 Other tests cover malformed JSON, interrupted body streams, invalid form

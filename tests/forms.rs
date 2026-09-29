@@ -47,12 +47,19 @@ fn builder_fields() -> placebo::FormFields<Renamed> {
         .finish()
 }
 
+/// Each rendered form gets a fresh idempotency key; compare everything else.
+fn without_key(form: String) -> String {
+    let start = form.find("name=\"placebo-key\" value=\"").unwrap() + 26;
+    let end = start + form[start..].find('"').unwrap();
+    format!("{}{}", &form[..start], &form[end..])
+}
+
 #[test]
 fn markup_macro_matches_the_existing_builder_byte_for_byte() {
     let component = Component::new("editor", 42);
     assert_eq!(
-        SAVE.bind(&component).form(fields()).into_string(),
-        SAVE.bind(&component).form(builder_fields()).into_string(),
+        without_key(SAVE.bind(&component).form(fields()).into_string()),
+        without_key(SAVE.bind(&component).form(builder_fields()).into_string()),
     );
 }
 

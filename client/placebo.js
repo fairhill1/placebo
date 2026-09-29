@@ -3,6 +3,9 @@
 const VERSION = 5;
 const UPDATE_TYPE = "application/vnd.placebo.update+json";
 const pending = new Map();
+// Per component: a mutation sent whose outcome is unknown. Submitting the
+// same form again resends it unchanged, with its idempotency key.
+let uncertain = new WeakMap();
 let composing = new WeakSet();
 let started = false;
 let observer;
@@ -154,8 +157,10 @@ const hints = {
   "invalid-content-type": "Return a Placebo update from this action. Check for a login/error page or an extractor rejection in the server logs; a value that does not decode, such as a malformed number for a non-Option field, is rejected before the handler runs.",
   "unadapted-route": "Register the handler with its action's adapter: .route(ACTION.path(), ACTION.route(handler)). Plain Axum routes skip payload decoding and the mutation request check.",
   "invalid-json": "Return a complete Placebo update envelope; inspect the response in Network and the server logs.",
-  "response-read-error": "Check Network and server logs for an interrupted response body. Read current state before retrying a write.",
-  "network-error": "Check Network and server logs. A dispatched write may have committed; read current state before retrying.",
+  "response-read-error": "Check Network and server logs for an interrupted response body. Submit the form again to retry the write safely with its idempotency key.",
+  "network-error": "Check Network and server logs. The write may have committed: submit the form again to retry it safely. The retry resends the same request with its idempotency key, so the server replays its recorded reply instead of writing twice.",
+  "replay-pending": "The first attempt is still running, or stopped after possibly writing. Wait and submit again, or reload to see current data.",
+  "replay-unavailable": "The server's replay store failed, so nothing was saved by this attempt. Check the server logs, then submit again.",
   "redirected": "Sign in again, in another tab to keep this page's input, then resubmit. If the action's handler redirects, return a Placebo update instead.",
   "response-mismatch": "Build the reply from the same action and component instance as the initiating form.",
   "invalid-update": "Check the reply operation, HTML, and patch declarations against the initiating binding.",
@@ -392,7 +397,7 @@ function updateFragment(work, update) {
         // Its own request in flight will answer with state at least as new.
         if (pending.has(target)) return { skipComponent: { target: patch.target, reason: "busy" } };
         const prepared = prepareComponent(target, parseHTML(patch.html), "external");
-        return { commit: () => { prepared.commit(); summary.refreshedComponents.push(patch.target); } };
+        return { commit: () => { prepared.commit(); settle(target); summary.refreshedComponents.push(patch.target); } };
       }
       case "insert-item": case "move-item": case "remove-item": case "order-items": {
         require(list, "invalid-patch", "Item updates address a mounted List.");
@@ -414,7 +419,7 @@ function updateFragment(work, update) {
   // Every target, fragment, and local has been checked before any live mutation.
   work.phase = "applying";
   primary.commit();
-  work.target.removeAttribute("data-placebo-stale");
+  settle(work.target);
   if (update.outcome === "invalid") focusInvalid(work, primary);
   if (work.historyMode && work.historyMode !== "none") updateHistory(work);
   for (const plan of plans) plan.commit?.();
@@ -425,7 +430,7 @@ function updateFragment(work, update) {
   const skipped = plans.filter(plan => plan.skip).map(plan => plan.skip);
   for (const plan of plans) if (plan.skipComponent) summary.skippedComponents.push(plan.skipComponent);
   for (const plan of plans) plan.after?.();
-  emit("applied", work, { outcome: update.outcome ?? "applied", refreshedLocal: primary.refreshed, preservedLocal: primary.preserved,
+  emit("applied", work, { outcome: update.outcome ?? "applied", replayed: Boolean(work.replayed), refreshedLocal: primary.refreshed, preservedLocal: primary.preserved,
     skippedRegions: skipped.map(skip => skip.target), skippedSnapshots: skipped, ...summary,
     navigate: destination ? destination.pathname + destination.search + destination.hash : null });
   if (destination) location.assign(destination.href);
@@ -815,6 +820,11 @@ async function send(work) {
         ? `Action '${work.config.action}' responded without its typed route adapter.`
         : `Action '${work.config.action}' was answered by the adapter for '${adapter}'.`,
       { respondingAction: adapter });
+    const replay = response.headers.get("x-placebo-replay");
+    require(replay !== "pending", "replay-pending",
+      "The server has an earlier attempt of this submission that has not finished, so it did not run it again.");
+    require(replay !== "unavailable", "replay-unavailable", "The server could not check for an earlier attempt, so it did not run this one.");
+    work.replayed = replay === "replayed";
     const expectedOutcome = response.ok ? "applied" : response.status === 422 ? "invalid" : response.status === 409 ? "conflict" : null;
     require(response.ok || (work.method === "POST" && expectedOutcome), "http-error", `Action returned HTTP ${response.status}.`);
     require(work.contentType === UPDATE_TYPE,
@@ -844,9 +854,21 @@ async function send(work) {
 }
 
 // A write may have committed while the page could not show it. Mark the
-// component so the page can offer a reload; the next applied reply clears it.
+// component, and remember the request: submitting the same form again resends
+// it with its idempotency key. Server state shown in the component clears it.
 function markStale(work) {
-  if (work.method === "POST" && work.sent && !work.applied && work.target?.isConnected) work.target.setAttribute("data-placebo-stale", "");
+  if (work.method !== "POST" || !work.sent || work.applied || !work.target?.isConnected) return;
+  work.target.setAttribute("data-placebo-stale", "");
+  const earlier = uncertain.get(work.target);
+  // A retry keeps the first attempt's snapshot of the controls.
+  uncertain.set(work.target, { form: work.form, body: work.body, locals: work.locals,
+    requestId: earlier?.requestId ?? work.requestId });
+}
+
+// The component shows server state again, so an earlier attempt is settled.
+function settle(target) {
+  target.removeAttribute("data-placebo-stale");
+  uncertain.delete(target);
 }
 
 function attempt(form) {
@@ -873,24 +895,34 @@ function schedule(form, input, submitter = null, source = "user", trigger = null
       require(target.hasAttribute("data-placebo-component") && target.contains(form),
         "invalid-component", "A mutation form must belong to its target component.");
     } else require(!target.contains(form), "unstable-source", "Place persistent read forms outside their replacement region.");
-    const data = new FormData(form, submitter);
     const url = new URL(form.action, document.baseURI);
-    const fields = new URLSearchParams();
-    for (const [name, value] of data) {
-      require(typeof value === "string", "unsupported-file", "File submission is not supported yet.");
-      fields.append(name, value);
-    }
     const method = form.method.toUpperCase();
-    if (method === "GET") url.search = fields.toString();
+    // Submitting a form whose last attempt has an unknown outcome retries that
+    // attempt exactly, so the server can replay it instead of writing twice.
+    const retry = method === "POST" ? uncertain.get(target) : null;
+    let body, localSnapshots;
+    if (retry?.form === form) {
+      body = retry.body;
+      localSnapshots = retry.locals;
+    } else {
+      const fields = new URLSearchParams();
+      for (const [name, value] of new FormData(form, submitter)) {
+        require(typeof value === "string", "unsupported-file", "File submission is not supported yet.");
+        fields.append(name, value);
+      }
+      if (method === "GET") url.search = fields.toString();
+      else body = fields;
+      localSnapshots = config.operation === "refresh-component" ? snapshotLocals(target, form) : new Map();
+    }
     if (previous) cancel(previous, "superseded");
-    const localSnapshots = config.operation === "refresh-component" ? snapshotLocals(target, form) : new Map();
     work = { ...work, config, form, target, effects, locals: localSnapshots, url, method, phase: "scheduled",
-      body: method === "POST" ? fields : undefined, controller: new AbortController(),
+      body, controller: new AbortController(),
       previousBusy: target.getAttribute("aria-busy"), timer: null,
       historyMode: config.history && source === "user" ? "update" : "none", historyTrigger: input ? trigger : null };
     pending.set(target, work);
     target.setAttribute("aria-busy", "true");
-    emit("scheduled", work);
+    emit("scheduled", work, retry?.form === form
+      ? { retry: true, retryOf: retry.requestId, reason: `retrying request ${retry.requestId} unchanged, with its idempotency key` } : {});
     work.timer = setTimeout(() => send(work), input ? config.input_delay_ms : 0);
   } catch (error) {
     report(work, error, "invalid-action");
@@ -995,6 +1027,7 @@ export function stop() {
   unknownBehaviors = new WeakMap();
   composing = new WeakSet();
   edits = new WeakMap();
+  uncertain = new WeakMap();
   observer.disconnect();
   for (const work of pending.values()) cancel(work, "runtime-stopped");
   syncBehaviors();

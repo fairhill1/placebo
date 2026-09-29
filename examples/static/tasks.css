@@ -37,6 +37,9 @@ dialog::backdrop { background: #1d2b2559; backdrop-filter: blur(3px); }
 .field select { width: 100%; padding: 10px; font-size: 14px; }
 .network { margin: 20px 0 0; }
 .feedback { font-size: 12px; line-height: 1.6; color: #65726a; min-height: 38px; margin: 20px 0; }
+/* A save whose outcome is unknown: submitting again retries it safely. */
+.stale-note { display: none; font-size: 12px; color: #9a4b2f; margin: -12px 0 20px; }
+[data-placebo-stale] .stale-note { display: block; }
 .form-actions { display: flex; align-items: center; gap: 10px; }
 .busy-label { display: none; }
 [aria-busy="true"] .busy-label { display: inline; }

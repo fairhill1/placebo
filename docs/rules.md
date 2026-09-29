@@ -57,4 +57,5 @@ These apply to people and coding agents alike.
   the browser console: Placebo logs every failure as `[placebo:<code>]` with a
   next step. Fix the cause rather than working around it. When a write may
   have committed but the page could not show it, the component gets
-  `data-placebo-stale`; show a way to reload.
+  `data-placebo-stale`; say so with CSS on that attribute. Submitting the form
+  again retries safely: the server replays its recorded reply.

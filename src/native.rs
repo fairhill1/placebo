@@ -12,11 +12,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use maud::{DOCTYPE, Markup, PreEscaped, html};
-use std::{any::TypeId, cell::RefCell, collections::HashMap};
+use std::{any::TypeId, cell::RefCell, collections::HashMap, sync::Arc};
 use tower::ServiceExt;
 
+use crate::replay::{self, Recorded, ReplayStore};
+
 tokio::task_local! {
-    /// Set by the mutation adapter while a native submission's handler runs.
+    /// Set by the mutation adapter while a mutation's handler runs.
     static SUBMISSION: RefCell<Submission>;
     /// Set by [`native_forms`] while it renders the page again.
     static PAGE: RefCell<PageOverride>;
@@ -24,6 +26,10 @@ tokio::task_local! {
 
 #[derive(Default)]
 pub(crate) struct Submission {
+    /// Submitted by the browser itself, without the runtime.
+    native: bool,
+    /// The replay id this submission claimed, to record its reply under.
+    claimed: Option<(String, Arc<dyn ReplayStore>)>,
     /// The page the form was on: its `placebo-page` field, else the Referer.
     back: Option<String>,
     input: Option<TypeId>,
@@ -60,11 +66,15 @@ pub(crate) struct NativeReply {
     pub navigate: Option<String>,
 }
 
-/// Run a native submission's handler and turn its reply into a navigation.
-pub(crate) async fn submit(request: Request, next: Next) -> Response {
+/// Run a mutation's handler, record its reply for replays, and turn the reply
+/// to a native submission into a navigation.
+pub(crate) async fn run(native: bool, request: Request, next: Next) -> Response {
     let pages = request.extensions().get::<PagesEnabled>().is_some();
     let submission = Submission {
-        back: same_origin_referer(request.headers()),
+        native,
+        back: native
+            .then(|| same_origin_referer(request.headers()))
+            .flatten(),
         ..Submission::default()
     };
     let (response, submission) = SUBMISSION
@@ -73,7 +83,51 @@ pub(crate) async fn submit(request: Request, next: Next) -> Response {
             (response, SUBMISSION.with(RefCell::take))
         })
         .await;
-    respond(submission.back, pages, response)
+    let response = match submission.claimed {
+        Some((id, store)) => record(&*store, &id, response).await,
+        None => response,
+    };
+    if native {
+        respond(submission.back, pages, response)
+    } else {
+        response
+    }
+}
+
+/// Keep a reply for replays of the claimed submission. Anything else, such as
+/// an error status, releases the claim so a retry runs the handler again.
+async fn record(store: &dyn ReplayStore, id: &str, response: Response) -> Response {
+    if response.extensions().get::<NativeReply>().is_none() {
+        if let Err(error) = store.release(id).await {
+            eprintln!("[placebo:replay-store] Could not release a submission: {error}");
+        }
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let body = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let reply = Recorded {
+        status: parts.status.as_u16(),
+        body: String::from_utf8_lossy(&body).into_owned(),
+    };
+    if let Err(error) = store.record(id, reply).await {
+        // The write happened; a retry will be told its outcome is unknown.
+        eprintln!("[placebo:replay-store] Could not record a reply: {error}");
+    }
+    Response::from_parts(parts, Body::from(body))
+}
+
+/// Claim this submission's replay id before its handler runs. `Err` is the
+/// response to send instead: a recorded reply, or an explanation.
+pub(crate) async fn claim(store: Arc<dyn ReplayStore>, id: String) -> Result<(), Response> {
+    if SUBMISSION.try_with(|_| ()).is_err() {
+        return Ok(());
+    }
+    replay::claim(&*store, &id).await?;
+    SUBMISSION.with(|submission| submission.borrow_mut().claimed = Some((id, store)));
+    Ok(())
 }
 
 /// A field a native submission changed from the values its form was rendered with.
@@ -88,6 +142,9 @@ pub(crate) struct Edit {
 pub(crate) fn record_submission<I: 'static>(page: Option<&str>, edited: HashMap<String, Edit>) {
     let _ = SUBMISSION.try_with(|submission| {
         let mut submission = submission.borrow_mut();
+        if !submission.native {
+            return;
+        }
         if let Some(page) = page.filter(|page| local_path(page)) {
             submission.back = Some(page.to_owned());
         }
@@ -136,7 +193,7 @@ pub(crate) fn autofocus_invalid() -> bool {
     SUBMISSION
         .try_with(|submission| {
             let mut submission = submission.borrow_mut();
-            !std::mem::replace(&mut submission.focused_invalid, true)
+            submission.native && !std::mem::replace(&mut submission.focused_invalid, true)
         })
         .unwrap_or(false)
 }

@@ -187,7 +187,8 @@ These apply to people and coding agents alike.
   rendered again, and the browser changes only what differs. A handler checks
   the input, writes, and returns its component's contents. It never lists what
   else on the page shows the data: render every page from current data and it
-  follows.
+  follows. Each save renders its page again, so keep pages bounded: paginate
+  long lists with a read form.
 - **Forms:** derive `FormInput` on the payload struct and write the form with
   `fields!` and typed `Control` values. Render it with
   `ACTION.bind(&component).form(fields)` for saves or
@@ -200,7 +201,9 @@ These apply to people and coding agents alike.
   then `Input<Payload>` last, and also answers forms sent without JavaScript;
   don't branch on that. A plain route such as `post(save)` skips decoding and
   the request checks; the browser reports it as `unadapted-route`. Other pages
-  and assets are ordinary routes.
+  and assets are ordinary routes. Look up the signed-in user in middleware
+  around `native_forms`, which the page render reuses, not in an extractor
+  that queries on every request.
 - **Components:** use `component.mount(contents)` only when adding a component to
   the page. `reply`, `invalid`, and `conflict` take the complete contents,
   including the form and its feedback, never another mount. Mount the

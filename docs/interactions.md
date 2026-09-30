@@ -36,6 +36,37 @@ from it, not because the handler named them.
 as a record just created or the list after a delete. Only same-site paths are
 accepted.
 
+### What a save costs
+
+A save costs its write plus one render of its page. Placebo adds nothing
+measurable to that, but whatever the page costs, every save made from it pays
+again. Measured against Postgres, a save answered with a film page took 1.5 ms
+where the same save answered with its component alone took 1.0 ms; the
+difference was the page's own queries. Two habits keep that small:
+
+- **Keep pages bounded.** Paginate a long list with a read form (`?page=2`, or
+  "load more" with `on_reveal`) rather than rendering every row. A form on a
+  page of 1,000 rows renders all 1,000 again on each save.
+- **Look up the session once.** The page render is a second request through
+  the app, so an extractor that reads the session from the database runs
+  twice per save. Do the lookup in middleware around `native_forms` instead.
+  The page render gets the save request's extensions, so its handler reads the
+  user from there without a query:
+
+```rust
+async fn load_session(State(db): State<Db>, mut request: Request, next: Next) -> Response {
+    let user = db.user_for_cookie(request.headers()).await;
+    request.extensions_mut().insert(user);
+    next.run(request).await
+}
+
+let app = placebo::native_forms(app)
+    .layer(axum::middleware::from_fn_with_state(db, load_session));
+```
+
+A handler that signs someone in or out replies with `.navigate(path)`, so no
+page is rendered with the session the request came with.
+
 ### Replies stay in order
 
 Two saves can be in flight at once, and their replies can arrive in either

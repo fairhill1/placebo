@@ -4,6 +4,8 @@ version = "0.0.1"
 edition = "2024"
 publish = false
 description = "An experimental Rust/browser contract for HTML fragment updates"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/fairhill1/placebo"
 
 [workspace]
 members = ["placebo-macros", "template"]

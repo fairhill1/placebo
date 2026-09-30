@@ -102,6 +102,7 @@ Override in `@layer tokens` on `:root` (or any scope). Every colour is a
 | `--radius-control` | Points at `--radius-lg`. Inputs, selects and buttons share it so a form row rounds as one. Re-point it to another radius step, never to a literal. |
 | `--focus-ring` | `--focus-ring-size solid --accent-bg`. |
 | `--transition`, `--transition-base`, `--transition-slow` | Each `--duration-*` with `--ease`. Components use these, never a raw duration. |
+| `--press-scale`, `--press-scale-strong` | How far a `.btn` shrinks while pressed; `.btn-icon` takes the deeper step. |
 
 ### Per-instance inputs
 Layout primitives and one component read a custom property with a default, so
@@ -176,6 +177,9 @@ contrast library for either case.
   sticks after the tap.
 - **Reduced motion is handled once.** The reset cancels every transition and
   animation, including view transitions. Components never check the preference.
+- **A press shows at once.** A `.btn` shrinks the moment it is pressed and
+  eases back on release, before any request exists. The reset removes the
+  platform's grey tap flash, so on touch this is the feedback that a tap landed.
 
 ---
 

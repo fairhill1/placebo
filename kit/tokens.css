@@ -159,6 +159,14 @@
   --transition-base: var(--duration-base) var(--ease);
   --transition-slow: var(--duration-slow) var(--ease);
 
+  /* Press: how far a button gives way under a finger or pointer, the one
+     motion with no round trip behind it. Two steps, because the effect is
+     perceptual: 4% of a full button is a few pixels and reads as a press, 4%
+     of an icon-sized one is under a pixel and reads as nothing, so small
+     targets take the deeper step. */
+  --press-scale: 0.96;
+  --press-scale-strong: 0.9;
+
   /* Neutral grey works in both schemes; a data URI cannot read a custom
      property, so this one value is deliberately scheme-independent. */
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M4 6.5 8 10.5 12 6.5'/%3E%3C/svg%3E");

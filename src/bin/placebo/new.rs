@@ -162,9 +162,9 @@ fn agents(name: &str, placebo: &str) -> String {
         "# {name}
 
 A Placebo app: Rust, Axum, Maud, and Postgres. Follow the rules below. The
-docs at {docs} explain each one: `interactions.md` (replies, drafts, reads,
-live updates), `typed-forms.md` (controls and payload types), and
-`diagnostics.md` (console codes).
+docs explain each one: `interactions.md` (replies, drafts, reads, live
+updates), `typed-forms.md` (controls and payload types), and `diagnostics.md`
+(console codes), at {docs}.
 
 ## Commands
 
@@ -176,7 +176,8 @@ live updates), `typed-forms.md` (controls and payload types), and
 ## Database
 
 - The app uses the Postgres database `{database}` on the local server and
-  creates it on the first debug run. `DATABASE_URL` names another.
+  creates it on the first debug run. `DATABASE_URL` names another; `PGUSER`
+  and `PGPASSWORD` sign in as another role, as on Windows.
 - Change the schema with a new numbered file in `migrations/`, such as
   `0002_tags.sql`; it runs when the app starts. Never edit a migration that
   has run.

@@ -4,14 +4,8 @@ use placebo::styles::Check;
 use std::panic;
 
 #[test]
-fn the_kit_placebo_ships_passes() {
-    Check::new().kit("kit").run();
-}
-
-#[test]
 fn every_planted_problem_is_reported() {
     let check = Check::new()
-        .kit("tests/styles/kit")
         .app_css("tests/styles/app.css")
         .views("tests/styles/views");
     let report = *panic::catch_unwind(|| check.run())
@@ -19,13 +13,6 @@ fn every_planted_problem_is_reported() {
         .downcast::<String>()
         .expect("a message");
     let expected = [
-        "[placebo:kit-changed] tests/styles/kit/main.css is missing or differs",
-        "[placebo:kit-changed] tests/styles/kit/tokens.css is missing or differs",
-        "[placebo:kit-changed] tests/styles/kit/reset.css is missing or differs",
-        "[placebo:kit-changed] tests/styles/kit/base.css is missing or differs",
-        "[placebo:kit-changed] tests/styles/kit/layout.css is missing or differs",
-        "[placebo:kit-changed] tests/styles/kit/components.css is missing or differs",
-        "[placebo:kit-changed] tests/styles/kit/extra.css is not part of the kit",
         "[placebo:raw-value] tests/styles/app.css:16: `color: #333` has the raw value #333",
         "[placebo:raw-value] tests/styles/app.css:17: `background: rgb(250 240 230)` has the raw value rgb(250 240 230)",
         "[placebo:raw-value] tests/styles/app.css:18: `border: 1px solid White` has the raw value White",

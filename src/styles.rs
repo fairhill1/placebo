@@ -2,7 +2,7 @@
 //! classes; an agent that invents a class and writes CSS for it, or reaches
 //! for an inline style, grows a second design system beside it. Maud accepts
 //! any class or attribute, so nothing stops that at compile time. [`Check`],
-//! in the app's `cargo test`, keeps a vendored kit unchanged, the app's
+//! in the app's `cargo test`, keeps the app's
 //! stylesheet on tokens and in its layers, and styles out of the views. The
 //! runtime reports a class no stylesheet defines as `[placebo:unknown-class]`.
 use std::{
@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The kit this version of Placebo ships.
+/// The kit this version of Placebo ships, which [`crate::kit`] serves.
 pub(crate) const KIT: [(&str, &str); 6] = [
     ("main.css", include_str!("../kit/main.css")),
     ("tokens.css", include_str!("../kit/tokens.css")),
@@ -68,7 +68,6 @@ const APPROVE: &str = "a component the kit lacks goes in the app's own component
 /// listing every problem with its file, line, and what to do instead.
 #[derive(Default)]
 pub struct Check {
-    kit: Option<PathBuf>,
     app_css: Vec<PathBuf>,
     views: Vec<PathBuf>,
 }
@@ -76,15 +75,6 @@ pub struct Check {
 impl Check {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// For an app that vendors a copy of the kit rather than serving it with
-    /// [`crate::kit`]: the copy, which must match the kit this Placebo ships
-    /// byte for byte. The kit's README has apps re-skin it by setting tokens
-    /// in `@layer tokens` in their own stylesheet, never by editing the copy.
-    pub fn kit(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.kit = Some(dir.into());
-        self
     }
 
     /// One of the app's own stylesheets, such as `static/app.css` or the
@@ -114,9 +104,6 @@ impl Check {
     /// Panics listing every problem, so one run shows them all.
     pub fn run(self) {
         let mut problems = Vec::new();
-        if let Some(dir) = &self.kit {
-            kit_problems(dir, &mut problems);
-        }
         for path in &self.app_css {
             match fs::read_to_string(path) {
                 Ok(css) => css_problems(&path.display().to_string(), &css, &mut problems),
@@ -131,32 +118,6 @@ impl Check {
             "Styles left the kit's scale. Pages compose the kit's classes; {APPROVE}.\n\n{}\n",
             problems.join("\n")
         );
-    }
-}
-
-fn kit_problems(dir: &Path, problems: &mut Vec<String>) {
-    let next = "Copy Placebo's kit/ folder again, and re-skin with tokens in `@layer tokens` in \
-                the app's stylesheet";
-    for (name, shipped) in KIT {
-        let path = dir.join(name);
-        if fs::read_to_string(&path).ok().as_deref() != Some(shipped) {
-            problems.push(format!(
-                "[placebo:kit-changed] {} is missing or differs from the kit this Placebo ships. \
-                 {next}; {APPROVE}.",
-                path.display()
-            ));
-        }
-    }
-    let files = fs::read_dir(dir).into_iter().flatten().flatten();
-    for path in files.map(|file| file.path()) {
-        if path.extension().is_some_and(|ext| ext == "css")
-            && !KIT.iter().any(|(name, _)| path.ends_with(name))
-        {
-            let path = path.display();
-            problems.push(format!(
-                "[placebo:kit-changed] {path} is not part of the kit. Remove it; {APPROVE}."
-            ));
-        }
     }
 }
 

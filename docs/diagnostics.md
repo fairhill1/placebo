@@ -135,7 +135,6 @@ attribute. When a stylesheet from another site hides its rules, the check is
 skipped.
 
 The styles test, `placebo::styles::Check`, reports the rest in `cargo test`:
-`[placebo:kit-changed]` for a vendored kit that differs from Placebo's,
 `[placebo:unlayered]` for a rule outside the kit's layers,
 `[placebo:important]`, `[placebo:raw-value]` for a value that should be a
 token, and `[placebo:style-element]` and `[placebo:inline-style]` in the

@@ -241,11 +241,13 @@ async fn page(
         &task.title,
         html! {
             (back())
-            h1 { (task.title) }
-            @if task.done {
-                span .badge style="--badge-bg: var(--success-bg)" { "Done" }
-            } @else {
-                span .badge { "Open" }
+            div .cluster style="--cluster-space: var(--space-sm)" {
+                h1 { (task.title) }
+                @if task.done {
+                    span .badge style="--badge-bg: var(--success-bg)" { "Done" }
+                } @else {
+                    span .badge { "Open" }
+                }
             }
         },
         None,

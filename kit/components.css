@@ -79,7 +79,9 @@
   padding-inline: 0;
   border-radius: var(--radius-full);
 }
-.btn-round .icon { inline-size: var(--icon-md); block-size: var(--icon-md); }
+/* An icon that is the whole button reads at the medium size; beside text,
+   an icon matches the text. */
+.btn-icon .icon, .btn-round .icon, .list-lead .icon { inline-size: var(--icon-md); block-size: var(--icon-md); }
 /* Press. A button gives way the instant it is pressed, before any request
    exists, and eases back on release. The reset removes the platform's tap
    flash, so on touch this is the only sign a tap landed. The way down has no

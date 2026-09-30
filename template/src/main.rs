@@ -68,7 +68,7 @@ fn layout(
                 main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
                     header .stack style="--stack-space: var(--space-2xs)" {
                         div .cluster .cluster-between {
-                            div .cluster { (heading) }
+                            div .cluster style="--cluster-space: var(--space-2xs)" { (heading) }
                             (Component::new("theme", "picker").mount(theme_picker(theme)))
                         }
                         @if let Some(lede) = lede {

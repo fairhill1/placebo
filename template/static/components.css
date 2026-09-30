@@ -1,0 +1,5 @@
+/* The app's own components: what the kit's components.css lacks. Build them
+   from the kit's tokens (static/kit/README.md lists them); `cargo test` fails
+   on values off the scale. */
+@layer components {
+}

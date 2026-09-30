@@ -83,6 +83,7 @@ Override in `@layer tokens` on `:root` (or any scope). Every colour is a
 | `--font-sans`, `--font-mono` | Font stacks. |
 | `--text-2xs … --text-2xl` | Type scale (`0.65rem … 2.25rem`). |
 | `--leading-tight`, `--leading-normal` | Line heights: headings, body. |
+| `--tracking-tight`, `--tracking-snug`, `--tracking-wide` | Letter spacing: h1, h2, small caps and eyebrows. |
 | `--weight-normal`, `--weight-medium`, `--weight-bold` | Font weights. |
 | `--space-3xs … --space-3xl` | Spacing scale (`0.125rem … 5.5rem`). |
 | `--control-size` | **Exact height of every text input, select, and button.** |

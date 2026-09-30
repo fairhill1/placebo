@@ -23,6 +23,9 @@
   --text-2xl: 2.25rem;
   --leading-tight: 1.2;
   --leading-normal: 1.55;
+  --tracking-tight: -0.015em;
+  --tracking-snug: -0.01em;
+  --tracking-wide: 0.06em;
   --weight-normal: 400;
   --weight-medium: 550;
   --weight-bold: 700;

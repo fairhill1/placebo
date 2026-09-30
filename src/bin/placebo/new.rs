@@ -29,12 +29,12 @@ const FILES: [(&str, &str); 15] = [
         include_str!("../../../template/static/app.css"),
     ),
     (
-        "static/app.js",
-        include_str!("../../../template/static/app.js"),
+        "static/components.css",
+        include_str!("../../../template/static/components.css"),
     ),
     (
-        ".claude/settings.json",
-        include_str!("../../../template/.claude/settings.json"),
+        "static/app.js",
+        include_str!("../../../template/static/app.js"),
     ),
     (".gitignore", include_str!("../../../template/.gitignore")),
     ("CLAUDE.md", "@AGENTS.md\n"),
@@ -212,7 +212,9 @@ their own app, remove it:
 ## Styles
 
 `static/kit/README.md` lists the kit's tokens and classes. `static/kit` is
-Placebo's kit copied verbatim: never edit it.
+Placebo's kit copied verbatim: never edit it. The app's own components go in
+`static/components.css`, from the kit's tokens; `cargo test` fails on values
+off the kit's scale.
 
 {RULES}"
     )

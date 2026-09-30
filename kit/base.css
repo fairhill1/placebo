@@ -17,8 +17,8 @@ body {
 h1, h2, h3 { line-height: var(--leading-tight); font-weight: var(--weight-bold); }
 /* An app's scale: a page title, not a poster. --text-2xl stays for the rare
    display heading that wants it. */
-h1 { font-size: var(--text-xl); letter-spacing: -0.015em; }
-h2 { font-size: var(--text-lg); letter-spacing: -0.01em; }
+h1 { font-size: var(--text-xl); letter-spacing: var(--tracking-tight); }
+h2 { font-size: var(--text-lg); letter-spacing: var(--tracking-snug); }
 h3 { font-size: var(--text-md); }
 
 p { max-inline-size: var(--measure); }

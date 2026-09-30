@@ -43,7 +43,11 @@ const NAMED_COLOURS: &str = "aliceblue antiquewhite aqua aquamarine azure beige 
     powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown \
     seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen \
     steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen";
-const APPROVE: &str = "a new visual pattern goes into the kit after the person approves it";
+/// Sizes that step off the kit's type scale.
+const FONT_SIZE_KEYWORDS: &str =
+    "xx-small x-small small medium large x-large xx-large xxx-large smaller larger";
+const APPROVE: &str = "a component the kit lacks goes in the app's own components.css, \
+    built from the kit's tokens";
 
 /// Checks, in the app's `cargo test`, that its styles stay inside the kit.
 /// An agent can write any file through the shell, past a Claude Code rule
@@ -55,6 +59,7 @@ const APPROVE: &str = "a new visual pattern goes into the kit after the person a
 ///     placebo::styles::Check::new()
 ///         .kit("static/kit")
 ///         .app_css("static/app.css")
+///         .app_css("static/components.css")
 ///         .views("src")
 ///         .run();
 /// }
@@ -65,7 +70,7 @@ const APPROVE: &str = "a new visual pattern goes into the kit after the person a
 #[derive(Default)]
 pub struct Check {
     kit: Option<PathBuf>,
-    app_css: Option<PathBuf>,
+    app_css: Vec<PathBuf>,
     views: Vec<PathBuf>,
 }
 
@@ -82,13 +87,18 @@ impl Check {
         self
     }
 
-    /// The app's own stylesheet. Every rule sits in one of the kit's layers
-    /// and nothing is `!important`. Outside `@layer tokens`, colours are
-    /// tokens; margins, padding, gaps, font sizes and weights, and radii are
-    /// tokens or 0; and no length is in px but 1px. Other lengths, such as a
-    /// sidebar's width, are free.
+    /// One of the app's own stylesheets, such as `static/app.css` or the
+    /// `static/components.css` where the components the kit lacks live; call
+    /// it once per file. Every rule sits in one of the kit's layers (a file
+    /// imported into a layer still writes its `@layer` block) and nothing is
+    /// `!important`.
+    /// Outside `@layer tokens`, colours, font families, line heights, letter
+    /// spacing, and durations are tokens; margins, padding, gaps, font sizes
+    /// and weights, and radii are tokens or 0, not scaled by a multiplier; a
+    /// font size is never a keyword such as `larger`; and no length is in px
+    /// but 1px. Other lengths, such as a sidebar's width, are free.
     pub fn app_css(mut self, path: impl Into<PathBuf>) -> Self {
-        self.app_css = Some(path.into());
+        self.app_css.push(path.into());
         self
     }
 
@@ -107,7 +117,7 @@ impl Check {
         if let Some(dir) = &self.kit {
             kit_problems(dir, &mut problems);
         }
-        if let Some(path) = &self.app_css {
+        for path in &self.app_css {
             match fs::read_to_string(path) {
                 Ok(css) => css_problems(&path.display().to_string(), &css, &mut problems),
                 Err(error) => problems.push(format!("{}: {error}", path.display())),
@@ -118,8 +128,7 @@ impl Check {
         }
         assert!(
             problems.is_empty(),
-            "Styles left the kit. Pages compose the kit's classes and write no CSS of their own; \
-             {APPROVE}.\n\n{}\n",
+            "Styles left the kit's scale. Pages compose the kit's classes; {APPROVE}.\n\n{}\n",
             problems.join("\n")
         );
     }
@@ -182,8 +191,9 @@ fn css_problems(file: &str, css: &str, problems: &mut Vec<String>) {
         {
             problems.push(format!(
                 "[placebo:raw-value] {place} has the raw value {raw}. Use a token, such as \
-                 var(--space-md) or var(--text-muted); a value the scale lacks goes in \
-                 `@layer tokens`, after the person approves it."
+                 var(--space-md) or var(--text-muted). A value the scale lacks is a new \
+                 token in `@layer tokens`, after the person approves it: the scale is what \
+                 keeps every page consistent."
             ));
         }
     }
@@ -191,6 +201,13 @@ fn css_problems(file: &str, css: &str, problems: &mut Vec<String>) {
 
 /// The first value in a declaration that should be a token; see [`Check::app_css`].
 fn raw_value(property: &str, value: &str) -> Option<String> {
+    // A family is a token: --font-sans or --font-mono.
+    if property == "font-family"
+        && !value.contains("var(")
+        && !["inherit", "initial", "unset", "revert"].contains(&value.trim())
+    {
+        return Some(value.trim().to_owned());
+    }
     // Text in strings is not a value.
     let value = value
         .split(['"', '\''])
@@ -218,6 +235,10 @@ fn raw_value(property: &str, value: &str) -> Option<String> {
         || property.ends_with("gap")
         || property == "font-size"
         || (property.starts_with("border") && property.ends_with("radius"));
+    // Type follows the scale: leading and tracking are tokens, and so is a
+    // size, never a keyword such as `larger`.
+    let typography = property == "line-height" || property == "letter-spacing";
+    let timing = property.starts_with("transition") || property.starts_with("animation");
     for word in value.split(|c: char| c.is_whitespace() || ",()/*+".contains(c)) {
         let number = word.trim_start_matches('-');
         let digits = number
@@ -230,8 +251,17 @@ fn raw_value(property: &str, value: &str) -> Option<String> {
             }
             None if amount != 0.0 => {
                 (unit == "px" && amount != 1.0)
-                    || (spacing && !unit.is_empty())
+                    // A multiplier moves a value off the scale as surely as
+                    // a length does: calc(var(--space-md) * 1.3).
+                    || (spacing && (!unit.is_empty() || amount != 1.0))
+                    || typography
+                    || (timing && (unit == "ms" || unit == "s"))
                     || property == "font-weight"
+            }
+            None if property == "font-size"
+                && FONT_SIZE_KEYWORDS.split(' ').any(|keyword| word == keyword) =>
+            {
+                true
             }
             None => {
                 colour
@@ -470,6 +500,18 @@ mod tests {
         assert_eq!(raw("font-weight", "600"), Some("600".into()));
         assert_eq!(raw("inset", "-3px"), Some("-3px".into()));
         assert_eq!(raw("border-top-left-radius", "50%"), Some("50%".into()));
+        assert_eq!(
+            raw("padding", "calc(var(--space-md) * 1.3)"),
+            Some("1.3".into())
+        );
+        assert_eq!(raw("line-height", "1.4"), Some("1.4".into()));
+        assert_eq!(raw("letter-spacing", "0.06em"), Some("0.06em".into()));
+        assert_eq!(raw("font-size", "larger"), Some("larger".into()));
+        assert_eq!(
+            raw("font-family", "\"Red Hat\", serif"),
+            Some("\"Red Hat\", serif".into())
+        );
+        assert_eq!(raw("transition", "opacity 180ms"), Some("180ms".into()));
         for (property, value) in [
             ("color", "var(--text)"),
             ("background", "oklch(from var(--accent-bg) l c h / 0.5)"),
@@ -477,11 +519,13 @@ mod tests {
             ("padding", "0 var(--space-sm)"),
             ("margin-inline", "auto"),
             ("margin", "calc(var(--space-sm) * -1)"),
-            ("letter-spacing", "0.06em"),
+            ("letter-spacing", "var(--tracking-wide)"),
+            ("line-height", "var(--leading-tight)"),
             ("--sidebar-width", "17rem"),
             ("grid-template-columns", "minmax(12rem, 1fr) 8rem"),
             ("gap", "var(--space-2xs) var(--space-md)"),
-            ("font-family", "\"Red Hat\", serif"),
+            ("font-family", "var(--font-mono)"),
+            ("font-family", "inherit"),
             ("transition", "color var(--transition)"),
         ] {
             assert_eq!(raw(property, value), None, "{property}: {value}");

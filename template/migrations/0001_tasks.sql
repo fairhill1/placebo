@@ -7,19 +7,20 @@ CREATE TABLE tasks (
     version bigint NOT NULL DEFAULT 1
 );
 
+-- Newest first on the page, so the tour is inserted last step first.
 INSERT INTO tasks (title, notes, done) VALUES
-    ('Open this app in a second tab',
-     'Mark a task done or add one in this tab, and the other tab follows at once. No code syncs them: each save tells open pages to read themselves again.',
-     false),
-    ('Click a task to open it',
-     'Links swap the page in without a full reload, and Back and Forward work as usual. You are reading this on one.',
+    ('Create a Placebo app',
+     'Done. This demo is src/tasks.rs and its migration; AGENTS.md says how to remove it when you start on your own app.',
+     true),
+    ('Switch the theme',
+     'Top right. The choice is kept in a cookie, and the server renders the page with it.',
      false),
     ('Edit this task in two tabs at once',
      'Change the title in both tabs and save each. The second save gets a conflict instead of overwriting the first, and keeps what you typed.',
      false),
-    ('Switch the theme',
-     'Top right. The choice is kept in a cookie, and the server renders the page with it.',
+    ('Click a task to open it',
+     'Links swap the page in without a full reload, and Back and Forward work as usual. You are reading this on one.',
      false),
-    ('Create a Placebo app',
-     'Done. This demo is src/tasks.rs and its migration; AGENTS.md says how to remove it when you start on your own app.',
-     true);
+    ('Open this app in a second tab',
+     'Mark a task done or add one in this tab, and the other tab follows at once. No code syncs them: each save tells open pages to read themselves again.',
+     false);

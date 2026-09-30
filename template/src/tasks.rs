@@ -78,7 +78,7 @@ fn tidy(title: &str) -> Option<String> {
 
 async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Failed> {
     let tasks: Vec<Task> =
-        sqlx::query_as("SELECT id, title, notes, done, version FROM tasks ORDER BY id")
+        sqlx::query_as("SELECT id, title, notes, done, version FROM tasks ORDER BY id DESC")
             .fetch_all(&app.db)
             .await?;
     let done = tasks.iter().filter(|task| task.done).count();
@@ -91,6 +91,14 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
             (app.live.mount())
             section .card .card-flush {
                 ul .list role="list" {
+                    // The first row adds a task, and new tasks appear under it. It
+                    // opens on a press and stays open across replies, for the next one.
+                    li .list-row {
+                        details .list-main data-placebo-behavior="add-row" {
+                            summary .list-add { span .list-lead { (icon!("plus")) } "Add task" }
+                            (Component::new("composer", "new").mount(add_form("", "", false)))
+                        }
+                    }
                     @if tasks.is_empty() {
                         li .list-row { span .list-lead { (icon!("list-todo")) } span .list-main .muted { "Nothing to do yet." } }
                     }
@@ -103,14 +111,6 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
                                 a .list-main href=(format!("/tasks/{}", task.id)) { (task.title) }
                             }
                             (Component::new("delete", task.id).mount(delete_form(task)))
-                        }
-                    }
-                    // The last row adds a task: it opens on a press and stays
-                    // open across replies, for the next one.
-                    li .list-row {
-                        details .list-main data-placebo-behavior="add-row" {
-                            summary .list-add { span .list-lead { (icon!("plus")) } "Add task" }
-                            (Component::new("composer", "new").mount(add_form("", "", false)))
                         }
                     }
                 }

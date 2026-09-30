@@ -1,9 +1,10 @@
-//! `placebo new PATH`: a starter app on Postgres, copied from template/, a
+//! `placebo new [PATH]`: a starter app on Postgres, copied from template/, a
 //! workspace member that the repository builds and tests like any other crate.
 use std::{fs, io, path::Path};
 
-/// Where this CLI was built from; the app's `placebo` dependency points here.
+/// Where this CLI was built from.
 const PLACEBO: &str = env!("CARGO_MANIFEST_DIR");
+const REPO: &str = "https://github.com/fairhill1/placebo";
 const RULES: &str = include_str!("../../../docs/rules.md");
 const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
@@ -51,35 +52,69 @@ const FILES: [(&str, &str); 13] = [
 const KIT_README: &str = include_str!("../../../kit/README.md");
 
 pub fn run(path: &Path) -> io::Result<()> {
+    // An existing directory, such as `.`, is set up in place, like `cargo init`.
+    let path = if path.exists() {
+        path.canonicalize()?
+    } else {
+        std::path::absolute(path)?
+    };
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| io::Error::other("Name the app's directory, as in `placebo new my-app`."))?;
     check_name(name).map_err(io::Error::other)?;
-    if path.exists() {
+    if path.exists() && !path.is_dir() {
         return Err(io::Error::other(format!(
-            "{} already exists; choose a new directory.",
+            "{} is not a directory.",
             path.display()
         )));
     }
-    let manifest = manifest(name);
-    let agents = agents(name);
+    let manifest = manifest(name, PLACEBO);
+    let agents = agents(name, PLACEBO);
     let generated = [
         ("Cargo.toml", manifest.as_str()),
         ("AGENTS.md", agents.as_str()),
         ("static/kit/README.md", KIT_README),
     ];
-    for (file, contents) in FILES.into_iter().chain(generated) {
+    let files: Vec<_> = FILES.into_iter().chain(generated).collect();
+    let taken: Vec<&str> = files
+        .iter()
+        .map(|(file, _)| *file)
+        .filter(|file| path.join(file).exists())
+        .collect();
+    if !taken.is_empty() {
+        return Err(io::Error::other(format!(
+            "{} already has {}; start in an empty directory.",
+            path.display(),
+            taken.join(", ")
+        )));
+    }
+    for (file, contents) in files {
         let target = path.join(file);
         fs::create_dir_all(target.parent().expect("a file has a parent"))?;
         fs::write(target, contents)?;
     }
+    let here = std::env::current_dir()?.canonicalize()? == path;
     println!(
-        "Created {name} with database {}.\n\n  cd {}\n  placebo dev\n\nThe first run creates the database on your local Postgres.",
+        "Created {name} with database {}.\n\n{}  placebo dev\n\nThe first run creates the database on your local Postgres.",
         database(name),
-        path.display()
+        if here {
+            String::new()
+        } else {
+            format!("  cd {}\n", path.display())
+        }
     );
     Ok(())
+}
+
+/// A CLI installed with `cargo install --git` was built in Cargo's cache
+/// (`$CARGO_HOME/git/checkouts`), which Cargo may clean, so its apps depend on
+/// the repository instead. One built from a clone depends on that clone.
+fn from_git(placebo: &str) -> bool {
+    let parts: Vec<_> = Path::new(placebo).iter().collect();
+    parts
+        .windows(2)
+        .any(|pair| pair[0] == "git" && pair[1] == "checkouts")
 }
 
 /// Lowercase so the package, its database, and `\l placebo_*` all agree.
@@ -103,27 +138,33 @@ fn database(name: &str) -> String {
     format!("placebo_{}", name.replace('-', "_"))
 }
 
-fn manifest(name: &str) -> String {
+fn manifest(name: &str, placebo: &str) -> String {
+    let dependency = if from_git(placebo) {
+        format!("placebo = {{ git = {REPO:?} }}")
+    } else {
+        format!("placebo = {{ path = {placebo:?} }}")
+    };
     let manifest = MANIFEST
         .replacen("name = \"starter\"", &format!("name = \"{name}\""), 1)
-        .replacen(
-            "placebo = { path = \"..\" }",
-            &format!("placebo = {{ path = {PLACEBO:?} }}"),
-            1,
-        );
+        .replacen("placebo = { path = \"..\" }", &dependency, 1);
     // A standalone app is its own workspace, not a member of Placebo's.
     manifest.replacen("[features]", "[workspace]\n\n[features]", 1)
 }
 
-fn agents(name: &str) -> String {
+fn agents(name: &str, placebo: &str) -> String {
     let database = database(name);
+    let docs = if from_git(placebo) {
+        format!("{REPO}/tree/main/docs")
+    } else {
+        format!("{placebo}/docs")
+    };
     format!(
         "# {name}
 
-A Placebo app: Rust, Axum, Maud, and Postgres. Follow the rules below. They
-come from the Placebo checkout at {PLACEBO}, whose `docs/` explain each one:
-`interactions.md` (replies, drafts, reads, live updates), `typed-forms.md`
-(controls and payload types), and `diagnostics.md` (console codes).
+A Placebo app: Rust, Axum, Maud, and Postgres. Follow the rules below. The
+docs at {docs} explain each one: `interactions.md` (replies, drafts, reads,
+live updates), `typed-forms.md` (controls and payload types), and
+`diagnostics.md` (console codes).
 
 ## Commands
 
@@ -168,19 +209,44 @@ mod tests {
         assert_eq!(database("my-app"), "placebo_my_app");
     }
 
+    const CLONE: &str = "/home/someone/placebo";
+    const CACHED: &str = "/home/someone/.cargo/git/checkouts/placebo-1a2b3c/275b40c";
+
     #[test]
-    fn the_manifest_names_the_app_and_this_checkout() {
-        let manifest = manifest("my-app");
-        assert!(manifest.contains("name = \"my-app\""), "{manifest}");
-        assert!(manifest.contains(&format!("placebo = {{ path = {PLACEBO:?} }}")));
-        assert!(manifest.contains("[workspace]"));
-        assert!(!manifest.contains("starter") && !manifest.contains("\"..\""));
+    fn a_clone_is_a_path_dependency_and_a_git_install_the_repository() {
+        let clone = manifest("my-app", CLONE);
+        assert!(clone.contains("name = \"my-app\""), "{clone}");
+        assert!(clone.contains("placebo = { path = \"/home/someone/placebo\" }"));
+        assert!(clone.contains("[workspace]"));
+        assert!(!clone.contains("starter") && !clone.contains("\"..\""));
+        let cached = manifest("my-app", CACHED);
+        assert!(
+            cached.contains(&format!("placebo = {{ git = {REPO:?} }}")),
+            "{cached}"
+        );
+        assert!(!cached.contains(".cargo"));
     }
 
     #[test]
-    fn agents_md_carries_the_rules() {
-        let agents = agents("my-app");
-        assert!(agents.ends_with(RULES));
-        assert!(agents.contains("`placebo_my_app`"));
+    fn agents_md_carries_the_rules_and_reachable_docs() {
+        let clone = agents("my-app", CLONE);
+        assert!(clone.ends_with(RULES));
+        assert!(clone.contains("`placebo_my_app`"));
+        assert!(clone.contains("/home/someone/placebo/docs"));
+        let cached = agents("my-app", CACHED);
+        assert!(cached.contains(&format!("{REPO}/tree/main/docs")));
+        assert!(!cached.contains(".cargo"));
+    }
+
+    #[test]
+    fn an_empty_directory_is_set_up_in_place_and_a_used_one_refused() {
+        let dir = std::env::temp_dir().join(format!("placebo-new-{}", std::process::id()));
+        let app = dir.join("my-app");
+        fs::create_dir_all(&app).unwrap();
+        run(&app).unwrap();
+        assert!(app.join("Cargo.toml").is_file() && app.join("static/kit/main.css").is_file());
+        let error = run(&app).unwrap_err().to_string();
+        assert!(error.contains("already has src/main.rs"), "{error}");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

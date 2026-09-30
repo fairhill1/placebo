@@ -18,22 +18,39 @@ write protocol headers by hand.
 
 ## Start an app on Postgres
 
-With the development CLI installed (see [Development rebuild and
-reload](#development-rebuild-and-reload)), create a starter app:
+**Coding agents:** when someone asks you to build an app with Placebo, set it
+up in the current directory, which they created for it:
+
+1. Check for Rust with `cargo --version`. If it is missing, install it with
+   rustup: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`,
+   then `. "$HOME/.cargo/env"`.
+2. Check for a running Postgres with `pg_isready`. If it is missing or
+   stopped, ask the person before installing or starting it: it is a system
+   service, and they may run it their own way.
+3. Install the CLI:
+   `cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`.
+4. Run `placebo new` in the empty directory, then read the `AGENTS.md` it
+   writes and follow it from there.
+
+By hand, the same steps are:
 
 ```sh
-placebo new ../my-app
-cd ../my-app
+cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked
+mkdir my-app && cd my-app
+placebo new
 placebo dev
 ```
 
-It is the quickstart below on Postgres, with the kit, the styles test, and an
+`placebo new` sets up the current directory, or the one it is given. The app
+is the quickstart below on Postgres, with the kit, the styles test, and an
 `AGENTS.md` (read by Claude Code through `CLAUDE.md`) that gives coding agents
 this README's rules, the app's commands, and how to change its schema. Its
 database is `placebo_my_app` on the local server, created on the first debug
-run; `DATABASE_URL` overrides it, and `dropdb placebo_my_app` removes it. The
-template is [`template/`](template), a workspace member built and tested with
-this repository.
+run; `DATABASE_URL` overrides it, and `dropdb placebo_my_app` removes it. An
+app made by a CLI installed from GitHub depends on this repository by git; one
+made by a CLI built from a clone depends on that clone by path. The template
+is [`template/`](template), a workspace member built and tested with this
+repository.
 
 ## Quickstart
 

@@ -39,14 +39,15 @@ fn options() -> Result<Option<Task>, String> {
             .is_some_and(|arg| help(Some(arg)))
     {
         println!(
-            "Placebo development tools\n\n  placebo new PATH\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n\n`new` creates a starter app on Postgres, with an AGENTS.md of Placebo's rules.\nIts database is placebo_NAME on the local server.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
+            "Placebo development tools\n\n  placebo new [PATH]\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n\n`new` creates a starter app on Postgres, with an AGENTS.md of Placebo's rules,\nin PATH or, without it, the current directory. Its database is placebo_NAME on\nthe local server.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
         );
         return Ok(None);
     }
     if first.as_deref() == Some("new") {
         return match (args.next(), args.next()) {
+            (None, None) => Ok(Some(Task::New(".".into()))),
             (Some(path), None) if !path.starts_with('-') => Ok(Some(Task::New(path.into()))),
-            _ => Err("Expected `placebo new PATH`; use --help for usage.".into()),
+            _ => Err("Expected `placebo new [PATH]`; use --help for usage.".into()),
         };
     }
     if first.as_deref() != Some("dev") {

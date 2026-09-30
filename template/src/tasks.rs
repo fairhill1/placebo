@@ -85,8 +85,9 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
     Ok(layout(
         &headers,
         "Tasks",
+        html! { h1 { "Tasks" } },
         // Every save renders the page again, so this count follows.
-        html! { (tasks.len() - done) " open · " (done) " done" },
+        Some(html! { (tasks.len() - done) " open · " (done) " done" }),
         html! {
             (app.live.mount())
             section .card .card-flush {
@@ -208,6 +209,16 @@ async fn delete(
 
 // A task's page
 
+/// The way back to the list, left of a task's heading.
+fn back() -> Markup {
+    html! {
+        a .btn .btn-ghost .btn-icon href="/" title="All tasks" {
+            (icon!("chevron-left"))
+            span .visually-hidden { "All tasks" }
+        }
+    }
+}
+
 async fn page(
     State(app): State<App>,
     headers: HeaderMap,
@@ -218,10 +229,10 @@ async fn page(
             (app.live.mount())
             p .notice { (icon!("list-todo")) "This task was deleted." }
         };
-        let back = html! { a href="/" { (icon!("arrow-left")) " All tasks" } };
+        let heading = html! { (back()) h1 { "Not found" } };
         return Ok((
             StatusCode::NOT_FOUND,
-            layout(&headers, "Not found", back, missing),
+            layout(&headers, "Not found", heading, None, missing),
         )
             .into_response());
     };
@@ -229,9 +240,15 @@ async fn page(
         &headers,
         &task.title,
         html! {
-            a href="/" { (icon!("arrow-left")) " All tasks" }
-            " · " @if task.done { "Done" } @else { "Open" }
+            (back())
+            h1 { (task.title) }
+            @if task.done {
+                span .badge style="--badge-bg: var(--success-bg)" { "Done" }
+            } @else {
+                span .badge { "Open" }
+            }
         },
+        None,
         html! {
             (app.live.mount())
             section .card {

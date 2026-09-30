@@ -4,4 +4,17 @@
    `:root` and `.dark`, as on basecoatui.com; `cargo test` fails on values off
    the theme. */
 @import "tailwindcss";
+@theme {
+  /* No default palette: colours come from Basecoat's variables, which follow
+     dark mode and a re-skin. Basecoat's overlays and rings use these two. */
+  --color-*: initial;
+  --color-black: #000;
+  --color-white: #fff;
+}
 @import "../.placebo/kit/basecoat/basecoat.css";
+@theme {
+  /* Basecoat's stacks without Geist, which it names but doesn't ship: the
+     system's own font, the same for everyone on an OS. */
+  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}

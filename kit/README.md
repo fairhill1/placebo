@@ -26,7 +26,19 @@ the stylesheet is compiled, not written by hand:
 ```css
 /* styles/app.css */
 @import "tailwindcss";
+@theme {
+  /* No default palette: colours come from Basecoat's variables, which follow
+     dark mode and a re-skin. Basecoat's overlays and rings use these two. */
+  --color-*: initial;
+  --color-black: #000;
+  --color-white: #fff;
+}
 @import "../.placebo/kit/basecoat/basecoat.css";
+@theme {
+  /* Basecoat's stacks without Geist */
+  --font-sans: ui-sans-serif, system-ui, sans-serif, …;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, …;
+}
 ```
 
 - `placebo dev` runs Tailwind in watch mode beside the app: a class added to a
@@ -47,16 +59,21 @@ the stylesheet is compiled, not written by hand:
 
 ## The theme
 
-Basecoat's, unchanged. Light is the default; the `dark` class on `<html>`,
+Basecoat's, with two cuts in `styles/app.css`: Tailwind's default palette
+and the Geist font, which Basecoat names but doesn't ship, so pages use the
+system's font. Light is the default; the `dark` class on `<html>`,
 rendered by the server from the stored choice, switches to dark, and
 Tailwind's `dark:` variant follows it.
 
 Colours are Basecoat's (shadcn's) variables, each with a Tailwind colour
-utility (`bg-primary`, `text-muted-foreground`, `border-border`...):
+utility (`bg-primary`, `text-muted-foreground`, `border-border`...). They are
+the only colours: `styles/app.css` removes Tailwind's default palette but
+`black` and `white`, so `bg-blue-500` generates nothing and the console
+reports it as an unknown class. The variables are
 `--background`/`--foreground`, `--card`, `--popover`, `--primary`,
 `--secondary`, `--muted`, `--accent` (each with a `-foreground`),
 `--destructive`, `--border`, `--input`, `--ring`, `--sidebar-*`,
-`--chart-1 … 5`, and `--radius`, which `rounded-sm … rounded-xl` step from.
+`--chart-1 … 5`; and `--radius`, which `rounded-sm … rounded-xl` step from.
 Spacing, type, weights, shadows, and breakpoints are Tailwind's defaults
 (`p-4`, `text-sm`, `font-medium`, `shadow-sm`, `md:`).
 

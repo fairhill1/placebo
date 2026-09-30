@@ -283,7 +283,9 @@ These apply to people and coding agents alike.
   `placebo kit` lists: a button is `.btn` and a card `.card`, never a stack of
   utilities, and layout and spacing are utilities such as `flex gap-2` and
   `md:grid-cols-3`. Spacing, type, colour, radii, and timing come only from
-  the theme's scale: no arbitrary values such as `p-[13px]` or `bg-[#fff]`; a
+  the theme's scale: colours are Basecoat's variables (`bg-primary`,
+  `text-muted-foreground`), never Tailwind's palette, which the app removes,
+  and no arbitrary values such as `p-[13px]` or `bg-[#fff]`; a
   value the theme lacks is a new variable in `@theme`, after the person
   approves it. A class list used twice is a Rust `const` or a function
   returning the markup. Write no inline styles but custom properties, and no

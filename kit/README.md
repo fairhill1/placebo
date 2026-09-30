@@ -117,6 +117,8 @@ the element, not in `:root`.
 | `--grid-space`, `--grid-min` | `.grid` | `--space-md`, `16rem` |
 | `--sidebar-width` | `.sidebar` | `16rem` |
 | `--badge-bg` | `.badge` | none (see below) |
+| `--shell-width` | `.shell` | `15rem` |
+| `--avatar-size`, `--avatar-hue` | `.avatar` | `--control-size`, `260` |
 
 ---
 
@@ -217,6 +219,35 @@ in a `.card.card-flush` to run edge to edge. A row lines up a leading control
 the whole row its hit area; add `.muted` for a finished record. An adding row
 is a `details.list-main` holding `summary.list-add` ("Add ...") and, when
 open, a `.list-line` with the `.list-lead` icon and an `input.list-input`.
+
+### Shell and nav
+`body.shell` holds `aside.shell-side` (a `.shell-brand` link with a
+`.shell-mark`, a `nav.nav` of links, and a `.shell-foot` pinned to its bottom)
+and `main.shell-main`. Mark the current page's link `aria-current="page"`.
+Under 48rem the sidebar becomes a bar across the top and the `.nav` a tab bar
+along the bottom (icon above name), from the same markup.
+
+### Menu
+`details.dropdown` with a `summary` (often a `.btn`) and a `.menu` of
+`.menu-item` links or buttons (+ `.menu-item-danger`), with `.menu-label`
+captioning a group. `.menu-end` opens it leftwards from the right edge,
+`.menu-up` above its control. Give the details the starter's `dropdown`
+behavior so a press outside or Escape closes it.
+
+### Segmented, switch
+`.segmented`: one choice of 2 to 5 with a sliding thumb. On radios
+(`Control::radios(..).class("segmented")`) or on a `nav` of links, the
+current one `aria-current="page"`. `input.switch`: a checkbox drawn as an
+on/off switch; `.switch-field` puts a label on the left and it on the right.
+
+### Pager
+`nav.pager` of `.page-step` (previous, next), `.page-num`, and `.page-gap`
+(an elision). The current page is `aria-current="page"`; an end with nowhere
+to go is `aria-disabled="true"`.
+
+### Avatar, key/value
+`img.avatar` for a picture; `span.avatar` for initials on a gradient from
+`--avatar-hue`. `dl.kv` of `dt`/`dd` pairs: a record's facts.
 
 ### Table
 `.table`. Row hover is measured for a table on a `.card`.

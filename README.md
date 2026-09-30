@@ -41,7 +41,8 @@ placebo dev
 ```
 
 `placebo new` sets up the current directory, or the one it is given. The app
-is the quickstart below on Postgres, with the kit, the styles test, and an
+is an empty shell on Postgres (a sidebar, Home, and Settings with the theme),
+with the kit, the styles test, and an
 `AGENTS.md` (read by Claude Code through `CLAUDE.md`) that gives coding agents
 this README's rules, the app's commands, and how to change its schema. Its
 database is `placebo_my_app` on the local server, created on the first debug

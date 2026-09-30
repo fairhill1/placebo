@@ -1,5 +1,6 @@
-/* The pieces an app builds out of: button, card, field, table, badge, alert,
-   notice, modal. Nothing in this file knows what the app is about.
+/* The pieces an app builds out of: button, card, field, list, table, badge,
+   alert, notice, modal, shell, nav, menu, segmented, switch, pager, avatar,
+   key/value. Nothing in this file knows what the app is about.
    Components consume tokens only -- never a hardcoded value -- and never set
    their own outer spacing; that belongs to the layout parent. */
 
@@ -284,6 +285,339 @@ details[open] > .list-add { display: none; }
 @media (hover: hover) {
   .modal-close:hover { color: var(--text); }
 }
+
+/* Shell -- the app's frame: a sidebar (.shell-side) beside the page
+   (.shell-main). The sidebar holds the brand, a .nav, and a .shell-foot pinned
+   to its bottom. Under 48rem the sidebar becomes a bar across the top and its
+   .nav a tab bar along the bottom: one markup, placed by CSS, because the
+   server does not know the screen's width. */
+.shell {
+  --tab-bar: calc(var(--control-size) + var(--space-sm));
+  display: grid;
+  grid-template-columns: var(--shell-width, 15rem) minmax(0, 1fr);
+  min-block-size: 100dvh;
+}
+.shell-side {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  block-size: 100dvh;
+  padding: var(--space-md) var(--space-sm);
+  background: var(--surface-sunken);
+  border-inline-end: var(--border-width) solid var(--border);
+}
+.shell-foot { display: flex; align-items: center; gap: var(--space-xs); margin-block-start: auto; }
+/* Room between the sidebar and the page's .wrapper, beyond its own gutter. */
+.shell-main { padding-inline: var(--space-md); }
+.shell-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  text-decoration: none;
+}
+/* The app's mark: an icon or initial on the accent, until it has a logo. */
+.shell-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  inline-size: var(--control-size-sm);
+  block-size: var(--control-size-sm);
+  font-size: var(--text-sm);
+  color: var(--accent-fg);
+  background: var(--accent-bg);
+  border-radius: var(--radius-md);
+}
+@media (width < 48rem) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .shell-side {
+    flex-direction: row;
+    align-items: center;
+    block-size: auto;
+    padding: var(--space-xs) var(--space-md);
+    border-inline-end: 0;
+    border-block-end: var(--border-width) solid var(--border);
+  }
+  .shell-foot { margin-block-start: 0; margin-inline-start: auto; }
+  .shell-main { padding-inline: 0; padding-block-end: var(--tab-bar); }
+}
+
+/* Nav -- the app's pages, as links; the current one has aria-current="page".
+   A column in the shell's sidebar, and the tab bar on a phone. */
+.nav { display: flex; flex-direction: column; gap: var(--space-3xs); }
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-block-size: var(--control-size-sm);
+  padding-inline: var(--space-xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  transition: background var(--transition), color var(--transition);
+}
+@media (hover: hover) {
+  .nav a:hover { background: var(--surface-hover); color: var(--text); }
+}
+/* Raised off the sidebar, where hover only tints it. */
+.nav a[aria-current="page"] { color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-1); }
+@media (width < 48rem) {
+  .shell .nav {
+    position: fixed;
+    inset-inline: 0;
+    inset-block-end: 0;
+    flex-direction: row;
+    gap: 0;
+    padding-block-end: env(safe-area-inset-bottom, 0);
+    background: var(--surface-raised);
+    border-block-start: var(--border-width) solid var(--border);
+  }
+  .shell .nav a {
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-3xs);
+    block-size: var(--tab-bar);
+    font-size: var(--text-xs);
+    border-radius: 0;
+  }
+  .shell .nav a[aria-current="page"] { color: var(--accent-ink); background: none; box-shadow: none; }
+  .shell .nav .icon { inline-size: var(--icon-md); block-size: var(--icon-md); }
+}
+
+/* Menu -- a <details class="dropdown"> whose <summary> is the control (often a
+   .btn) and whose .menu is the panel. .menu-item is a link or a button, alike;
+   .menu-label captions a group. .menu-end hangs it off the right edge,
+   .menu-up above its control. Without JavaScript it opens and closes on the
+   summary; the starter's `dropdown` behavior adds closing on an outside press
+   and on Escape. */
+.dropdown { position: relative; }
+.dropdown > summary { list-style: none; cursor: pointer; user-select: none; }
+.dropdown > summary::-webkit-details-marker { display: none; }
+.menu {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-2xs));
+  inset-inline-start: 0;
+  z-index: 20;
+  /* As wide as its longest item, capped at the screen: past the cap a label
+     wraps rather than clips. */
+  inline-size: max-content;
+  min-inline-size: 10rem;
+  max-inline-size: min(22rem, calc(100vw - var(--space-lg) * 2));
+  padding: var(--space-2xs);
+  background: var(--surface-raised);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  opacity: 1;
+  translate: 0 0;
+  transition: opacity var(--transition), translate var(--transition);
+}
+@starting-style {
+  .dropdown[open] > .menu { opacity: 0; translate: 0 calc(var(--space-2xs) * -1); }
+  .dropdown[open] > .menu-up { translate: 0 var(--space-2xs); }
+}
+.menu-end { inset-inline-start: auto; inset-inline-end: 0; }
+.menu-up { inset-block-start: auto; inset-block-end: calc(100% + var(--space-2xs)); }
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  inline-size: 100%;
+  block-size: auto;
+  padding: var(--space-2xs) var(--space-sm);
+  font-size: var(--text-sm);
+  text-align: start;
+  color: var(--text);
+  text-decoration: none;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+@media (hover: hover) {
+  .menu-item:hover { background: var(--surface-sunken); }
+}
+.menu-item[aria-current="page"] { background: var(--surface-sunken); font-weight: var(--weight-medium); }
+.menu-item-danger { color: var(--danger-bg); }
+@media (hover: hover) {
+  .menu-item-danger:hover { color: var(--danger-bg); background: color-mix(in oklch, var(--danger-bg) 12%, transparent); }
+}
+/* A group's caption, ruled off from the group above it, edge to edge. */
+.menu-label {
+  margin-block-start: var(--space-2xs);
+  margin-inline: calc(var(--space-2xs) * -1);
+  padding: var(--space-2xs) var(--space-md) var(--space-3xs);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  border-block-start: var(--border-width) solid var(--border);
+}
+
+/* Segmented -- one choice of 2 to 5, with a thumb that slides to it. On
+   `Control::radios(..).class("segmented")` each label is a segment; on a
+   <nav class="segmented"> of links, the aria-current="page" one is. */
+.segmented {
+  --segments: 1;
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  padding: var(--space-3xs);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-full);
+}
+.segmented:has(> :nth-child(2):last-child) { --segments: 2; }
+.segmented:has(> :nth-child(3):last-child) { --segments: 3; }
+.segmented:has(> :nth-child(4):last-child) { --segments: 4; }
+.segmented:has(> :nth-child(5):last-child) { --segments: 5; }
+/* The thumb: one segment wide, so it travels in whole multiples of itself. */
+.segmented::before {
+  content: "";
+  position: absolute;
+  inset-block: var(--space-3xs);
+  inset-inline-start: var(--space-3xs);
+  inline-size: calc((100% - var(--space-3xs) * 2) / var(--segments));
+  background: var(--surface-raised);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-1);
+  transition: translate var(--transition-base);
+}
+.segmented:not(:has(:checked, [aria-current="page"]))::before { opacity: 0; }
+.segmented:has(> :nth-child(2) :checked, > :nth-child(2)[aria-current="page"])::before { translate: 100%; }
+.segmented:has(> :nth-child(3) :checked, > :nth-child(3)[aria-current="page"])::before { translate: 200%; }
+.segmented:has(> :nth-child(4) :checked, > :nth-child(4)[aria-current="page"])::before { translate: 300%; }
+.segmented:has(> :nth-child(5) :checked, > :nth-child(5)[aria-current="page"])::before { translate: 400%; }
+.segmented > * {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2xs);
+  block-size: calc(var(--control-size) - var(--space-3xs) * 2);
+  padding-inline: var(--space-md);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: color var(--transition);
+}
+/* The radio stays in the form and the tab order, off the page; its ring goes
+   on the segment. */
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented > :is(:has(:checked), [aria-current="page"]) { color: var(--text); font-weight: var(--weight-medium); }
+@media (hover: hover) {
+  .segmented > :hover { color: var(--text); }
+}
+.segmented > :has(:focus-visible) { outline: var(--focus-ring); outline-offset: calc(var(--space-3xs) * -1); }
+
+/* Switch -- an on/off setting: a checkbox with class="switch", so the form
+   sends it like any other. */
+.switch {
+  appearance: none;
+  position: relative;
+  flex: none;
+  inline-size: calc(var(--icon-md) * 2 + var(--space-3xs) * 2);
+  block-size: calc(var(--icon-md) + var(--space-3xs) * 2);
+  margin: 0;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius-full);
+  box-shadow: inset 0 0 0 var(--border-width) var(--border-strong);
+  cursor: pointer;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+.switch::before {
+  content: "";
+  position: absolute;
+  inset-block-start: var(--space-3xs);
+  inset-inline-start: var(--space-3xs);
+  inline-size: var(--icon-md);
+  block-size: var(--icon-md);
+  background: var(--surface-raised);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-1);
+  transition: translate var(--transition-base);
+}
+.switch:checked { background: var(--accent-bg); box-shadow: none; }
+.switch:checked::before { translate: var(--icon-md) 0; }
+/* A label beside its switch, the switch at the end of the row. */
+.switch-field { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-sm) var(--space-md); }
+
+/* Pager -- numbered pages between a previous and a next step (.page-num,
+   .page-step), with .page-gap for an elision. The current page has
+   aria-current="page"; an end with nowhere to go, aria-disabled="true". */
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-3xs); }
+.pager :is(.page-num, .page-step, .page-gap) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: var(--control-size-sm);
+  block-size: var(--control-size-sm);
+  padding-inline: var(--space-2xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.pager :is(.page-num, .page-step) {
+  background: var(--surface-raised);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+.pager .page-step { flex: none; padding-inline: 0; }
+@media (hover: hover) {
+  .pager :is(.page-num, .page-step):hover { color: var(--text); border-color: var(--border-strong); }
+}
+.pager .page-num[aria-current="page"] { color: var(--accent-fg); background: var(--accent-bg); border-color: var(--accent-bg); }
+.pager [aria-disabled="true"] { opacity: 0.4; pointer-events: none; }
+
+/* Avatar -- a round picture, sized by --avatar-size. As an <img> it shows the
+   picture; as a <span> it shows initials on a gradient from --avatar-hue (a
+   number from 0 to 360, say one derived from the user's id), at a lightness
+   picked for the white initials, so no hue can make them unreadable. */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  inline-size: var(--avatar-size, var(--control-size));
+  block-size: var(--avatar-size, var(--control-size));
+  vertical-align: middle;
+  object-fit: cover;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+}
+span.avatar {
+  --avatar-h: var(--avatar-hue, 260);
+  font-size: calc(var(--avatar-size, var(--control-size)) * 0.4);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  user-select: none;
+  color: oklch(98% 0.01 var(--avatar-h));
+  background: linear-gradient(135deg in oklab,
+    oklch(64% 0.105 calc(var(--avatar-h) - 35)) 0%,
+    oklch(56% 0.115 calc(var(--avatar-h) + 10)) 45%,
+    oklch(46% 0.11 calc(var(--avatar-h) + 65)) 100%);
+}
+
+/* Key/value -- a <dl class="kv"> of a record's facts, names in a column. */
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-xs) var(--space-lg);
+  font-size: var(--text-sm);
+}
+.kv dt { color: var(--text-muted); }
+.kv dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
 
 /* Text helpers */
 .lede { font-size: var(--text-lg); color: var(--text-muted); }

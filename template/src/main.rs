@@ -1,30 +1,27 @@
 //! A Placebo app on Postgres. AGENTS.md has the rules for building on it.
 //!
-//! This file is the app's shell: the database, the page layout, and the theme.
-//! The starter's task demo is `tasks.rs`; AGENTS.md says how to remove it.
+//! This file is the app's shell (the database, the sidebar, the theme) and its
+//! first two pages, Home and Settings.
 use axum::{
     Router,
+    extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
-use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, Feed, FormEnum, FormInput, Input, MutationAction, fields, icon};
+use maud::{DOCTYPE, Markup, PreEscaped, html};
+use placebo::{Component, Control, FormEnum, FormInput, Input, MutationAction, fields, icon};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower::ServiceBuilder;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
-mod tasks;
-
-/// The app's name, shown in the tab.
-const APP: &str = env!("CARGO_PKG_NAME");
+/// The app's name, shown in the sidebar and the tab. Rename it to the app's.
+const APP: &str = "Placebo";
 
 #[derive(Clone)]
 struct App {
     db: PgPool,
-    /// Pages that mount this feed read themselves again after `changed()`.
-    live: Feed,
 }
 
 /// A failed query. It answers 500 and logs the cause on the server.
@@ -43,10 +40,22 @@ impl IntoResponse for Failed {
     }
 }
 
-/// Every page: its heading row beside the theme toggle, an optional line
-/// under it, then its content. `title` names the tab.
+// The shell
+
+/// The sidebar's pages: path, name, and icon. A new page adds its row here.
+fn pages() -> [(&'static str, &'static str, PreEscaped<&'static str>); 2] {
+    [
+        ("/", "Home", icon!("house")),
+        ("/settings", "Settings", icon!("settings")),
+    ]
+}
+
+/// Every page: the sidebar, then the page's heading, an optional line under
+/// it, and its content. `path` marks the sidebar's current page; `title`
+/// names the tab.
 fn layout(
     headers: &HeaderMap,
+    path: &str,
     title: &str,
     heading: Markup,
     lede: Option<Markup>,
@@ -58,24 +67,37 @@ fn layout(
         html lang="en" data-theme=(theme.name()) {
             head {
                 meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1";
+                meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover";
                 title { (title) " · " (APP) }
                 link rel="stylesheet" href="/static/app.css";
                 script type="module" src="/placebo.js" {}
                 script type="module" src="/static/app.js" {}
             }
-            body {
-                main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
-                    header .stack style="--stack-space: var(--space-2xs)" {
-                        div .cluster .cluster-between {
-                            div .cluster style="--cluster-space: var(--space-2xs)" { (heading) }
-                            (Component::new("theme", "picker").mount(theme_picker(theme)))
-                        }
-                        @if let Some(lede) = lede {
-                            p .lede { (lede) }
+            body .shell {
+                aside .shell-side {
+                    a .shell-brand href="/" {
+                        span .shell-mark aria-hidden="true" { (icon!("pill")) }
+                        (APP)
+                    }
+                    nav .nav aria-label="Pages" {
+                        @for (href, name, symbol) in pages() {
+                            a href=(href) aria-current=[(href == path).then_some("page")] { (symbol) (name) }
                         }
                     }
-                    (content)
+                    div .shell-foot {
+                        (Component::new("theme", "picker").mount(theme_picker(theme)))
+                    }
+                }
+                main .shell-main {
+                    div .wrapper .page .stack style="--stack-space: var(--space-xl)" {
+                        header .stack style="--stack-space: var(--space-2xs)" {
+                            div .cluster style="--cluster-space: var(--space-2xs)" { (heading) }
+                            @if let Some(lede) = lede {
+                                p .lede { (lede) }
+                            }
+                        }
+                        (content)
+                    }
                 }
             }
         }
@@ -101,19 +123,11 @@ impl Theme {
     ];
 
     fn name(self) -> &'static str {
-        Self::ALL
-            .iter()
-            .find(|(theme, ..)| *theme == self)
-            .unwrap()
-            .1
+        Self::ALL.iter().find(|(theme, ..)| *theme == self).unwrap().1
     }
 
     fn label(self) -> &'static str {
-        Self::ALL
-            .iter()
-            .find(|(theme, ..)| *theme == self)
-            .unwrap()
-            .2
+        Self::ALL.iter().find(|(theme, ..)| *theme == self).unwrap().2
     }
 
     /// The theme a press switches to: System, Light, Dark, and round again.
@@ -137,6 +151,18 @@ impl Theme {
             .find(|(_, name, _)| Some(*name) == chosen)
             .map_or(Theme::System, |(theme, ..)| theme)
     }
+
+    fn icon(self) -> PreEscaped<&'static str> {
+        match self {
+            Theme::System => icon!("monitor"),
+            Theme::Light => icon!("sun"),
+            Theme::Dark => icon!("moon"),
+        }
+    }
+
+    fn cookie(self) -> String {
+        format!("theme={}; Path=/; Max-Age=31536000; SameSite=Lax", self.name())
+    }
 }
 
 #[derive(Deserialize, FormInput)]
@@ -144,16 +170,15 @@ struct SetTheme {
     theme: Theme,
 }
 
+/// The sidebar's button, and the choice on Settings: one input, two forms.
 const SET_THEME: MutationAction<SetTheme> = MutationAction::new("set-theme", "/theme");
+const CHOOSE_THEME: MutationAction<SetTheme> =
+    MutationAction::new("choose-theme", "/settings/theme");
 
 // One icon button showing the current theme; each press saves the next one.
 fn theme_picker(current: Theme) -> Markup {
     let next = current.next();
-    let symbol = match current {
-        Theme::System => icon!("monitor"),
-        Theme::Light => icon!("sun"),
-        Theme::Dark => icon!("moon"),
-    };
+    let symbol = current.icon();
     let label = format!("Theme: {}. Switch to {}", current.label(), next.label());
     let fields = fields! { SetTheme {
         @field theme = Control::hidden(next);
@@ -168,24 +193,125 @@ fn theme_picker(current: Theme) -> Markup {
 }
 
 async fn set_theme(Input(input): Input<SetTheme>) -> Response {
-    let cookie = format!(
-        "theme={}; Path=/; Max-Age=31536000; SameSite=Lax",
-        input.theme.name()
-    );
     let component = Component::new("theme", "picker");
     (
-        [(header::SET_COOKIE, cookie)],
+        [(header::SET_COOKIE, input.theme.cookie())],
         SET_THEME.bind(&component).reply(theme_picker(input.theme)),
     )
         .into_response()
 }
+
+// Home
+
+async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Failed> {
+    let (database, version): (String, String) =
+        sqlx::query_as("SELECT current_database(), current_setting('server_version')")
+            .fetch_one(&app.db)
+            .await?;
+    let next = [
+        (
+            icon!("file-plus"),
+            "Add a page",
+            "A route and a handler in src/main.rs that renders with layout(), and a row in pages().",
+        ),
+        (
+            icon!("database"),
+            "Add a table",
+            "A numbered file in migrations/, such as 0001_projects.sql. It runs when the app starts.",
+        ),
+        (
+            icon!("palette"),
+            "Style it",
+            "The kit's components first (static/kit/README.md), and your own in static/components.css.",
+        ),
+    ];
+    Ok(layout(
+        &headers,
+        "/",
+        "Home",
+        html! { h1 { "Welcome to " (APP) } },
+        Some(html! { "Running on Placebo and Postgres. Ask your agent for the first feature." }),
+        html! {
+            div .grid {
+                @for (symbol, title, text) in next {
+                    section .card {
+                        div .stack style="--stack-space: var(--space-xs)" {
+                            div .cluster style="--cluster-space: var(--space-xs)" { (symbol) h2 { (title) } }
+                            p .muted { (text) }
+                        }
+                    }
+                }
+            }
+            section .card {
+                div .stack style="--stack-space: var(--space-md)" {
+                    h2 { "This app" }
+                    dl .kv {
+                        dt { "Database" } dd { (database) }
+                        dt { "Postgres" } dd { (version) }
+                        dt { "Address" } dd { (headers.get(header::HOST).and_then(|host| host.to_str().ok()).unwrap_or("")) }
+                    }
+                }
+            }
+        },
+    ))
+}
+
+// Settings
+
+fn theme_choice(current: Theme) -> Markup {
+    let fields = fields! { SetTheme {
+        div .switch-field role="group" aria-labelledby="theme-label" {
+            div .stack style="--stack-space: var(--space-3xs)" {
+                h3 #theme-label { "Theme" }
+                p .muted { "System follows your device." }
+            }
+            @field theme = Control::radios(current, Theme::ALL.map(|(theme, _, label)| {
+                (theme, html! { (theme.icon()) span .visually-hidden { (label) } })
+            })).class("segmented");
+        }
+    } };
+    html! {
+        div data-placebo-behavior="autosave" {
+            (CHOOSE_THEME.bind(&Component::new("theme", "choice")).form(fields))
+        }
+    }
+}
+
+async fn settings(headers: HeaderMap) -> Markup {
+    layout(
+        &headers,
+        "/settings",
+        "Settings",
+        html! { h1 { "Settings" } },
+        None,
+        html! {
+            section .card {
+                div .stack style="--stack-space: var(--space-md)" {
+                    h2 { "Appearance" }
+                    (Component::new("theme", "choice").mount(theme_choice(Theme::from_cookies(&headers))))
+                }
+            }
+        },
+    )
+}
+
+async fn choose_theme(Input(input): Input<SetTheme>) -> Response {
+    let component = Component::new("theme", "choice");
+    (
+        [(header::SET_COOKIE, input.theme.cookie())],
+        CHOOSE_THEME.bind(&component).reply(theme_choice(input.theme)),
+    )
+        .into_response()
+}
+
+// Startup
 
 async fn database() -> PgPool {
     // Each app gets its own database, placebo_<package name>, unless
     // DATABASE_URL names another. It signs in as PGUSER or the shell's user:
     // sqlx's own lookup of the user answers "anonymous" in some sandboxes.
     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        let database = format!("placebo_{}", APP.replace('-', "_"));
+        let database = format!("placebo_{}", env!("CARGO_PKG_NAME").replace('-', "_"));
         match ["PGUSER", "USER", "USERNAME"]
             .into_iter()
             .find_map(|name| std::env::var(name).ok())
@@ -215,16 +341,15 @@ async fn database() -> PgPool {
 
 #[tokio::main]
 async fn main() {
-    let live = Feed::new("live", "/live");
     let state = App {
         db: database().await,
-        live: live.clone(),
     };
     let app = Router::new()
-        .merge(tasks::routes())
-        .route(live.path(), live.route())
+        .route("/", get(home))
+        .route("/settings", get(settings))
         .route("/placebo.js", get(placebo::runtime))
         .route(SET_THEME.path(), SET_THEME.route(set_theme))
+        .route(CHOOSE_THEME.path(), CHOOSE_THEME.route(choose_theme))
         // no-cache: browsers check for a newer file on every load (a 304 when
         // there is none), so an edited stylesheet shows on the next reload.
         .nest_service(

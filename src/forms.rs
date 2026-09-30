@@ -502,7 +502,8 @@ impl<T> Control<T> {
                 div role="radiogroup" id=[id] class=[class] aria-required=[required.then_some("true")]
                     aria-invalid=[invalid] aria-describedby=[described_by] data-placebo-field=(field) {
                     @for (i, (value, label, checked)) in options.iter().enumerate() {
-                        label { input type="radio" name=(name) value=(value) checked[*checked] autofocus[autofocus && i == 0] required[required]; " " (label) }
+                        // Rendered by `radios`, so already escaped.
+                        label { input type="radio" name=(name) value=(value) checked[*checked] autofocus[autofocus && i == 0] required[required]; " " (PreEscaped(label)) }
                     }
                 }
             },
@@ -584,11 +585,15 @@ impl<T: SingleValue> Control<T> {
     }
 
     /// One labeled radio button per option, inside a `radiogroup` element.
-    /// An optional field may start as `None` with no option checked.
-    pub fn radios<L: Into<String>>(selected: T, options: impl IntoIterator<Item = (T, L)>) -> Self
+    /// An optional field may start as `None` with no option checked. A label
+    /// is text, or markup such as an icon beside its name.
+    pub fn radios<L: maud::Render>(selected: T, options: impl IntoIterator<Item = (T, L)>) -> Self
     where
         T: PartialEq,
     {
+        let options = options
+            .into_iter()
+            .map(|(value, label)| (value, label.render().into_string()));
         let options = self::options(options, |value| *value == selected);
         assert!(
             is_none(&selected) || options.iter().any(|(_, _, selected)| *selected),

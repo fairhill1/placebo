@@ -10,16 +10,10 @@ const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
 /// Template files copied as they are. The kit files match the kit this
 /// Placebo ships, which the app's styles test requires.
-const FILES: [(&str, &str); 15] = [
+const FILES: [(&str, &str); 14] = [
     ("src/main.rs", include_str!("../../../template/src/main.rs")),
-    (
-        "src/tasks.rs",
-        include_str!("../../../template/src/tasks.rs"),
-    ),
-    (
-        "migrations/0001_tasks.sql",
-        include_str!("../../../template/migrations/0001_tasks.sql"),
-    ),
+    // `sqlx::migrate!` needs the directory before the first migration.
+    ("migrations/.gitkeep", ""),
     (
         "tests/styles.rs",
         include_str!("../../../template/tests/styles.rs"),
@@ -191,23 +185,17 @@ updates), `typed-forms.md` (controls and payload types), and `diagnostics.md`
   `0002_tags.sql`; it runs when the app starts. Never edit a migration that
   has run.
 - Query with `sqlx::query_as` and `.bind` parameters; never format values into
-  SQL. Check a version in the same statement as its write, as `save` in
-  `src/tasks.rs` does with `UPDATE … WHERE id = $3 AND version = $4 RETURNING …`.
+  SQL. Check a version in the same statement as its write:
+  `UPDATE … SET …, version = version + 1 WHERE id = $1 AND version = $2 RETURNING …`.
 - Remove the database with `dropdb {database}` when you delete the app.
 
-## The starter's demo
+## The shell
 
-`src/main.rs` is the app's shell: the database, `layout()` with its header,
-and the theme toggle. Keep it. `src/tasks.rs` is a task demo whose seeded
-tasks tour Placebo; read it for the patterns (a list, a page per record, adds,
-toggles, deletes, a versioned editor, live updates). When the person starts on
-their own app, remove it:
-
-1. Delete `src/tasks.rs`, and in `src/main.rs` remove `mod tasks;` and
-   `.merge(tasks::routes())`.
-2. Add a migration, such as `0002_remove_demo.sql`, with `DROP TABLE tasks;`.
-   Keep `0001_tasks.sql`: it has run.
-3. Route `/` to the app's own first page, rendered with `layout()`.
+`src/main.rs` is the app's shell: the database, `layout()` with the sidebar,
+and the theme. Every page renders with `layout()`; a page in the sidebar also
+gets a row in `pages()`. Home and Settings are the first two pages: replace
+Home's content with the app's own, and keep Settings for the app's settings.
+More modules go beside it, such as `src/projects.rs` with its own routes.
 
 ## Styles
 

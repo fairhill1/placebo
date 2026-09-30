@@ -495,7 +495,6 @@ attribute instead.
 #[test]
 fn styles_stay_in_the_kit() {
     placebo::styles::Check::new()
-        .kit("static/kit")
         .app_css("static/app.css")
         .app_css("static/components.css")
         .views("src")
@@ -503,9 +502,10 @@ fn styles_stay_in_the_kit() {
 }
 ```
 
-The vendored kit must match the kit this Placebo ships, so updating Placebo is
-replacing the folder; re-skin it with tokens in `@layer tokens` in the app's
-stylesheet. Every rule in the app's stylesheets sits in one of the kit's
+The kit itself is served by Placebo (`.route(placebo::KIT_PATH,
+get(placebo::kit))`, imported as `@import url("/placebo/kit/main.css")`), so
+`cargo update -p placebo` updates it with the rest; re-skin it with tokens in
+`@layer tokens` in the app's stylesheet. Every rule in the app's stylesheets sits in one of the kit's
 layers, and nothing is `!important`. Outside `@layer tokens`, colours, font
 families, line heights, letter spacing, and durations are tokens; margins,
 padding, gaps, font sizes and weights, and radii are tokens or 0, and not

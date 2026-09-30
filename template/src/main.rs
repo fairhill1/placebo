@@ -222,7 +222,7 @@ async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
         (
             icon!("palette"),
             "Style it",
-            "The kit's components first (static/kit/README.md), and your own in static/components.css.",
+            "The kit's components first (placebo kit lists them), and your own in static/components.css.",
         ),
     ];
     Ok(layout(
@@ -377,6 +377,7 @@ async fn main() {
         .route("/", get(home))
         .route("/settings", get(settings))
         .route("/placebo.js", get(placebo::runtime))
+        .route(placebo::KIT_PATH, get(placebo::kit))
         .route(SET_THEME.path(), SET_THEME.route(set_theme))
         .route(CHOOSE_THEME.path(), CHOOSE_THEME.route(choose_theme))
         // no-cache: browsers check for a newer file on every load (a 304 when

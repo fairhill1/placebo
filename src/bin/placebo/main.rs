@@ -1,5 +1,6 @@
 //! Development supervisor. Cargo remains the compiler; this process owns its
 //! rebuild loop and the running application. Browser reload lives in the app.
+mod docs;
 mod new;
 
 use notify::{RecursiveMode, Watcher};
@@ -25,6 +26,8 @@ struct Options {
 enum Task {
     Dev(Options),
     New(PathBuf),
+    Rules,
+    Kit,
 }
 
 fn options() -> Result<Option<Task>, String> {
@@ -39,7 +42,7 @@ fn options() -> Result<Option<Task>, String> {
             .is_some_and(|arg| help(Some(arg)))
     {
         println!(
-            "Placebo development tools\n\n  placebo new [PATH]\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n\n`new` creates a starter app on Postgres, with an AGENTS.md of Placebo's rules,\nin PATH or, without it, the current directory. Its database is placebo_NAME on\nthe local server.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
+            "Placebo development tools\n\n  placebo new [PATH]\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n  placebo rules\n  placebo kit\n\n`new` creates a starter app on Postgres, with an AGENTS.md for coding agents,\nin PATH or, without it, the current directory. Its database is placebo_NAME on\nthe local server.\n\n`rules` prints Placebo's rules, and `kit` the CSS kit's tokens and classes, from\nthe Placebo the app in the current directory builds against.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
         );
         return Ok(None);
     }
@@ -50,8 +53,16 @@ fn options() -> Result<Option<Task>, String> {
             _ => Err("Expected `placebo new [PATH]`; use --help for usage.".into()),
         };
     }
+    if let Some(task @ ("rules" | "kit")) = first.as_deref() {
+        if args.next().is_some() {
+            return Err(format!("`placebo {task}` takes no arguments."));
+        }
+        return Ok(Some(if task == "rules" { Task::Rules } else { Task::Kit }));
+    }
     if first.as_deref() != Some("dev") {
-        return Err("Expected `placebo dev` or `placebo new`; use --help for usage.".into());
+        return Err(
+            "Expected `placebo dev`, `new`, `rules`, or `kit`; use --help for usage.".into(),
+        );
     }
     let mut target = None;
     let mut features = None;
@@ -325,6 +336,8 @@ async fn main() {
     let result = match options() {
         Ok(Some(Task::Dev(options))) => supervise(options).await,
         Ok(Some(Task::New(path))) => new::run(&path),
+        Ok(Some(Task::Rules)) => docs::rules(),
+        Ok(Some(Task::Kit)) => docs::kit(),
         Ok(None) => return,
         Err(error) => Err(io::Error::other(error)),
     };

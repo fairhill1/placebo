@@ -5,12 +5,11 @@ use std::{fs, io, path::Path};
 /// Where this CLI was built from.
 const PLACEBO: &str = env!("CARGO_MANIFEST_DIR");
 const REPO: &str = "https://github.com/fairhill1/placebo";
-const RULES: &str = include_str!("../../../docs/rules.md");
 const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
-/// Template files copied as they are. The kit files match the kit this
-/// Placebo ships, which the app's styles test requires.
-const FILES: [(&str, &str); 14] = [
+/// Template files copied as they are. The kit is not among them: Placebo
+/// serves it, so it updates with the crate.
+const FILES: [(&str, &str); 8] = [
     ("src/main.rs", include_str!("../../../template/src/main.rs")),
     // `sqlx::migrate!` needs the directory before the first migration.
     ("migrations/.gitkeep", ""),
@@ -32,26 +31,7 @@ const FILES: [(&str, &str); 14] = [
     ),
     (".gitignore", include_str!("../../../template/.gitignore")),
     ("CLAUDE.md", "@AGENTS.md\n"),
-    ("static/kit/main.css", include_str!("../../../kit/main.css")),
-    (
-        "static/kit/tokens.css",
-        include_str!("../../../kit/tokens.css"),
-    ),
-    (
-        "static/kit/reset.css",
-        include_str!("../../../kit/reset.css"),
-    ),
-    ("static/kit/base.css", include_str!("../../../kit/base.css")),
-    (
-        "static/kit/layout.css",
-        include_str!("../../../kit/layout.css"),
-    ),
-    (
-        "static/kit/components.css",
-        include_str!("../../../kit/components.css"),
-    ),
 ];
-const KIT_README: &str = include_str!("../../../kit/README.md");
 
 pub fn run(path: &Path) -> io::Result<()> {
     // An existing directory, such as `.`, is set up in place, like `cargo init`.
@@ -72,11 +52,10 @@ pub fn run(path: &Path) -> io::Result<()> {
         )));
     }
     let manifest = manifest(name, PLACEBO);
-    let agents = agents(name, PLACEBO);
+    let agents = agents(name);
     let generated = [
         ("Cargo.toml", manifest.as_str()),
         ("AGENTS.md", agents.as_str()),
-        ("static/kit/README.md", KIT_README),
     ];
     let files: Vec<_> = FILES.into_iter().chain(generated).collect();
     let taken: Vec<&str> = files
@@ -153,29 +132,31 @@ fn manifest(name: &str, placebo: &str) -> String {
     manifest.replacen("[features]", "[workspace]\n\n[features]", 1)
 }
 
-fn agents(name: &str, placebo: &str) -> String {
+fn agents(name: &str) -> String {
     let database = database(name);
-    let docs = if from_git(placebo) {
-        format!("{REPO}/tree/main/docs")
-    } else {
-        format!("{placebo}/docs")
-    };
     format!(
         "# {name}
 
-A Placebo app: Rust, Axum, Maud, and Postgres. Follow the rules below. The
-docs explain each one: `interactions.md` (replies, drafts, reads, live
-updates), `typed-forms.md` (controls and payload types), and `diagnostics.md`
-(console codes), at {docs}.
+A Placebo app: Rust, Axum, Maud, and Postgres.
+
+## Placebo's rules
+
+Run `placebo rules` before changing any code, and follow them: they say how
+pages, forms, replies, and styles work here, and where the docs are. Run
+`placebo kit` for the CSS kit's tokens and classes. Both print the Placebo
+this app builds against, so they stay current when it updates.
 
 ## Commands
 
 - `placebo dev` builds and runs the app on http://127.0.0.1:3000. Rust edits
   rebuild and restart it; edits in `static/` reload the browser. Run the app
-  with it, not `cargo run`, which does neither. Run it from
-  this directory, which the app serves `static/` from. Beside another app on
-  port 3000, run `PLACEBO_ADDR=127.0.0.1:3001 placebo dev`.
+  with it, not `cargo run`, which does neither. Run it from this directory,
+  which the app serves `static/` from. Beside another app on port 3000, run
+  `PLACEBO_ADDR=127.0.0.1:3001 placebo dev`.
 - `cargo test` runs the tests, including the styles test.
+- `cargo update -p placebo` takes Placebo's updates: its Rust, its script,
+  its kit, and its rules. Run `cargo test` after it. `cargo install --git
+  {REPO} placebo --features dev --locked` updates the `placebo` command.
 
 ## Database
 
@@ -183,8 +164,8 @@ updates), `typed-forms.md` (controls and payload types), and `diagnostics.md`
   creates it on the first debug run. `DATABASE_URL` names another; `PGUSER`
   and `PGPASSWORD` sign in as another role, as on Windows.
 - Change the schema with a new numbered file in `migrations/`, such as
-  `0002_tags.sql`; it runs when the app starts. Never edit a migration that
-  has run.
+  `0001_projects.sql`; it runs when the app starts. Never edit a migration
+  that has run.
 - Query with `sqlx::query_as` and `.bind` parameters; never format values into
   SQL. Check a version in the same statement as its write:
   `UPDATE … SET …, version = version + 1 WHERE id = $1 AND version = $2 RETURNING …`.
@@ -200,12 +181,10 @@ More modules go beside it, such as `src/projects.rs` with its own routes.
 
 ## Styles
 
-`static/kit/README.md` lists the kit's tokens and classes. `static/kit` is
-Placebo's kit copied verbatim: never edit it. The app's own components go in
-`static/components.css`, from the kit's tokens; `cargo test` fails on values
-off the kit's scale.
-
-{RULES}"
+The kit is served by Placebo at `/placebo/kit/`, and `static/app.css` imports
+it. The app's own components go in `static/components.css`, built from the
+kit's tokens; `cargo test` fails on values off the kit's scale.
+"
     )
 }
 
@@ -243,14 +222,10 @@ mod tests {
     }
 
     #[test]
-    fn agents_md_carries_the_rules_and_reachable_docs() {
-        let clone = agents("my-app", CLONE);
-        assert!(clone.ends_with(RULES));
-        assert!(clone.contains("`placebo_my_app`"));
-        assert!(clone.contains("/home/someone/placebo/docs"));
-        let cached = agents("my-app", CACHED);
-        assert!(cached.contains(&format!("{REPO}/tree/main/docs")));
-        assert!(!cached.contains(".cargo"));
+    fn agents_md_sends_agents_to_the_current_rules() {
+        let agents = agents("my-app");
+        assert!(agents.contains("`placebo rules`") && agents.contains("`placebo kit`"));
+        assert!(agents.contains("`placebo_my_app`"));
     }
 
     #[test]
@@ -259,7 +234,7 @@ mod tests {
         let app = dir.join("my-app");
         fs::create_dir_all(&app).unwrap();
         run(&app).unwrap();
-        assert!(app.join("Cargo.toml").is_file() && app.join("static/kit/main.css").is_file());
+        assert!(app.join("Cargo.toml").is_file() && app.join("static/app.css").is_file());
         let error = run(&app).unwrap_err().to_string();
         assert!(error.contains("already has src/main.rs"), "{error}");
         fs::remove_dir_all(&dir).unwrap();

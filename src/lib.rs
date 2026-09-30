@@ -307,6 +307,37 @@ pub async fn runtime() -> Response {
         .into_response()
 }
 
+/// Where [`kit`] serves the CSS kit; an app's stylesheet starts with
+/// `@import url("/placebo/kit/main.css");`.
+pub const KIT_PATH: &str = "/placebo/kit/{file}";
+
+/// Serve the CSS kit embedded in this crate, as [`runtime`] serves the
+/// script, so an app's kit is always the one its Placebo version ships and
+/// `cargo update -p placebo` updates it: `.route(placebo::KIT_PATH,
+/// get(placebo::kit))`.
+pub async fn kit(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
+    let Some((name, shipped)) = styles::KIT.iter().find(|(name, _)| *name == file) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Placebo's own kit edits show without rebuilding the app.
+    #[cfg(all(feature = "dev", debug_assertions))]
+    let content = std::fs::read_to_string(format!("{}/kit/{name}", env!("CARGO_MANIFEST_DIR")))
+        .unwrap_or_else(|_| (*shipped).to_owned());
+    #[cfg(not(all(feature = "dev", debug_assertions)))]
+    let content = {
+        let _ = name;
+        *shipped
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

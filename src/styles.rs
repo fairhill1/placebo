@@ -2,7 +2,7 @@
 //! classes; an agent that invents a class and writes CSS for it, or reaches
 //! for an inline style, grows a second design system beside it. Maud accepts
 //! any class or attribute, so nothing stops that at compile time. [`Check`],
-//! in the app's `cargo test`, keeps the vendored kit unchanged, the app's
+//! in the app's `cargo test`, keeps a vendored kit unchanged, the app's
 //! stylesheet on tokens and in its layers, and styles out of the views. The
 //! runtime reports a class no stylesheet defines as `[placebo:unknown-class]`.
 use std::{
@@ -11,7 +11,7 @@ use std::{
 };
 
 /// The kit this version of Placebo ships.
-const KIT: [(&str, &str); 6] = [
+pub(crate) const KIT: [(&str, &str); 6] = [
     ("main.css", include_str!("../kit/main.css")),
     ("tokens.css", include_str!("../kit/tokens.css")),
     ("reset.css", include_str!("../kit/reset.css")),
@@ -57,7 +57,6 @@ const APPROVE: &str = "a component the kit lacks goes in the app's own component
 /// #[test]
 /// fn styles_stay_in_the_kit() {
 ///     placebo::styles::Check::new()
-///         .kit("static/kit")
 ///         .app_css("static/app.css")
 ///         .app_css("static/components.css")
 ///         .views("src")
@@ -79,7 +78,8 @@ impl Check {
         Self::default()
     }
 
-    /// The app's copy of the kit, which must match the kit this Placebo ships
+    /// For an app that vendors a copy of the kit rather than serving it with
+    /// [`crate::kit`]: the copy, which must match the kit this Placebo ships
     /// byte for byte. The kit's README has apps re-skin it by setting tokens
     /// in `@layer tokens` in their own stylesheet, never by editing the copy.
     pub fn kit(mut self, dir: impl Into<PathBuf>) -> Self {

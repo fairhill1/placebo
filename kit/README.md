@@ -44,7 +44,7 @@ Make your own entry stylesheet and import the kit first:
 
 ```css
 /* static/app.css: the only stylesheet the page links */
-@import url("kit/main.css");
+@import url("/placebo/kit/main.css");   /* served by placebo::kit */
 @import url("app/tokens.css") layer(tokens);         /* re-skin: token values only */
 @import url("app/components.css") layer(components); /* your components */
 @import url("app/overrides.css") layer(overrides);   /* rare, deliberate exceptions */

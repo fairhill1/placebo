@@ -4,7 +4,7 @@
 //! The starter's task demo is `tasks.rs`; AGENTS.md says how to remove it.
 use axum::{
     Router,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -12,7 +12,8 @@ use maud::{DOCTYPE, Markup, html};
 use placebo::{Component, Control, Feed, FormEnum, FormInput, Input, MutationAction, fields, icon};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tower_http::services::ServeDir;
+use tower::ServiceBuilder;
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 mod tasks;
 
@@ -216,7 +217,17 @@ async fn main() {
         .route(live.path(), live.route())
         .route("/placebo.js", get(placebo::runtime))
         .route(SET_THEME.path(), SET_THEME.route(set_theme))
-        .nest_service("/static", ServeDir::new("static"))
+        // no-cache: browsers check for a newer file on every load (a 304 when
+        // there is none), so an edited stylesheet shows on the next reload.
+        .nest_service(
+            "/static",
+            ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ))
+                .service(ServeDir::new("static")),
+        )
         .with_state(state);
     // Saves also work before the runtime loads, or without JavaScript.
     let app = placebo::native_forms(app);

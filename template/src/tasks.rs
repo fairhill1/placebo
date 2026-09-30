@@ -89,29 +89,27 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
         html! { (tasks.len() - done) " open · " (done) " done" },
         html! {
             (app.live.mount())
-            section .card .stack {
-                @if tasks.is_empty() {
-                    p .notice { (icon!("list-todo")) "Nothing to do yet." }
-                }
-                ul .stack role="list" style="--stack-space: var(--space-xs)" {
+            section .card .card-flush {
+                ul .list role="list" {
+                    @if tasks.is_empty() {
+                        li .list-row { span .list-lead { (icon!("list-todo")) } span .list-main .muted { "Nothing to do yet." } }
+                    }
                     @for task in &tasks {
-                        li .cluster .cluster-between {
-                            div .cluster {
-                                (Component::new("mark", task.id).mount(mark_form(task.id, task.done)))
-                                @if task.done {
-                                    a .muted href=(format!("/tasks/{}", task.id)) { (task.title) }
-                                } @else {
-                                    a href=(format!("/tasks/{}", task.id)) { (task.title) }
-                                }
+                        li .list-row {
+                            (Component::new("mark", task.id).mount(mark_form(task.id, task.done)))
+                            @if task.done {
+                                a .list-main .muted href=(format!("/tasks/{}", task.id)) { (task.title) }
+                            } @else {
+                                a .list-main href=(format!("/tasks/{}", task.id)) { (task.title) }
                             }
                             (Component::new("delete", task.id).mount(delete_form(task)))
                         }
                     }
-                    // The last row adds a task. It opens on a press and stays
-                    // open across replies, for the next task.
-                    li {
-                        details .stack style="--stack-space: var(--space-xs)" data-placebo-behavior="focus-on-open" {
-                            summary .btn .btn-ghost .btn-sm { (icon!("plus")) "Add task" }
+                    // The last row adds a task: it opens on a press and stays
+                    // open across replies, for the next one.
+                    li .list-row {
+                        details .list-main data-placebo-behavior="add-row" {
+                            summary .list-add { span .list-lead { (icon!("plus")) } "Add task" }
                             (Component::new("composer", "new").mount(add_form("", "", false)))
                         }
                     }
@@ -123,10 +121,12 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
 
 fn add_form(draft: &str, feedback: &str, invalid: bool) -> Markup {
     let fields = fields! { AddTask {
-        label .visually-hidden for="new-task" { "New task" }
-        @field title = Control::text(draft).id("new-task").placeholder("What needs doing? Press Enter to add.")
-            .described_by("new-task-feedback").autocomplete("off").invalid(invalid);
-        @if !feedback.is_empty() {
+        div .list-line {
+            span .list-lead { (icon!("plus")) }
+            label .visually-hidden for="new-task" { "New task" }
+            @field title = Control::text(draft).id("new-task").class("list-input")
+                .placeholder("What needs doing? Enter adds it, Escape closes.")
+                .described_by("new-task-feedback").autocomplete("off").invalid(invalid);
             p .muted #new-task-feedback role="status" { (feedback) }
         }
     } };

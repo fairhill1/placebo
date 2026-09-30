@@ -208,6 +208,15 @@ any second link inside needs `position: relative`)
 `.field` wrapping a `label`, the control, and an optional `.field-hint`.
 Inputs, selects and textareas are styled by element, with no class needed.
 
+### List
+`ul.list` of `li.list-row`, one record per row, divided by hairlines; put it
+in a `.card.card-flush` to run edge to edge. A row lines up a leading control
+(a `.btn-icon`, or an icon in `.list-lead`), the record's text as
+`.list-main`, and trailing actions. An `a.list-main` reads as text and makes
+the whole row its hit area; add `.muted` for a finished record. An adding row
+is a `details.list-main` holding `summary.list-add` ("Add ...") and, when
+open, a `.list-line` with the `.list-lead` icon and an `input.list-input`.
+
 ### Table
 `.table`. Row hover is measured for a table on a `.card`.
 

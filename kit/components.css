@@ -130,6 +130,42 @@
 .field > label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .field > .field-hint { font-size: var(--text-xs); color: var(--text-muted); }
 
+/* List -- one record per row, divided by hairlines. A row lines up a leading
+   control, the record's text (.list-main), and trailing actions. In a
+   .card-flush the rows run edge to edge and carry the inset themselves. */
+.card-flush { padding: 0; overflow: clip; }
+.list { display: flex; flex-direction: column; }
+.list-row, .list-line { display: flex; align-items: center; gap: var(--space-sm); }
+.list-row {
+  position: relative;
+  min-block-size: calc(var(--control-size) + var(--space-xs));
+  padding-inline: var(--space-md);
+  border-block-end: var(--border-width) solid var(--border);
+  transition: background var(--transition);
+}
+.list-row:last-child { border-block-end: 0; }
+.list-row:focus-within { background: var(--surface-raised-hover); }
+@media (hover: hover) {
+  .list-row:has(a.list-main, summary):hover { background: var(--surface-raised-hover); }
+}
+.list-main { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
+/* A record's link reads as its text, and the whole row is the hit area; the
+   row's own controls sit above it. */
+a.list-main { color: var(--text); text-decoration: none; }
+a.list-main.muted { color: var(--text-muted); }
+a.list-main::after { content: ""; position: absolute; inset: 0; }
+.list-row > :not(.list-main) { position: relative; z-index: 1; }
+/* The leading column: an icon the width of a .btn-icon, so rows line up. */
+.list-lead { display: inline-flex; justify-content: center; flex: none; inline-size: var(--control-size-sm); color: var(--text-muted); }
+/* A row that adds one: a <details> whose summary reads "Add ..." and whose
+   open state is an input in the same place. */
+.list-add { display: flex; align-items: center; gap: var(--space-sm); color: var(--text-muted); cursor: pointer; list-style: none; }
+.list-add::-webkit-details-marker { display: none; }
+details[open] > .list-add { display: none; }
+.list-input { flex: 1; min-inline-size: 0; border-color: transparent; background: transparent; padding-inline: 0; }
+.list-line > :not(.list-input) { flex: none; }
+.list-input:focus-visible { outline: none; }
+
 /* Table */
 .table { inline-size: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .table :is(th, td) {

@@ -16,7 +16,7 @@ use tower_http::services::ServeDir;
 
 mod tasks;
 
-/// The app's name, shown in the header and the tab.
+/// The app's name, shown in the tab.
 const APP: &str = env!("CARGO_PKG_NAME");
 
 #[derive(Clone)]
@@ -42,7 +42,7 @@ impl IntoResponse for Failed {
     }
 }
 
-/// Every page: the header with the app's name and theme, then the content.
+/// Every page: the header with the theme toggle, then the content.
 fn layout(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
     let theme = Theme::from_cookies(headers);
     html! {
@@ -57,8 +57,7 @@ fn layout(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
             }
             body {
                 main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
-                    header .cluster .cluster-between {
-                        strong { (APP) }
+                    header .cluster .cluster-end {
                         (Component::new("theme", "picker").mount(theme_picker(theme)))
                     }
                     (content)

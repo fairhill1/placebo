@@ -235,11 +235,21 @@ before the row's actions: a date, a count, an amount.
 `body.shell` holds `aside.shell-side` (a `.shell-brand` link with a
 `.shell-mark`, a `nav.nav` of links, and a `.shell-foot` pinned to its bottom)
 and `main.shell-main`. Mark the current page's link `aria-current="page"`.
+The foot's items stack centred in the sidebar and sit in a row in the top bar.
+`details.dropdown.shell-account`, last in the foot, is who is signed in: its
+`summary` holds an `.avatar` and a `.shell-account-name`, and its `.menu`
+their actions (signing out). It spans the sidebar's foot with the menu
+opening upward, and shows only the avatar in the top bar.
 Under 48rem the sidebar becomes a bar across the top and the `.nav` a tab bar
 along the bottom (icon above name), from the same markup. `.shell-wide` shows an
 element only in the sidebar layout, `.shell-narrow` only in the top bar. They
 sit in the `overrides` layer, so a class of yours that sets `display` on the
 same element cannot undo them.
+
+### Solo
+`body.solo` is a page without the shell, such as signing in: it centres one
+`main`, `--width-md` wide, in the window. A `.shell-brand` over the card and
+a `.solo-note` under it (a link to signing up) are centred.
 
 ### Menu
 `details.dropdown` with a `summary` (often a `.btn`) and a `.menu` of

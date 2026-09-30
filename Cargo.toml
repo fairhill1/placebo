@@ -54,3 +54,11 @@ required-features = ["dev"]
 [[example]]
 name = "controls"
 path = "examples/controls.rs"
+
+# Argon2 password hashing is slow on purpose, and unoptimized it takes a third
+# of a second a sign-in, so debug builds optimize it.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

@@ -319,7 +319,7 @@ details[open] > .list-add { display: none; }
 
 /* Shell -- the app's frame: a sidebar (.shell-side) beside the page
    (.shell-main). The sidebar holds the brand, a .nav, and a .shell-foot pinned
-   to its bottom. Under 48rem the sidebar becomes a bar across the top and its
+   to its bottom, whose items stack there, centred, and a .shell-account spans. Under 48rem the sidebar becomes a bar across the top and its
    .nav a tab bar along the bottom: one markup, placed by CSS, because the
    server does not know the screen's width. */
 .shell {
@@ -340,7 +340,7 @@ details[open] > .list-add { display: none; }
   background: var(--surface-sunken);
   border-inline-end: var(--border-width) solid var(--border);
 }
-.shell-foot { display: flex; align-items: center; justify-content: center; gap: var(--space-xs); margin-block-start: auto; }
+.shell-foot { display: flex; flex-direction: column; align-items: center; gap: var(--space-sm); margin-block-start: auto; }
 /* Room between the sidebar and the page's .wrapper, beyond its own gutter. */
 .shell-main { padding-inline: var(--space-md); }
 .shell-brand {
@@ -373,7 +373,7 @@ details[open] > .list-add { display: none; }
     border-inline-end: 0;
     border-block-end: var(--border-width) solid var(--border);
   }
-  .shell-foot { margin-block-start: 0; margin-inline-start: auto; }
+  .shell-foot { flex-direction: row; gap: var(--space-xs); margin-block-start: 0; margin-inline-start: auto; }
   .shell-main { padding-inline: 0; padding-block-end: var(--tab-bar); }
 }
 
@@ -421,6 +421,67 @@ details[open] > .list-add { display: none; }
   .shell .nav a[aria-current="page"] { color: var(--accent-ink); background: none; box-shadow: none; }
   .shell .nav .icon { inline-size: var(--icon-md); block-size: var(--icon-md); }
 }
+
+/* Account -- who is signed in, last in the .shell-foot: a details.dropdown
+   whose summary holds an .avatar and a .shell-account-name, and whose .menu
+   holds the person's actions, such as signing out. In the sidebar it spans the
+   foot and its menu opens upward; in the top bar only the avatar shows. */
+.shell-account { align-self: stretch; }
+.shell-account > summary {
+  --avatar-size: var(--control-size-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-block-size: var(--control-size);
+  padding-inline: var(--space-2xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  border-radius: var(--radius-md);
+  transition: background var(--transition);
+}
+.shell-account[open] > summary { background: var(--surface-hover); }
+@media (hover: hover) {
+  .shell-account > summary:hover { background: var(--surface-hover); }
+}
+.shell-account-name { flex: 1; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shell-account > .menu {
+  inset-block: auto calc(100% + var(--space-2xs));
+  inset-inline: 0;
+  inline-size: auto;
+  min-inline-size: 0;
+}
+@starting-style {
+  .shell-account[open] > .menu { translate: 0 var(--space-2xs); }
+}
+@media (width < 48rem) {
+  .shell-account { align-self: center; }
+  .shell-account > summary { padding: 0; border-radius: var(--radius-full); }
+  .shell-account-name { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
+  .shell-account > .menu {
+    inset-block: calc(100% + var(--space-2xs)) auto;
+    inset-inline: auto 0;
+    inline-size: max-content;
+    min-inline-size: 10rem;
+  }
+  @starting-style {
+    .shell-account[open] > .menu { translate: 0 calc(var(--space-2xs) * -1); }
+  }
+}
+
+/* Solo -- a page without the shell, such as signing in or a page that is not
+   there: body.solo centres one main, --width-md wide, in the window. The
+   .shell-brand over its card and a .solo-note under it, such as a link to
+   signing up, are centred on it. */
+.solo {
+  display: grid;
+  place-items: center;
+  min-block-size: 100dvh;
+  padding: var(--space-lg) var(--space-md);
+}
+.solo > main { inline-size: 100%; max-inline-size: var(--width-md); }
+.solo .shell-brand { justify-content: center; }
+.solo-note { text-align: center; }
 
 /* Menu -- a <details class="dropdown"> whose <summary> is the control (often a
    .btn) and whose .menu is the panel. .menu-item is a link or a button, alike;

@@ -9,10 +9,13 @@ const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
 /// Template files copied as they are. The kit is not among them: Placebo
 /// serves it, so it updates with the crate.
-const FILES: [(&str, &str); 8] = [
+const FILES: [(&str, &str); 9] = [
     ("src/main.rs", include_str!("../../../template/src/main.rs")),
-    // `sqlx::migrate!` needs the directory before the first migration.
-    ("migrations/.gitkeep", ""),
+    ("src/auth.rs", include_str!("../../../template/src/auth.rs")),
+    (
+        "migrations/0001_accounts.sql",
+        include_str!("../../../template/migrations/0001_accounts.sql"),
+    ),
     (
         "tests/styles.rs",
         include_str!("../../../template/tests/styles.rs"),
@@ -128,8 +131,20 @@ fn manifest(name: &str, placebo: &str) -> String {
     let manifest = MANIFEST
         .replacen("name = \"starter\"", &format!("name = \"{name}\""), 1)
         .replacen("placebo = { path = \"..\", features = [\"time\"] }", &dependency, 1);
-    // A standalone app is its own workspace, not a member of Placebo's.
-    manifest.replacen("[features]", "[workspace]\n\n[features]", 1)
+    // A standalone app is its own workspace, not a member of Placebo's, so it
+    // takes the workspace's profile for password hashing too.
+    let manifest = manifest.replacen("[features]", "[workspace]\n\n[features]", 1);
+    format!("{manifest}\n{}", profiles())
+}
+
+/// The `[profile]` tables of Placebo's own manifest, which a workspace member
+/// cannot set: the password hashing, optimized in debug builds.
+fn profiles() -> &'static str {
+    const WORKSPACE: &str = include_str!("../../../Cargo.toml");
+    let start = WORKSPACE
+        .find("\n# Argon2 password hashing")
+        .expect("Placebo's manifest sets the template's profiles");
+    WORKSPACE[start..].trim_start()
 }
 
 fn agents(name: &str) -> String {
@@ -163,9 +178,9 @@ this app builds against, so they stay current when it updates.
 - The app uses the Postgres database `{database}` on the local server and
   creates it on the first debug run. `DATABASE_URL` names another; `PGUSER`
   and `PGPASSWORD` sign in as another role, as on Windows.
-- Change the schema with a new numbered file in `migrations/`, such as
-  `0001_projects.sql`; it runs when the app starts. Never edit a migration
-  that has run.
+- Change the schema with the next numbered file in `migrations/`, such as
+  `0002_projects.sql`; it runs when the app starts. Never edit a migration
+  that has run. `0001_accounts.sql` holds the users and their sessions.
 - Query with `sqlx::query_as` and `.bind` parameters; never format values into
   SQL. Check a version in the same statement as its write:
   `UPDATE … SET …, version = version + 1 WHERE id = $1 AND version = $2 RETURNING …`.
@@ -178,6 +193,26 @@ and the theme. Every page renders with `layout()`; a page in the sidebar also
 gets a row in `pages()`. Home and Settings are the first two pages: replace
 Home's content with the app's own, and keep Settings for the app's settings.
 More modules go beside it, such as `src/projects.rs` with its own routes.
+
+## Accounts
+
+`src/auth.rs` has sign-up, sign-in, and sign-out, with passwords hashed by
+Argon2 and sessions in the database. Every page needs someone signed in,
+except the paths its `public()` lists; a signed-out visit goes to /login and
+back after signing in. A handler that needs the person takes `user: User`
+(its `id` and `email`) and passes it to `layout()`, which shows it in the
+sidebar's account menu.
+
+- Scope every query to the signed-in person where the data is theirs:
+  `WHERE owner_id = $1` bound to `user.id`, on reads and writes alike. A
+  record id from a form or the address proves nothing about who may see it.
+- A new public page (a landing page, a shared link) is a path in `public()`;
+  it takes `Option<User>`.
+- Anyone can sign up. To close it, remove the sign-up route and page, or check
+  the email against an allowed list in `sign_up`.
+- Password reset, email verification, and sign-in with another provider are
+  not here: they need an email sender or a provider's keys, so ask the person
+  before adding one.
 
 ## Styles
 
@@ -213,6 +248,7 @@ mod tests {
         assert!(clone.contains("placebo = { path = \"/home/someone/placebo\", features = [\"time\"] }"));
         assert!(clone.contains("[workspace]"));
         assert!(!clone.contains("starter") && !clone.contains("\"..\""));
+        assert!(clone.contains("[profile.dev.package.argon2]\nopt-level = 3"));
         let cached = manifest("my-app", CACHED);
         assert!(
             cached.contains(&format!("placebo = {{ git = {REPO:?}, features = [\"time\"] }}")),
@@ -226,6 +262,7 @@ mod tests {
         let agents = agents("my-app");
         assert!(agents.contains("`placebo rules`") && agents.contains("`placebo kit`"));
         assert!(agents.contains("`placebo_my_app`"));
+        assert!(agents.contains("`src/auth.rs`"));
     }
 
     #[test]
@@ -235,6 +272,7 @@ mod tests {
         fs::create_dir_all(&app).unwrap();
         run(&app).unwrap();
         assert!(app.join("Cargo.toml").is_file() && app.join("static/app.css").is_file());
+        assert!(app.join("src/auth.rs").is_file() && app.join("migrations/0001_accounts.sql").is_file());
         let error = run(&app).unwrap_err().to_string();
         assert!(error.contains("already has src/main.rs"), "{error}");
         fs::remove_dir_all(&dir).unwrap();

@@ -1,7 +1,11 @@
 //! A Placebo app on Postgres. AGENTS.md has the rules for building on it.
 //!
 //! This file is the app's shell (the database, the sidebar, the theme) and its
-//! first two pages, Home and Settings.
+//! first two pages, Home and Settings. src/auth.rs has the accounts: every page
+//! but signing in needs someone signed in.
+mod auth;
+
+use auth::User;
 use axum::{
     Router,
     extract::State,
@@ -50,21 +54,11 @@ fn pages() -> [(&'static str, &'static str, PreEscaped<&'static str>); 2] {
     ]
 }
 
-/// Every page: the sidebar, then the page's heading, an optional line under
-/// it, and its content. `path` marks the sidebar's current page; `title`
-/// names the tab.
-fn layout(
-    headers: &HeaderMap,
-    path: &str,
-    title: &str,
-    heading: Markup,
-    lede: Option<Markup>,
-    content: Markup,
-) -> Markup {
-    let theme = Theme::from_cookies(headers);
+/// The document around every page's body. `title` names the tab.
+fn document(headers: &HeaderMap, title: &str, body: Markup) -> Markup {
     html! {
         (DOCTYPE)
-        html lang="en" data-theme=(theme.name()) {
+        html lang="en" data-theme=(Theme::from_cookies(headers).name()) {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover";
@@ -73,6 +67,28 @@ fn layout(
                 script type="module" src="/placebo.js" {}
                 script type="module" src="/static/app.js" {}
             }
+            (body)
+        }
+    }
+}
+
+/// Every page: the sidebar, then the page's heading, an optional line under
+/// it, and its content. `path` marks the sidebar's current page; `title`
+/// names the tab.
+fn layout(
+    headers: &HeaderMap,
+    user: &User,
+    path: &str,
+    title: &str,
+    heading: Markup,
+    lede: Option<Markup>,
+    content: Markup,
+) -> Markup {
+    let theme = Theme::from_cookies(headers);
+    document(
+        headers,
+        title,
+        html! {
             body .shell {
                 aside .shell-side {
                     a .shell-brand href="/" {
@@ -84,10 +100,12 @@ fn layout(
                             a href=(href) aria-current=[(href == path).then_some("page")] { (symbol) (name) }
                         }
                     }
-                    // The slider in the sidebar; the button in a phone's top bar.
+                    // The slider in the sidebar and the button in a phone's top bar,
+                    // then who is signed in.
                     div .shell-foot {
                         div .shell-wide { (theme_slider(Place::Sidebar, theme)) }
                         div .shell-narrow { (Component::new("theme", "picker").mount(theme_picker(theme))) }
+                        (auth::account_menu(user))
                     }
                 }
                 main .shell-main {
@@ -102,8 +120,38 @@ fn layout(
                     }
                 }
             }
-        }
-    }
+        },
+    )
+}
+
+/// A page without the sidebar, such as signing in: the app's name over one
+/// narrow column in the middle of the window.
+fn solo(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
+    document(
+        headers,
+        title,
+        html! {
+            body .solo {
+                main .stack style="--stack-space: var(--space-lg)" {
+                    a .shell-brand href="/" {
+                        span .shell-mark aria-hidden="true" { (icon!("pill")) }
+                        (APP)
+                    }
+                    (content)
+                }
+            }
+        },
+    )
+}
+
+/// The value of the request's cookie called `name`.
+fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .find_map(|cookie| cookie.trim().strip_prefix(name)?.strip_prefix('='))
 }
 
 /// The kit's colour scheme, kept per browser in a cookie. The page renders it
@@ -142,12 +190,7 @@ impl Theme {
     }
 
     fn from_cookies(headers: &HeaderMap) -> Self {
-        let chosen = headers
-            .get_all(header::COOKIE)
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .flat_map(|cookies| cookies.split(';'))
-            .find_map(|cookie| cookie.trim().strip_prefix("theme="));
+        let chosen = cookie(headers, "theme");
         Self::ALL
             .into_iter()
             .find(|(_, name, _)| Some(*name) == chosen)
@@ -203,7 +246,7 @@ async fn set_theme(Input(input): Input<SetTheme>) -> Response {
 
 // Home
 
-async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Failed> {
+async fn home(State(app): State<App>, user: User, headers: HeaderMap) -> Result<Markup, Failed> {
     let (database, version): (String, String) =
         sqlx::query_as("SELECT current_database(), current_setting('server_version')")
             .fetch_one(&app.db)
@@ -217,7 +260,7 @@ async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
         (
             icon!("database"),
             "Add a table",
-            "A numbered file in migrations/, such as 0001_projects.sql. It runs when the app starts.",
+            "The next numbered file in migrations/, such as 0002_projects.sql. It runs when the app starts.",
         ),
         (
             icon!("palette"),
@@ -227,6 +270,7 @@ async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
     ];
     Ok(layout(
         &headers,
+        &user,
         "/",
         "Home",
         html! { h1 { "Welcome to " (APP) } },
@@ -309,9 +353,10 @@ async fn choose_theme(Input(input): Input<ChooseTheme>) -> Response {
 
 // Settings
 
-async fn settings(headers: HeaderMap) -> Markup {
+async fn settings(user: User, headers: HeaderMap) -> Markup {
     layout(
         &headers,
+        &user,
         "/settings",
         "Settings",
         html! { h1 { "Settings" } },
@@ -374,6 +419,7 @@ async fn main() {
         db: database().await,
     };
     let app = Router::new()
+        .merge(auth::routes())
         .route("/", get(home))
         .route("/settings", get(settings))
         .route("/placebo.js", get(placebo::runtime))
@@ -391,9 +437,11 @@ async fn main() {
                 ))
                 .service(ServeDir::new("static")),
         )
-        .with_state(state);
-    // Saves also work before the runtime loads, or without JavaScript.
-    let app = placebo::native_forms(app);
+        .with_state(state.clone());
+    // Saves also work before the runtime loads, or without JavaScript. The
+    // session goes around them, so a save's page render reuses its lookup.
+    let app = placebo::native_forms(app)
+        .layer(axum::middleware::from_fn_with_state(state, auth::session));
     #[cfg(all(feature = "dev", debug_assertions))]
     let reload = placebo::dev::watch(["static"]).expect("watch static files");
     #[cfg(all(feature = "dev", debug_assertions))]

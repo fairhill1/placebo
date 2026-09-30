@@ -65,7 +65,8 @@ let app = placebo::native_forms(app)
 ```
 
 A handler that signs someone in or out replies with `.navigate(path)`, so no
-page is rendered with the session the request came with.
+page is rendered with the session the request came with. The app `placebo new`
+makes does all of this in `src/auth.rs`.
 
 ### Replies stay in order
 

@@ -237,9 +237,10 @@ before the row's actions: a date, a count, an amount.
 and `main.shell-main`. Mark the current page's link `aria-current="page"`.
 The foot's items stack centred in the sidebar and sit in a row in the top bar.
 `details.dropdown.shell-account`, last in the foot, is who is signed in: its
-`summary` holds an `.avatar` and a `.shell-account-name`, and its `.menu`
-their actions (signing out). It spans the sidebar's foot with the menu
-opening upward, and shows only the avatar in the top bar.
+`summary` holds an `.avatar`, a `.shell-account-name`, and a `chevron-up`
+icon, and its `.menu` their actions (signing out). It spans the sidebar's
+foot with the menu opening upward and the chevron turned over while it is
+open, and shows only the avatar in the top bar.
 Under 48rem the sidebar becomes a bar across the top and the `.nav` a tab bar
 along the bottom (icon above name), from the same markup. `.shell-wide` shows an
 element only in the sidebar layout, `.shell-narrow` only in the top bar. They

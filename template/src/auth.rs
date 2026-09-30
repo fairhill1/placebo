@@ -490,6 +490,7 @@ pub fn account_menu(user: &User) -> Markup {
                 // A hue of its own for each person, spread round the wheel.
                 span .avatar style=(format!("--avatar-hue: {}", user.id * 137 % 360)) aria-hidden="true" { (initial) }
                 span .shell-account-name { (user.email) }
+                (icon!("chevron-up"))
             }
             div .menu .menu-up {
                 (component.mount(SIGN_OUT.bind(&component).form(fields)))

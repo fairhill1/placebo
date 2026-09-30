@@ -97,13 +97,14 @@ fn layout(
         headers,
         title,
         html! {
-            body ."min-h-dvh md:flex" {
-                aside class="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-sidebar px-4 \
+            // A faint grey ground in light mode, so white cards stand off it.
+            body ."min-h-dvh bg-muted/50 md:flex dark:bg-background" {
+                aside class="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background px-4 dark:bg-sidebar \
                     text-sidebar-foreground md:h-dvh md:w-60 md:shrink-0 md:flex-col md:items-stretch \
                     md:gap-4 md:border-e md:border-b-0 md:p-3" {
                     (brand())
                     nav class="fixed inset-x-0 bottom-0 z-10 grid auto-cols-fr grid-flow-col border-t \
-                        bg-sidebar md:static md:flex md:flex-col md:gap-1 md:border-t-0" aria-label="Pages" {
+                        bg-background dark:bg-sidebar md:static md:flex md:flex-col md:gap-1 md:border-t-0" aria-label="Pages" {
                         @for (href, name, symbol) in pages() {
                             a class=(NAV_LINK) href=(href) aria-current=[(href == path).then_some("page")] { (symbol) (name) }
                         }
@@ -139,7 +140,7 @@ fn solo(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
         headers,
         title,
         html! {
-            body ."grid min-h-dvh place-items-center p-4" {
+            body ."grid min-h-dvh place-items-center bg-muted/50 p-4 dark:bg-background" {
                 main ."flex w-full max-w-sm flex-col items-center gap-6" {
                     (brand())
                     (content)

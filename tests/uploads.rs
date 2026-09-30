@@ -219,7 +219,7 @@ fn file_fields_make_the_form_multipart_and_render_their_limits() {
         .into_string();
     assert!(form.contains("enctype=\"multipart/form-data\""));
     assert!(form.contains(
-        "<input type=\"file\" name=\"cover\" accept=\"image/*\" required data-placebo-field=\"cover\" data-placebo-max-bytes=\"16\">"
+        "<input type=\"file\" name=\"cover\" accept=\"image/*\" aria-required=\"true\" data-placebo-field=\"cover\" data-placebo-max-bytes=\"16\">"
     ));
     assert!(form.contains(
         "<input type=\"file\" name=\"files\" multiple data-placebo-field=\"files\" data-placebo-max-bytes=\"32\">"

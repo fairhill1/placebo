@@ -96,8 +96,8 @@ idiomorph, by these rules:
   submitting form take the incoming markup unless they changed after sending;
   a read form's units take the page read for them the same way.
   Units without form controls are always kept. A kept unit takes the incoming
-  `aria-invalid`, `aria-describedby`, `aria-errormessage`, `disabled`,
-  `readonly`, and `required`. A kept or refreshed unit meets its own incoming
+  `aria-invalid`, `aria-describedby`, `aria-errormessage`, `aria-required`,
+  `disabled`, `readonly`, and `required`. A kept or refreshed unit meets its own incoming
   counterpart even if it moved. Any other control that differs from its
   defaults keeps its value.
 - `open` on `dialog` and `details`, `data-placebo-stale`, `data-placebo-feed`,

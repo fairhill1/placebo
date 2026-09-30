@@ -305,14 +305,17 @@ fn validation_attributes_render_on_the_control() {
         .form(fields)
         .into_string();
     assert!(form.contains(
-        "<input type=\"text\" name=\"title\" value=\"\" required maxlength=\"80\" aria-invalid=\"true\" aria-describedby=\"title-error\" data-placebo-field=\"title\">"
+        "<input type=\"text\" name=\"title\" value=\"\" aria-required=\"true\" maxlength=\"80\" aria-invalid=\"true\" aria-describedby=\"title-error\" data-placebo-field=\"title\">"
     ));
     assert!(
         form.contains(
             "<div role=\"radiogroup\" aria-required=\"true\" data-placebo-field=\"kind\">"
         )
     );
-    assert!(form.contains("value=\"1\" checked required>"));
+    // Required is announced, not enforced by the browser: an empty value
+    // reaches the handler, whose message shows like any other rejection.
+    assert!(form.contains("value=\"1\" checked>"));
+    assert!(!form.contains(" required"));
 }
 
 #[test]

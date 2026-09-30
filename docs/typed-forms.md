@@ -223,8 +223,13 @@ Selects and required radios must have an option for their initial value, and
 every value selected in a multiple selection needs a matching option.
 Optional radios may start as `None` with nothing checked.
 
-`.required()` renders `required` (on every button of a radio group), and
-`.max_length(n)` renders `maxlength` on text and textarea controls. After the
+`.required()` renders `aria-required` (on the group of radios), so the field
+is announced as required, but the browser still submits it empty: the handler
+checks it and answers with its own message, shown under the field like any
+other rejection. Only a value that cannot decode empty (a number, a
+`time::Date`, an `Upload` that is not an `Option`) renders `required`, and the
+browser asks for it. `.max_length(n)` renders `maxlength` on text and textarea
+controls. After the
 server rejects a value, `.invalid(true)` renders `aria-invalid="true"`; link the
 message with `.described_by(id)`. An invalid reply focuses the first invalid
 control. Every control except `hidden` carries `data-placebo-field`, which lets
@@ -273,7 +278,8 @@ A payload field of type `Upload<MAX_BYTES>`, `Option<Upload<..>>`, or
 sent as `multipart/form-data` automatically, by the runtime and by the browser
 without JavaScript. `MAX_BYTES` defaults to 10 MiB; for a `Vec` it bounds all
 the field's files together. `.accept("image/*")` limits what the file picker
-offers and `.required()` asks for a file before submitting.
+offers. An `Upload` that is not an `Option` renders `required`, so the browser
+asks for a file before submitting.
 
 ```rust
 use placebo::{Control, FormInput, Upload, fields};

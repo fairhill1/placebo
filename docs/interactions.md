@@ -118,7 +118,7 @@ control keeps its value while it is edited.
   form's own replies update them.
 - A control changed **after the request was sent** is always kept.
 - A kept control still takes the page's `aria-invalid`, `aria-describedby`,
-  `aria-errormessage`, `disabled`, `readonly`, and `required`.
+  `aria-errormessage`, `aria-required`, `disabled`, `readonly`, and `required`.
 
 `data-placebo-local="key"` (or `fields.local(...)`) retains a whole subtree as
 one unit under the same rules, for controls that must stay together or that a

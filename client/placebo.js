@@ -675,7 +675,7 @@ function snapshotLocals(target, form) {
 }
 
 // Validation state follows the server even when the edited control is kept.
-const SYNCED = ["aria-invalid", "aria-describedby", "aria-errormessage", "disabled", "readonly", "required"];
+const SYNCED = ["aria-invalid", "aria-describedby", "aria-errormessage", "aria-required", "disabled", "readonly", "required"];
 
 function focusable(node) {
   // Also not inside a closed dialog or details, which show nothing to focus.

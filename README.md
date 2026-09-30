@@ -256,7 +256,9 @@ These apply to people and coding agents alike.
 - **Validation:** mark a rejected control with `.invalid(true)` and link its
   message with `.described_by(id)`. Put feedback in a `role="status"` (or
   `role="alert"`) element; an invalid reply focuses the first invalid control.
-  Use `.required()` for fields the browser can check before submitting.
+  `.required()` announces a field as required but does not stop the
+  submit: the handler checks every field and answers with its own message,
+  so every error shows the same way, under its field.
 - **Reads:** a search or filter is a read form, `Read::new().on_input(ms).form(fields)`,
   which reads the page it is on with the form's fields as the query and puts
   the query in the address. Render every page from its query (`Input<Q>` in
@@ -388,7 +390,8 @@ was in flight. So render the submitted values in `invalid` and the saved record
 in `conflict`: in a conflict, the fields this person changed keep their edits
 and the fields they did not touch show what the other person saved. Saving
 again then cannot revert those. A kept control still takes the reply's
-`aria-invalid`, `aria-describedby`, `disabled`, `readonly`, and `required`.
+`aria-invalid`, `aria-describedby`, `aria-required`, `disabled`, `readonly`, and
+`required`.
 `data-placebo-local="key"` retains a whole subtree as one unit instead; keys
 are scoped to each component, and nested or duplicate keys are rejected.
 

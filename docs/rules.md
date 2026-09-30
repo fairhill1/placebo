@@ -38,7 +38,9 @@ These apply to people and coding agents alike.
 - **Validation:** mark a rejected control with `.invalid(true)` and link its
   message with `.described_by(id)`. Put feedback in a `role="status"` (or
   `role="alert"`) element; an invalid reply focuses the first invalid control.
-  Use `.required()` for fields the browser can check before submitting.
+  `.required()` announces a field as required but does not stop the
+  submit: the handler checks every field and answers with its own message,
+  so every error shows the same way, under its field.
 - **Reads:** a search or filter is a read form, `Read::new().on_input(ms).form(fields)`,
   which reads the page it is on with the form's fields as the query and puts
   the query in the address. Render every page from its query (`Input<Q>` in

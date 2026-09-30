@@ -86,12 +86,12 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
         &headers,
         "Tasks",
         html! {
+            h1 { "Tasks" }
+            // Every save renders the page again, so this count follows.
+            p .lede { (tasks.len() - done) " open · " (done) " done" }
+        },
+        html! {
             (app.live.mount())
-            div .stack style="--stack-space: var(--space-2xs)" {
-                h1 { "Tasks" }
-                // Every save renders the page again, so this count follows.
-                p .lede { (tasks.len() - done) " open · " (done) " done" }
-            }
             section .card {
                 (Component::new("composer", "new").mount(add_form("", "", false)))
             }
@@ -222,9 +222,10 @@ async fn page(
             (app.live.mount())
             p .notice { (icon!("list-todo")) "This task is gone. " a href="/" { "Back to all tasks" } }
         };
+        let heading = html! { h1 { "Not found" } };
         return Ok((
             StatusCode::NOT_FOUND,
-            layout(&headers, "Not found", missing),
+            layout(&headers, "Not found", heading, missing),
         )
             .into_response());
     };
@@ -232,12 +233,12 @@ async fn page(
         &headers,
         &task.title,
         html! {
+            a href="/" { (icon!("arrow-left")) " All tasks" }
+            h1 { (task.title) }
+            p .lede { @if task.done { "Done" } @else { "Open" } }
+        },
+        html! {
             (app.live.mount())
-            div .stack style="--stack-space: var(--space-2xs)" {
-                a href="/" { (icon!("arrow-left")) " All tasks" }
-                h1 { (task.title) }
-                p .lede { @if task.done { "Done" } @else { "Open" } }
-            }
             section .card {
                 (Component::new("editor", task.id).mount(editor(&task, "", false)))
             }

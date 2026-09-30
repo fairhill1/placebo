@@ -42,8 +42,8 @@ impl IntoResponse for Failed {
     }
 }
 
-/// Every page: the header with the theme toggle, then the content.
-fn layout(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
+/// Every page: its heading beside the theme toggle, then its content.
+fn layout(headers: &HeaderMap, title: &str, heading: Markup, content: Markup) -> Markup {
     let theme = Theme::from_cookies(headers);
     html! {
         (DOCTYPE)
@@ -57,7 +57,8 @@ fn layout(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
             }
             body {
                 main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
-                    header .cluster .cluster-end {
+                    header .cluster .cluster-between {
+                        div .stack style="--stack-space: var(--space-2xs)" { (heading) }
                         (Component::new("theme", "picker").mount(theme_picker(theme)))
                     }
                     (content)

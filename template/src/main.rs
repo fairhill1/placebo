@@ -55,6 +55,7 @@ fn layout(headers: &HeaderMap, heading: &str, lede: Markup, content: Markup) -> 
                 title { (heading) " · " (APP) }
                 link rel="stylesheet" href="/static/app.css";
                 script type="module" src="/placebo.js" {}
+                script type="module" src="/static/app.js" {}
             }
             body {
                 main .wrapper .page .stack style="--stack-space: var(--space-xl)" {

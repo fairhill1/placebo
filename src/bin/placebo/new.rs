@@ -10,7 +10,7 @@ const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
 /// Template files copied as they are. The kit files match the kit this
 /// Placebo ships, which the app's styles test requires.
-const FILES: [(&str, &str); 14] = [
+const FILES: [(&str, &str); 15] = [
     ("src/main.rs", include_str!("../../../template/src/main.rs")),
     (
         "src/tasks.rs",
@@ -27,6 +27,10 @@ const FILES: [(&str, &str); 14] = [
     (
         "static/app.css",
         include_str!("../../../template/static/app.css"),
+    ),
+    (
+        "static/app.js",
+        include_str!("../../../template/static/app.js"),
     ),
     (
         ".claude/settings.json",

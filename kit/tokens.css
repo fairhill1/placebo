@@ -97,6 +97,11 @@
      which reads as the row dropping through the card. Two grounds need two
      hovers. */
   --surface-raised-hover: light-dark(oklch(98.75% 0.002 250), oklch(24% 0.031 250));
+  /* The groove of a slider or switch, and the part that slides in it: a tint
+     of the text over whatever surface they sit on, so a track reads recessed
+     on a light ground and lit on a dark one, on any surface. */
+  --track: color-mix(in oklch, var(--text) 8%, transparent);
+  --thumb: light-dark(var(--surface-raised), color-mix(in oklch, var(--text) 16%, transparent));
   --text: light-dark(oklch(23% 0.008 250), oklch(94% 0.004 250));
   --text-muted: light-dark(oklch(51% 0.010 250), oklch(70% 0.008 250));
   --border: light-dark(oklch(90% 0.005 250), oklch(32% 0.008 250));

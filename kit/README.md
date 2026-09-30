@@ -104,6 +104,7 @@ Override in `@layer tokens` on `:root` (or any scope). Every colour is a
 | `--focus-ring` | `--focus-ring-size solid --accent-bg`. |
 | `--transition`, `--transition-base`, `--transition-slow` | Each `--duration-*` with `--ease`. Components use these, never a raw duration. |
 | `--press-scale`, `--press-scale-strong` | How far a `.btn` shrinks while pressed; `.btn-icon` takes the deeper step. |
+| `--track`, `--thumb` | A tint of `--text` over whatever is underneath: the groove of a `.segmented` or `.switch` reads darker on a light surface and lighter on a dark one, on any surface. `--thumb` is `--surface-raised` in light mode. |
 
 ### Per-instance inputs
 Layout primitives and one component read a custom property with a default, so

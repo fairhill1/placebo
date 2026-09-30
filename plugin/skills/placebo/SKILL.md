@@ -40,8 +40,11 @@ other work, ask where the app should go.
      user, so set `setx PGUSER postgres` and `setx PGPASSWORD <that password>`
      and open a new terminal. The app reads them and still uses its own
      database.
-3. If `placebo --help` fails, install the CLI:
-   `cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`.
+3. Install or update the CLI, even when `placebo` is already installed: the
+   starter it writes is built into it, so an old CLI writes an old starter.
+   `cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`
+   finishes at once when it is up to date, and rebuilds when the repository
+   has moved on.
    A permission check may refuse this, since it builds code from GitHub. Then
    do not retry it another way: ask the person to run it themselves by typing
    `! cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`,

@@ -230,7 +230,7 @@ async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
         "/",
         "Home",
         html! { h1 { "Welcome to " (APP) } },
-        Some(html! { "Rust, Postgres, and pages that save in place. Ask your agent for the first feature." }),
+        Some(html! { "Your app is running. Ask your agent to build the first feature." }),
         html! {
             div .grid {
                 @for (symbol, title, text) in next {

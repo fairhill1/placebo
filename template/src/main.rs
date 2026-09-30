@@ -79,7 +79,7 @@ enum Theme {
 }
 
 impl Theme {
-    /// Each theme with its cookie value and its button's label.
+    /// Each theme with its cookie value and its name.
     const ALL: [(Theme, &str, &str); 3] = [
         (Theme::System, "system", "System"),
         (Theme::Light, "light", "Light"),
@@ -92,6 +92,23 @@ impl Theme {
             .find(|(theme, ..)| *theme == self)
             .unwrap()
             .1
+    }
+
+    fn label(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(theme, ..)| *theme == self)
+            .unwrap()
+            .2
+    }
+
+    /// The theme a press switches to: System, Light, Dark, and round again.
+    fn next(self) -> Self {
+        match self {
+            Theme::System => Theme::Light,
+            Theme::Light => Theme::Dark,
+            Theme::Dark => Theme::System,
+        }
     }
 
     fn from_cookies(headers: &HeaderMap) -> Self {
@@ -115,29 +132,25 @@ struct SetTheme {
 
 const SET_THEME: MutationAction<SetTheme> = MutationAction::new("set-theme", "/theme");
 
-// One small form per theme, so each button saves its own choice.
+// One icon button showing the current theme; each press saves the next one.
 fn theme_picker(current: Theme) -> Markup {
-    let component = Component::new("theme", "picker");
-    html! {
-        div .cluster role="group" aria-label="Theme" style="--cluster-space: var(--space-2xs)" {
-            @for (theme, _, label) in Theme::ALL {
-                @let symbol = match theme {
-                    Theme::System => icon!("monitor"),
-                    Theme::Light => icon!("sun"),
-                    Theme::Dark => icon!("moon"),
-                };
-                @let fields = fields! { SetTheme {
-                    @field theme = Control::hidden(theme);
-                    @if theme == current {
-                        button .btn .btn-sm type="submit" aria-pressed="true" { (symbol) (label) }
-                    } @else {
-                        button .btn .btn-sm .btn-ghost type="submit" aria-pressed="false" { (symbol) (label) }
-                    }
-                } };
-                (SET_THEME.bind(&component).form(fields))
-            }
+    let next = current.next();
+    let symbol = match current {
+        Theme::System => icon!("monitor"),
+        Theme::Light => icon!("sun"),
+        Theme::Dark => icon!("moon"),
+    };
+    let label = format!("Theme: {}. Switch to {}", current.label(), next.label());
+    let fields = fields! { SetTheme {
+        @field theme = Control::hidden(next);
+        button .btn .btn-ghost .btn-icon type="submit" title=(label) {
+            (symbol)
+            span .visually-hidden { (label) }
         }
-    }
+    } };
+    SET_THEME
+        .bind(&Component::new("theme", "picker"))
+        .form(fields)
 }
 
 async fn set_theme(Input(input): Input<SetTheme>) -> Response {

@@ -152,12 +152,17 @@ async fn save(
 
 async fn database() -> PgPool {
     // Each app gets its own database, placebo_<package name>, unless
-    // DATABASE_URL names another.
+    // DATABASE_URL names another. It signs in as PGUSER or the shell's user:
+    // sqlx's own lookup of the user answers "anonymous" in some sandboxes.
     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        format!(
-            "postgres:///placebo_{}",
-            env!("CARGO_PKG_NAME").replace('-', "_")
-        )
+        let database = format!("placebo_{}", env!("CARGO_PKG_NAME").replace('-', "_"));
+        match ["PGUSER", "USER", "USERNAME"]
+            .into_iter()
+            .find_map(|name| std::env::var(name).ok())
+        {
+            Some(user) => format!("postgres:///{database}?user={user}"),
+            None => format!("postgres:///{database}"),
+        }
     });
     #[cfg(debug_assertions)]
     {

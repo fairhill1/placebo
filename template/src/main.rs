@@ -2,13 +2,13 @@
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormInput, Input, MutationAction, fields};
-use serde::Deserialize;
+use placebo::{Component, Control, FormEnum, FormInput, Input, MutationAction, fields};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower_http::services::ServeDir;
 
@@ -27,6 +27,53 @@ struct SaveTitle {
 }
 
 const SAVE: MutationAction<SaveTitle> = MutationAction::new("save-title", "/save");
+
+/// The kit's colour scheme, kept per browser in a cookie. The page renders it
+/// as `data-theme` on `<html>`.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, FormEnum)]
+#[serde(rename_all = "lowercase")]
+enum Theme {
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    /// Each theme with its cookie value and its button's label.
+    const ALL: [(Theme, &str, &str); 3] = [
+        (Theme::System, "system", "System"),
+        (Theme::Light, "light", "Light"),
+        (Theme::Dark, "dark", "Dark"),
+    ];
+
+    fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(theme, ..)| *theme == self)
+            .unwrap()
+            .1
+    }
+
+    fn from_cookies(headers: &HeaderMap) -> Self {
+        let chosen = headers
+            .get_all(header::COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|cookies| cookies.split(';'))
+            .find_map(|cookie| cookie.trim().strip_prefix("theme="));
+        Self::ALL
+            .into_iter()
+            .find(|(_, name, _)| Some(*name) == chosen)
+            .map_or(Theme::System, |(theme, ..)| theme)
+    }
+}
+
+#[derive(Deserialize, FormInput)]
+struct SetTheme {
+    theme: Theme,
+}
+
+const SET_THEME: MutationAction<SetTheme> = MutationAction::new("set-theme", "/theme");
 
 /// A failed query. It answers 500 and logs the cause on the server.
 struct Failed(sqlx::Error);
@@ -60,7 +107,7 @@ fn editor(item: &Item, feedback: &str, invalid: bool) -> Markup {
     let fields = fields! { SaveTitle {
         @field id = Control::hidden(item.id);
         @field version = Control::hidden(item.version);
-        div .stack {
+        div .stack style="--stack-space: var(--space-sm)" {
             div .field {
                 label for=(title_id) { "Title" }
                 @field title = Control::text(&item.title)
@@ -80,13 +127,47 @@ fn editor(item: &Item, feedback: &str, invalid: bool) -> Markup {
     }
 }
 
-async fn home(State(db): State<PgPool>) -> Result<Markup, Failed> {
+// One small form per theme, so each button saves its own choice.
+fn theme_picker(current: Theme) -> Markup {
+    let component = Component::new("theme", "picker");
+    html! {
+        div .cluster role="group" aria-label="Theme" style="--cluster-space: var(--space-2xs)" {
+            @for (theme, _, label) in Theme::ALL {
+                @let fields = fields! { SetTheme {
+                    @field theme = Control::hidden(theme);
+                    @if theme == current {
+                        button .btn .btn-sm type="submit" aria-pressed="true" { (label) }
+                    } @else {
+                        button .btn .btn-sm .btn-ghost type="submit" aria-pressed="false" { (label) }
+                    }
+                } };
+                (SET_THEME.bind(&component).form(fields))
+            }
+        }
+    }
+}
+
+async fn set_theme(Input(input): Input<SetTheme>) -> Response {
+    let cookie = format!(
+        "theme={}; Path=/; Max-Age=31536000; SameSite=Lax",
+        input.theme.name()
+    );
+    let component = Component::new("theme", "picker");
+    (
+        [(header::SET_COOKIE, cookie)],
+        SET_THEME.bind(&component).reply(theme_picker(input.theme)),
+    )
+        .into_response()
+}
+
+async fn home(State(db): State<PgPool>, headers: HeaderMap) -> Result<Markup, Failed> {
     let items: Vec<Item> = sqlx::query_as("SELECT id, title, version FROM items ORDER BY id")
         .fetch_all(&db)
         .await?;
+    let theme = Theme::from_cookies(&headers);
     Ok(html! {
         (DOCTYPE)
-        html lang="en" {
+        html lang="en" data-theme=(theme.name()) {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
@@ -95,10 +176,18 @@ async fn home(State(db): State<PgPool>) -> Result<Markup, Failed> {
                 script type="module" src="/placebo.js" {}
             }
             body {
-                main .wrapper .page .stack {
-                    h1 { "Items" }
-                    @for item in &items {
-                        (Component::new("editor", item.id).mount(editor(item, "", false)))
+                main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
+                    div .cluster .cluster-between {
+                        div .stack style="--stack-space: var(--space-2xs)" {
+                            h1 { "Items" }
+                            p .muted { "Rename an item and save. Open a second tab to see a conflict." }
+                        }
+                        (Component::new("theme", "picker").mount(theme_picker(theme)))
+                    }
+                    div .grid {
+                        @for item in &items {
+                            (Component::new("editor", item.id).mount(editor(item, "", false)))
+                        }
                     }
                 }
             }
@@ -194,6 +283,7 @@ async fn main() {
         .route("/", get(home))
         .route("/placebo.js", get(placebo::runtime))
         .route(SAVE.path(), SAVE.route(save))
+        .route(SET_THEME.path(), SET_THEME.route(set_theme))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(db);
     // Saves also work before the runtime loads, or without JavaScript.

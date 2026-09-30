@@ -383,3 +383,20 @@ test("adding a book without JavaScript redirects back to the filtered page, whic
   assert.equal(new URL(page.url()).search, "?q=native");
   assert.deepEqual(await page.locator("#book-results li span:first-child").allTextContents(), ["A native book"]);
 });
+
+test("a page read in brings its <html> attributes and keeps ones a script set", async t => {
+  const page = await visit(t, { mockTransport: true });
+  await page.evaluate(() => document.documentElement.setAttribute("data-extension", "kept"));
+  await submit(page, "rust");
+  await requested(page, "rust");
+  // The server now renders another theme and no language.
+  await page.evaluate(() => {
+    const next = new DOMParser().parseFromString(window.served, "text/html");
+    next.documentElement.setAttribute("data-theme", "dark");
+    next.documentElement.removeAttribute("lang");
+    window.deliver("rust", { body: `<!DOCTYPE html>${next.documentElement.outerHTML}` });
+  });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+  assert.equal(await page.evaluate(() => document.documentElement.hasAttribute("lang")), false);
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.extension), "kept");
+});

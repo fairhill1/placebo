@@ -418,6 +418,7 @@ function applyPage(work, update) {
   if (whole) {
     shownRendered = Math.max(shownRendered, update.rendered ?? 0);
     if (update.page.title && update.page.title !== document.title) document.title = update.page.title;
+    adoptRoot(update.page);
   }
   restoreFocus(document.body, anchor);
   for (const component of plan.morphed) settle(component);
@@ -463,6 +464,17 @@ const here = () => location.pathname + location.search;
 // When the page shown was rendered, from its reply's X-Placebo-Rendered. The
 // loaded page is older than any reply, since the reply's request came later.
 let shownRendered = 0;
+// The <html> attributes the server rendered last, such as a theme or a
+// language. A page shown later brings its own, as it brings its title;
+// attributes a script or an extension set on <html> are left alone.
+let rootAttributes = new Set(Array.from(document.documentElement.attributes, ({ name }) => name));
+function adoptRoot(page) {
+  const root = document.documentElement;
+  const next = page.documentElement;
+  for (const name of rootAttributes) if (!next.hasAttribute(name)) root.removeAttribute(name);
+  for (const { name, value } of next.attributes) if (root.getAttribute(name) !== value) root.setAttribute(name, value);
+  rootAttributes = new Set(Array.from(next.attributes, ({ name }) => name));
+}
 // Components showing a reply the next page read must not replace.
 let holding = new WeakSet();
 
@@ -1142,6 +1154,7 @@ function showPage(work, page, rendered, url, extra = {}) {
   if (!work) holding = new WeakSet();
   shownRendered = Math.max(shownRendered, rendered ?? 0);
   if (page.title && page.title !== document.title) document.title = page.title;
+  adoptRoot(page);
   restoreFocus(document.body, anchor);
   for (const component of plan.morphed) settle(component);
   if (work) Object.assign(work, { applied: true, outcome: "applied", phase: "applied" });
@@ -1334,6 +1347,7 @@ async function visit(url, how) {
   shownRendered = renderedAt(response) ?? 0;
   holding = new WeakSet();
   document.title = page.title;
+  adoptRoot(page);
   const saved = how === "restore" ? scrolls.get(entry) : null;
   const target = at.hash ? document.getElementById(decodeURIComponent(at.hash.slice(1))) : null;
   if (saved) scrollTo(...saved);

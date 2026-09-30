@@ -308,7 +308,8 @@ on again, as a GET with the person's cookies, with the replying component
 showing the reply's contents. The runtime morphs that page into the document
 with [idiomorph](https://github.com/bigskysoftware/idiomorph): nodes, focus,
 and scroll stay, and only what differs changes. So a header, a count, or
-another panel that shows the saved data follows by itself. A page rendered
+another panel that shows the saved data follows by itself, and so do the page's
+title and the attributes on its `<html>`, such as the kit's `data-theme`. A page rendered
 before the one already shown never replaces it; a late reply then shows only
 in its own component. If the page cannot be rendered (for example, the record
 was deleted and its page answers 404), the reply shows in its component alone

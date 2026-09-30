@@ -40,8 +40,14 @@ other work, ask where the app should go.
      user, so set `setx PGUSER postgres` and `setx PGPASSWORD <that password>`
      and open a new terminal. The app reads them and still uses its own
      database.
-3. Install the CLI:
+3. If `placebo --help` fails, install the CLI:
    `cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`.
+   A permission check may refuse this, since it builds code from GitHub. Then
+   do not retry it another way: ask the person to run it themselves by typing
+   `! cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`,
+   and continue once it is installed. To let it run on its own next time, they
+   can add `Bash(cargo install --git https://github.com/fairhill1/placebo:*)`
+   to `permissions.allow` in their Claude Code settings.
 4. Run `placebo new` in the empty directory, then read the `AGENTS.md` it
    writes and follow it from there.
 

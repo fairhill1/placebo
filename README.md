@@ -16,6 +16,25 @@ and handler types. They generate the request configuration and response format
 for you. Normal application code should not construct `data-placebo` JSON or
 write protocol headers by hand.
 
+## Start an app on Postgres
+
+With the development CLI installed (see [Development rebuild and
+reload](#development-rebuild-and-reload)), create a starter app:
+
+```sh
+placebo new ../my-app
+cd ../my-app
+placebo dev
+```
+
+It is the quickstart below on Postgres, with the kit, the styles test, and an
+`AGENTS.md` (read by Claude Code through `CLAUDE.md`) that gives coding agents
+this README's rules, the app's commands, and how to change its schema. Its
+database is `placebo_my_app` on the local server, created on the first debug
+run; `DATABASE_URL` overrides it, and `dropdb placebo_my_app` removes it. The
+template is [`template/`](template), a workspace member built and tested with
+this repository.
+
 ## Quickstart
 
 Placebo is not published to crates.io yet. Next to this checkout, create an app:

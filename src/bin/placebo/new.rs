@@ -1,0 +1,186 @@
+//! `placebo new PATH`: a starter app on Postgres, copied from template/, a
+//! workspace member that the repository builds and tests like any other crate.
+use std::{fs, io, path::Path};
+
+/// Where this CLI was built from; the app's `placebo` dependency points here.
+const PLACEBO: &str = env!("CARGO_MANIFEST_DIR");
+const RULES: &str = include_str!("../../../docs/rules.md");
+const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
+
+/// Template files copied as they are. The kit files match the kit this
+/// Placebo ships, which the app's styles test requires.
+const FILES: [(&str, &str); 13] = [
+    ("src/main.rs", include_str!("../../../template/src/main.rs")),
+    (
+        "migrations/0001_items.sql",
+        include_str!("../../../template/migrations/0001_items.sql"),
+    ),
+    (
+        "tests/styles.rs",
+        include_str!("../../../template/tests/styles.rs"),
+    ),
+    (
+        "static/app.css",
+        include_str!("../../../template/static/app.css"),
+    ),
+    (
+        ".claude/settings.json",
+        include_str!("../../../template/.claude/settings.json"),
+    ),
+    (".gitignore", include_str!("../../../template/.gitignore")),
+    ("CLAUDE.md", "@AGENTS.md\n"),
+    ("static/kit/main.css", include_str!("../../../kit/main.css")),
+    (
+        "static/kit/tokens.css",
+        include_str!("../../../kit/tokens.css"),
+    ),
+    (
+        "static/kit/reset.css",
+        include_str!("../../../kit/reset.css"),
+    ),
+    ("static/kit/base.css", include_str!("../../../kit/base.css")),
+    (
+        "static/kit/layout.css",
+        include_str!("../../../kit/layout.css"),
+    ),
+    (
+        "static/kit/components.css",
+        include_str!("../../../kit/components.css"),
+    ),
+];
+const KIT_README: &str = include_str!("../../../kit/README.md");
+
+pub fn run(path: &Path) -> io::Result<()> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::other("Name the app's directory, as in `placebo new my-app`."))?;
+    check_name(name).map_err(io::Error::other)?;
+    if path.exists() {
+        return Err(io::Error::other(format!(
+            "{} already exists; choose a new directory.",
+            path.display()
+        )));
+    }
+    let manifest = manifest(name);
+    let agents = agents(name);
+    let generated = [
+        ("Cargo.toml", manifest.as_str()),
+        ("AGENTS.md", agents.as_str()),
+        ("static/kit/README.md", KIT_README),
+    ];
+    for (file, contents) in FILES.into_iter().chain(generated) {
+        let target = path.join(file);
+        fs::create_dir_all(target.parent().expect("a file has a parent"))?;
+        fs::write(target, contents)?;
+    }
+    println!(
+        "Created {name} with database {}.\n\n  cd {}\n  placebo dev\n\nThe first run creates the database on your local Postgres.",
+        database(name),
+        path.display()
+    );
+    Ok(())
+}
+
+/// Lowercase so the package, its database, and `\l placebo_*` all agree.
+fn check_name(name: &str) -> Result<(), String> {
+    let valid = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{name}` cannot name an app: start with a lowercase letter and use only \
+             lowercase letters, digits, `-`, and `_`."
+        ))
+    }
+}
+
+/// The name `database()` in the template's main.rs derives from the package.
+fn database(name: &str) -> String {
+    format!("placebo_{}", name.replace('-', "_"))
+}
+
+fn manifest(name: &str) -> String {
+    let manifest = MANIFEST
+        .replacen("name = \"starter\"", &format!("name = \"{name}\""), 1)
+        .replacen(
+            "placebo = { path = \"..\" }",
+            &format!("placebo = {{ path = {PLACEBO:?} }}"),
+            1,
+        );
+    // A standalone app is its own workspace, not a member of Placebo's.
+    manifest.replacen("[features]", "[workspace]\n\n[features]", 1)
+}
+
+fn agents(name: &str) -> String {
+    let database = database(name);
+    format!(
+        "# {name}
+
+A Placebo app: Rust, Axum, Maud, and Postgres. Follow the rules below. They
+come from the Placebo checkout at {PLACEBO}, whose `docs/` explain each one:
+`interactions.md` (replies, drafts, reads, live updates), `typed-forms.md`
+(controls and payload types), and `diagnostics.md` (console codes).
+
+## Commands
+
+- `placebo dev` builds and runs the app on http://127.0.0.1:3000. Rust edits
+  rebuild and restart it; edits in `static/` reload the browser. Run it from
+  this directory, which the app serves `static/` from.
+- `cargo test` runs the tests, including the styles test.
+
+## Database
+
+- The app uses the Postgres database `{database}` on the local server and
+  creates it on the first debug run. `DATABASE_URL` names another.
+- Change the schema with a new numbered file in `migrations/`, such as
+  `0002_tags.sql`; it runs when the app starts. Never edit a migration that
+  has run.
+- Query with `sqlx::query_as` and `.bind` parameters; never format values into
+  SQL. Check a version in the same statement as its write, as `save` does with
+  `UPDATE … WHERE id = $2 AND version = $3 RETURNING …`.
+- Remove the database with `dropdb {database}` when you delete the app.
+
+## Styles
+
+`static/kit/README.md` lists the kit's tokens and classes. `static/kit` is
+Placebo's kit copied verbatim: never edit it.
+
+{RULES}"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_must_be_lowercase_package_names() {
+        for name in ["crm", "my-app", "app_2"] {
+            assert_eq!(check_name(name), Ok(()), "{name}");
+        }
+        for name in ["MyApp", "2app", "-app", "my app", "app.rs", ""] {
+            assert!(check_name(name).is_err(), "{name}");
+        }
+        assert_eq!(database("my-app"), "placebo_my_app");
+    }
+
+    #[test]
+    fn the_manifest_names_the_app_and_this_checkout() {
+        let manifest = manifest("my-app");
+        assert!(manifest.contains("name = \"my-app\""), "{manifest}");
+        assert!(manifest.contains(&format!("placebo = {{ path = {PLACEBO:?} }}")));
+        assert!(manifest.contains("[workspace]"));
+        assert!(!manifest.contains("starter") && !manifest.contains("\"..\""));
+    }
+
+    #[test]
+    fn agents_md_carries_the_rules() {
+        let agents = agents("my-app");
+        assert!(agents.ends_with(RULES));
+        assert!(agents.contains("`placebo_my_app`"));
+    }
+}

@@ -1,0 +1,3 @@
+/* The only stylesheet the page links. Re-skin the kit with tokens in
+   `@layer tokens`; static/kit/README.md lists its tokens and classes. */
+@import url("kit/main.css");

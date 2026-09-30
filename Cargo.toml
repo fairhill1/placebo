@@ -6,7 +6,7 @@ publish = false
 description = "An experimental Rust/browser contract for HTML fragment updates"
 
 [workspace]
-members = ["placebo-macros"]
+members = ["placebo-macros", "template"]
 
 [features]
 dev = ["dep:notify", "dep:tower-livereload", "tokio/process", "tokio/signal", "tokio/io-util", "dep:nix"]
@@ -43,7 +43,7 @@ path = "examples/editors.rs"
 
 [[bin]]
 name = "placebo"
-path = "src/bin/placebo.rs"
+path = "src/bin/placebo/main.rs"
 required-features = ["dev"]
 
 [[example]]

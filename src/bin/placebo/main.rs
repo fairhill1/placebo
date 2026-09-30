@@ -1,5 +1,7 @@
 //! Development supervisor. Cargo remains the compiler; this process owns its
 //! rebuild loop and the running application. Browser reload lives in the app.
+mod new;
+
 use notify::{RecursiveMode, Watcher};
 use std::{
     io,
@@ -20,7 +22,12 @@ struct Options {
     features: Option<String>,
 }
 
-fn options() -> Result<Option<Options>, String> {
+enum Task {
+    Dev(Options),
+    New(PathBuf),
+}
+
+fn options() -> Result<Option<Task>, String> {
     let mut args = std::env::args().skip(1);
     let first = args.next();
     let help = |arg: Option<&str>| matches!(arg, Some("--help" | "-h"));
@@ -32,12 +39,18 @@ fn options() -> Result<Option<Options>, String> {
             .is_some_and(|arg| help(Some(arg)))
     {
         println!(
-            "Placebo development supervisor\n\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n\nRun from the Cargo package directory. Without --bin or --example it runs the\npackage's binary; without --features it enables `dev`. Rust edits rebuild and\nrestart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
+            "Placebo development tools\n\n  placebo new PATH\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n\n`new` creates a starter app on Postgres, with an AGENTS.md of Placebo's rules.\nIts database is placebo_NAME on the local server.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
         );
         return Ok(None);
     }
+    if first.as_deref() == Some("new") {
+        return match (args.next(), args.next()) {
+            (Some(path), None) if !path.starts_with('-') => Ok(Some(Task::New(path.into()))),
+            _ => Err("Expected `placebo new PATH`; use --help for usage.".into()),
+        };
+    }
     if first.as_deref() != Some("dev") {
-        return Err("Expected `placebo dev`; use --help for usage.".into());
+        return Err("Expected `placebo dev` or `placebo new`; use --help for usage.".into());
     }
     let mut target = None;
     let mut features = None;
@@ -60,11 +73,11 @@ fn options() -> Result<Option<Options>, String> {
         Some(target) => target,
         None => ("--bin".to_owned(), package_binary()?),
     };
-    Ok(Some(Options {
+    Ok(Some(Task::Dev(Options {
         kind,
         target,
         features: Some(features.unwrap_or_else(|| "dev".to_owned())),
-    }))
+    })))
 }
 
 /// The binary of the package in the current directory, when it has one.
@@ -309,7 +322,8 @@ async fn supervise(options: Options) -> io::Result<()> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let result = match options() {
-        Ok(Some(options)) => supervise(options).await,
+        Ok(Some(Task::Dev(options))) => supervise(options).await,
+        Ok(Some(Task::New(path))) => new::run(&path),
         Ok(None) => return,
         Err(error) => Err(io::Error::other(error)),
     };

@@ -186,7 +186,8 @@ contrast library for either case.
 ## Components (class reference)
 
 ### Layout
-`.wrapper` (centred, max `--wrapper`, inline padding) · `.stack` (vertical
+`.wrapper` (centred, max `--wrapper`, inline padding) · `.page` (block
+padding for the main region: `main.wrapper.page`) · `.stack` (vertical
 rhythm) · `.cluster` (+ `.cluster-between`, `.cluster-end`) · `.grid`
 (auto-fit columns) · `.sidebar` (two columns that stack below 60% content
 width; first child is the sidebar) · `.center`

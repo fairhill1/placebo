@@ -170,7 +170,8 @@ updates), `typed-forms.md` (controls and payload types), and `diagnostics.md`
 
 - `placebo dev` builds and runs the app on http://127.0.0.1:3000. Rust edits
   rebuild and restart it; edits in `static/` reload the browser. Run it from
-  this directory, which the app serves `static/` from.
+  this directory, which the app serves `static/` from. Beside another app on
+  port 3000, run `PLACEBO_ADDR=127.0.0.1:3001 placebo dev`.
 - `cargo test` runs the tests, including the styles test.
 
 ## Database

@@ -60,13 +60,17 @@ fn editor(item: &Item, feedback: &str, invalid: bool) -> Markup {
     let fields = fields! { SaveTitle {
         @field id = Control::hidden(item.id);
         @field version = Control::hidden(item.version);
-        div .field {
-            label for=(title_id) { "Title" }
-            @field title = Control::text(&item.title)
-                .id(&title_id).described_by(&feedback_id).invalid(invalid);
+        div .stack {
+            div .field {
+                label for=(title_id) { "Title" }
+                @field title = Control::text(&item.title)
+                    .id(&title_id).described_by(&feedback_id).invalid(invalid);
+            }
+            div .cluster {
+                button .btn type="submit" { "Save" }
+                p .muted id=(feedback_id) role="status" { (feedback) }
+            }
         }
-        p .muted id=(feedback_id) role="status" { (feedback) }
-        button .btn type="submit" { "Save" }
     } };
     html! {
         article .card .stack {
@@ -91,7 +95,7 @@ async fn home(State(db): State<PgPool>) -> Result<Markup, Failed> {
                 script type="module" src="/placebo.js" {}
             }
             body {
-                main .wrapper .stack {
+                main .wrapper .page .stack {
                     h1 { "Items" }
                     @for item in &items {
                         (Component::new("editor", item.id).mount(editor(item, "", false)))
@@ -198,9 +202,9 @@ async fn main() {
     let reload = placebo::dev::watch(["static"]).expect("watch static files");
     #[cfg(all(feature = "dev", debug_assertions))]
     let app = app.layer(reload.layer());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
-        .await
-        .unwrap();
-    println!("Open http://127.0.0.1:3000");
+    // PLACEBO_ADDR runs a second app beside this one, as in 127.0.0.1:3001.
+    let addr = std::env::var("PLACEBO_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    println!("Open http://{addr}");
     axum::serve(listener, app).await.unwrap();
 }

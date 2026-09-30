@@ -9,6 +9,10 @@
   padding-inline: var(--space-md);
 }
 
+/* The page's main region: room above and below its content, which .wrapper
+   leaves to the page. */
+.page { padding-block: var(--space-xl); }
+
 /* Vertical rhythm. Override per instance with --stack-space. */
 .stack > * + * { margin-block-start: var(--stack-space, var(--space-md)); }
 

@@ -225,7 +225,8 @@ open, a `.list-line` with the `.list-lead` icon and an `input.list-input`.
 `.shell-mark`, a `nav.nav` of links, and a `.shell-foot` pinned to its bottom)
 and `main.shell-main`. Mark the current page's link `aria-current="page"`.
 Under 48rem the sidebar becomes a bar across the top and the `.nav` a tab bar
-along the bottom (icon above name), from the same markup.
+along the bottom (icon above name), from the same markup. `.shell-wide` shows an
+element only in the sidebar layout, `.shell-narrow` only in the top bar.
 
 ### Menu
 `details.dropdown` with a `summary` (often a `.btn`) and a `.menu` of

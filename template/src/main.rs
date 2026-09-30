@@ -84,8 +84,10 @@ fn layout(
                             a href=(href) aria-current=[(href == path).then_some("page")] { (symbol) (name) }
                         }
                     }
+                    // The slider in the sidebar; the button in a phone's top bar.
                     div .shell-foot {
-                        (Component::new("theme", "picker").mount(theme_picker(theme)))
+                        div .shell-wide { (theme_slider(Place::Sidebar, theme)) }
+                        div .shell-narrow { (Component::new("theme", "picker").mount(theme_picker(theme))) }
                     }
                 }
                 main .shell-main {
@@ -170,10 +172,8 @@ struct SetTheme {
     theme: Theme,
 }
 
-/// The sidebar's button, and the choice on Settings: one input, two forms.
+/// The top bar's button, which cycles through the themes.
 const SET_THEME: MutationAction<SetTheme> = MutationAction::new("set-theme", "/theme");
-const CHOOSE_THEME: MutationAction<SetTheme> =
-    MutationAction::new("choose-theme", "/settings/theme");
 
 // One icon button showing the current theme; each press saves the next one.
 fn theme_picker(current: Theme) -> Markup {
@@ -230,7 +230,7 @@ async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
         "/",
         "Home",
         html! { h1 { "Welcome to " (APP) } },
-        Some(html! { "Running on Placebo and Postgres. Ask your agent for the first feature." }),
+        Some(html! { "Rust, Postgres, and pages that save in place. Ask your agent for the first feature." }),
         html! {
             div .grid {
                 @for (symbol, title, text) in next {
@@ -256,26 +256,58 @@ async fn home(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
     ))
 }
 
-// Settings
+/// Where a theme slider is: Settings has one, and so does the sidebar, which
+/// is on Settings too. The reply goes back to the one that was used.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, FormEnum)]
+#[serde(rename_all = "lowercase")]
+enum Place {
+    Sidebar,
+    Settings,
+}
 
-fn theme_choice(current: Theme) -> Markup {
-    let fields = fields! { SetTheme {
-        div .switch-field role="group" aria-labelledby="theme-label" {
-            div .stack style="--stack-space: var(--space-3xs)" {
-                h3 #theme-label { "Theme" }
-                p .muted { "System follows your device." }
-            }
+#[derive(Deserialize, FormInput)]
+struct ChooseTheme {
+    theme: Theme,
+    place: Place,
+}
+
+/// The sliders, which save a theme as soon as it is picked.
+const CHOOSE_THEME: MutationAction<ChooseTheme> = MutationAction::new("choose-theme", "/theme/choose");
+
+fn slider(place: Place) -> Component {
+    Component::new("theme", if place == Place::Sidebar { "sidebar" } else { "settings" })
+}
+
+// The themes as a row of icons; the current one is under the thumb.
+fn theme_choice(place: Place, current: Theme) -> Markup {
+    let fields = fields! { ChooseTheme {
+        @field place = Control::hidden(place);
+        div role="group" aria-label="Theme" {
             @field theme = Control::radios(current, Theme::ALL.map(|(theme, _, label)| {
                 (theme, html! { (theme.icon()) span .visually-hidden { (label) } })
             })).class("segmented");
         }
     } };
+    CHOOSE_THEME.bind(&slider(place)).form(fields)
+}
+
+/// A slider on a page: it saves when a theme is picked.
+fn theme_slider(place: Place, current: Theme) -> Markup {
     html! {
-        div data-placebo-behavior="autosave" {
-            (CHOOSE_THEME.bind(&Component::new("theme", "choice")).form(fields))
-        }
+        div data-placebo-behavior="autosave" { (slider(place).mount(theme_choice(place, current))) }
     }
 }
+
+async fn choose_theme(Input(input): Input<ChooseTheme>) -> Response {
+    let form = theme_choice(input.place, input.theme);
+    (
+        [(header::SET_COOKIE, input.theme.cookie())],
+        CHOOSE_THEME.bind(&slider(input.place)).reply(form),
+    )
+        .into_response()
+}
+
+// Settings
 
 async fn settings(headers: HeaderMap) -> Markup {
     layout(
@@ -288,20 +320,17 @@ async fn settings(headers: HeaderMap) -> Markup {
             section .card {
                 div .stack style="--stack-space: var(--space-md)" {
                     h2 { "Appearance" }
-                    (Component::new("theme", "choice").mount(theme_choice(Theme::from_cookies(&headers))))
+                    div .switch-field {
+                        div .stack style="--stack-space: var(--space-3xs)" {
+                            h3 { "Theme" }
+                            p .muted { "System follows your device." }
+                        }
+                        (theme_slider(Place::Settings, Theme::from_cookies(&headers)))
+                    }
                 }
             }
         },
     )
-}
-
-async fn choose_theme(Input(input): Input<SetTheme>) -> Response {
-    let component = Component::new("theme", "choice");
-    (
-        [(header::SET_COOKIE, input.theme.cookie())],
-        CHOOSE_THEME.bind(&component).reply(theme_choice(input.theme)),
-    )
-        .into_response()
 }
 
 // Startup

@@ -3,9 +3,10 @@
 import { behavior } from "/placebo.js";
 
 // A form that saves as soon as one of its controls changes, such as the theme
-// on Settings.
+// on Settings. It submits after the change has reached the runtime, which
+// would otherwise count the change as an edit made after sending.
 behavior("autosave", element => {
-  const save = event => event.target.form?.requestSubmit();
+  const save = event => setTimeout(() => event.target.form?.requestSubmit());
   element.addEventListener("change", save);
   return () => element.removeEventListener("change", save);
 });

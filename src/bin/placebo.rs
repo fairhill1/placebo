@@ -23,9 +23,16 @@ struct Options {
 fn options() -> Result<Option<Options>, String> {
     let mut args = std::env::args().skip(1);
     let first = args.next();
-    if matches!(first.as_deref(), None | Some("--help" | "-h")) {
+    let help = |arg: Option<&str>| matches!(arg, Some("--help" | "-h"));
+    if first.is_none()
+        || help(first.as_deref())
+        || std::env::args()
+            .nth(2)
+            .as_deref()
+            .is_some_and(|arg| help(Some(arg)))
+    {
         println!(
-            "Placebo development supervisor\n\n  placebo dev --example NAME [--features FEATURES]\n  placebo dev --bin NAME [--features FEATURES]\n\nRun from the Cargo package directory. Rust edits rebuild and restart the app;\nthe app's Placebo dev layer handles browser reload. Ctrl-C stops."
+            "Placebo development supervisor\n\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n\nRun from the Cargo package directory. Without --bin or --example it runs the\npackage's binary; without --features it enables `dev`. Rust edits rebuild and\nrestart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
         );
         return Ok(None);
     }
@@ -49,12 +56,53 @@ fn options() -> Result<Option<Options>, String> {
             _ => return Err(format!("Unexpected argument: {arg}")),
         }
     }
-    let (kind, target) = target.ok_or("Choose one --example NAME or --bin NAME.")?;
+    let (kind, target) = match target {
+        Some(target) => target,
+        None => ("--bin".to_owned(), package_binary()?),
+    };
     Ok(Some(Options {
         kind,
         target,
-        features,
+        features: Some(features.unwrap_or_else(|| "dev".to_owned())),
     }))
+}
+
+/// The binary of the package in the current directory, when it has one.
+fn package_binary() -> Result<String, String> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .map_err(|error| format!("Could not run cargo metadata: {error}"))?;
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Run placebo dev from a Cargo package directory.".to_owned())?;
+    let manifest = std::env::current_dir()
+        .map_err(|error| error.to_string())?
+        .join("Cargo.toml");
+    let package = metadata["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|package| package["manifest_path"].as_str().map(Path::new) == Some(&manifest))
+        .ok_or("Run placebo dev from a Cargo package directory.")?;
+    let binaries: Vec<&str> = package["targets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
+        })
+        .filter_map(|target| target["name"].as_str())
+        .collect();
+    match binaries.as_slice() {
+        [binary] => Ok((*binary).to_owned()),
+        [] => Err("This package has no binary; choose one with --example NAME.".into()),
+        _ => Err(format!(
+            "This package has several binaries ({}); choose one with --bin NAME.",
+            binaries.join(", ")
+        )),
+    }
 }
 
 fn is_rust_input(root: &Path, path: &Path) -> bool {

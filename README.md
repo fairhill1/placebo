@@ -388,8 +388,9 @@ Add this section to your app's `Cargo.toml`:
 dev = ["placebo/dev"]
 ```
 
-Then run `placebo dev --bin my-app --features dev`. Rust edits trigger a Cargo
-rebuild and application restart. A failed build leaves the previous server
+Then run `placebo dev` in the app directory. It runs the package's binary with
+the `dev` feature; `--bin NAME`, `--example NAME`, and `--features LIST` choose
+others. Rust edits trigger a Cargo rebuild and application restart. A failed build leaves the previous server
 running while the error is reported. Ctrl-C stops the supervisor,
 build, and application; on Unix it also signals their process groups.
 

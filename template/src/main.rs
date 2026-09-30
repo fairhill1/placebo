@@ -7,7 +7,7 @@ use axum::{
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormEnum, FormInput, Input, MutationAction, fields};
+use placebo::{Component, Control, FormEnum, FormInput, Input, MutationAction, fields, icon};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower_http::services::ServeDir;
@@ -133,12 +133,17 @@ fn theme_picker(current: Theme) -> Markup {
     html! {
         div .cluster role="group" aria-label="Theme" style="--cluster-space: var(--space-2xs)" {
             @for (theme, _, label) in Theme::ALL {
+                @let symbol = match theme {
+                    Theme::System => icon!("monitor"),
+                    Theme::Light => icon!("sun"),
+                    Theme::Dark => icon!("moon"),
+                };
                 @let fields = fields! { SetTheme {
                     @field theme = Control::hidden(theme);
                     @if theme == current {
-                        button .btn .btn-sm type="submit" aria-pressed="true" { (label) }
+                        button .btn .btn-sm type="submit" aria-pressed="true" { (symbol) (label) }
                     } @else {
-                        button .btn .btn-sm .btn-ghost type="submit" aria-pressed="false" { (label) }
+                        button .btn .btn-sm .btn-ghost type="submit" aria-pressed="false" { (symbol) (label) }
                     }
                 } };
                 (SET_THEME.bind(&component).form(fields))

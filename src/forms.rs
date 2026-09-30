@@ -891,7 +891,7 @@ pub(crate) fn decode_pairs<I: FormInput>(
 #[doc(hidden)]
 pub mod private {
     use super::*;
-    pub use maud::{Markup, html};
+    pub use maud::{Markup, PreEscaped, html};
     pub struct Missing;
     pub struct Present;
 

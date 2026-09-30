@@ -4,6 +4,14 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, LitStr, parse_macro_input};
 
 mod fields;
+mod icon;
+
+#[proc_macro]
+pub fn icon(input: TokenStream) -> TokenStream {
+    icon::expand(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
 
 #[proc_macro]
 pub fn fields(input: TokenStream) -> TokenStream {

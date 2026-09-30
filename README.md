@@ -460,6 +460,15 @@ enabled. Explicitly enabling that feature can still compile its optional
 dependencies; production builds should omit it. The CLI itself can be built in
 release mode.
 
+## Icons
+
+`placebo::icon!("sun")` renders a [Lucide](https://lucide.dev/icons) icon as
+inline SVG with the kit's `.icon` class: `button .btn { (icon!("sun")) "Light" }`.
+The icons are vendored (Lucide 1.49.0, ISC) and looked up while compiling, so
+there is no CDN or script, a page carries only the icons it shows, and a
+misspelled name fails the build with the nearest names. Icons are
+`aria-hidden`: give an icon-only button a `span .visually-hidden` label.
+
 ## Styles stay in the kit
 
 Pages compose the CSS kit's classes; [kit/README.md](kit/README.md) lists

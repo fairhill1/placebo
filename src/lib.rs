@@ -30,6 +30,17 @@ pub use forms::{
 /// Render a typed form body using Maud markup and `@field name = control;` entries.
 /// See [`FormInput`] for examples and compile-time guarantees.
 pub use placebo_macros::fields;
+/// A [Lucide](https://lucide.dev/icons) icon as inline SVG, for Maud:
+/// `button .btn { (icon!("check")) "Save" }`. The name is checked while
+/// compiling, and only the icons an app names are in its binary and pages.
+/// The SVG carries the kit's `.icon` class and `aria-hidden`, so an icon
+/// with no text beside it needs a visually hidden label:
+/// `span .visually-hidden { "Delete" }`.
+///
+/// ```compile_fail
+/// let _ = placebo::icon!("chek"); // Lucide has no icon `chek`. Did you mean `check`?
+/// ```
+pub use placebo_macros::icon;
 pub use placebo_macros::{FormEnum, FormInput};
 
 mod component;

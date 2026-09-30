@@ -1,32 +1,72 @@
 //! A Placebo app on Postgres. AGENTS.md has the rules for building on it.
+//!
+//! This file is the app's shell: the database, the page layout, and the theme.
+//! The starter's task demo is `tasks.rs`; AGENTS.md says how to remove it.
 use axum::{
     Router,
-    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use maud::{DOCTYPE, Markup, html};
-use placebo::{Component, Control, FormEnum, FormInput, Input, MutationAction, fields, icon};
+use placebo::{Component, Control, Feed, FormEnum, FormInput, Input, MutationAction, fields, icon};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower_http::services::ServeDir;
 
-#[derive(sqlx::FromRow)]
-struct Item {
-    id: i64,
-    title: String,
-    version: i64,
+mod tasks;
+
+/// The app's name, shown in the header and the tab.
+const APP: &str = env!("CARGO_PKG_NAME");
+
+#[derive(Clone)]
+struct App {
+    db: PgPool,
+    /// Pages that mount this feed read themselves again after `changed()`.
+    live: Feed,
 }
 
-#[derive(Deserialize, FormInput)]
-struct SaveTitle {
-    id: i64,
-    title: String,
-    version: i64,
+/// A failed query. It answers 500 and logs the cause on the server.
+struct Failed(sqlx::Error);
+
+impl From<sqlx::Error> for Failed {
+    fn from(error: sqlx::Error) -> Self {
+        Self(error)
+    }
 }
 
-const SAVE: MutationAction<SaveTitle> = MutationAction::new("save-title", "/save");
+impl IntoResponse for Failed {
+    fn into_response(self) -> Response {
+        eprintln!("database error: {}", self.0);
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    }
+}
+
+/// Every page: the header with the app's name and theme, then the content.
+fn layout(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
+    let theme = Theme::from_cookies(headers);
+    html! {
+        (DOCTYPE)
+        html lang="en" data-theme=(theme.name()) {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { (title) " · " (APP) }
+                link rel="stylesheet" href="/static/app.css";
+                script type="module" src="/placebo.js" {}
+            }
+            body {
+                main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
+                    header .cluster .cluster-between {
+                        a href="/" { strong { (APP) } }
+                        (Component::new("theme", "picker").mount(theme_picker(theme)))
+                    }
+                    (content)
+                }
+            }
+        }
+    }
+}
 
 /// The kit's colour scheme, kept per browser in a cookie. The page renders it
 /// as `data-theme` on `<html>`.
@@ -75,58 +115,6 @@ struct SetTheme {
 
 const SET_THEME: MutationAction<SetTheme> = MutationAction::new("set-theme", "/theme");
 
-/// A failed query. It answers 500 and logs the cause on the server.
-struct Failed(sqlx::Error);
-
-impl From<sqlx::Error> for Failed {
-    fn from(error: sqlx::Error) -> Self {
-        Self(error)
-    }
-}
-
-impl IntoResponse for Failed {
-    fn into_response(self) -> Response {
-        eprintln!("database error: {}", self.0);
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-    }
-}
-
-async fn item(db: &PgPool, id: i64) -> Result<Option<Item>, sqlx::Error> {
-    sqlx::query_as("SELECT id, title, version FROM items WHERE id = $1")
-        .bind(id)
-        .fetch_optional(db)
-        .await
-}
-
-// Render the component's CONTENTS, including its form and feedback.
-// Both the page and save replies reuse this function.
-fn editor(item: &Item, feedback: &str, invalid: bool) -> Markup {
-    let component = Component::new("editor", item.id);
-    let title_id = format!("title-{}", item.id);
-    let feedback_id = format!("feedback-{}", item.id);
-    let fields = fields! { SaveTitle {
-        @field id = Control::hidden(item.id);
-        @field version = Control::hidden(item.version);
-        div .stack style="--stack-space: var(--space-sm)" {
-            div .field {
-                label for=(title_id) { "Title" }
-                @field title = Control::text(&item.title)
-                    .id(&title_id).described_by(&feedback_id).invalid(invalid);
-            }
-            div .cluster {
-                button .btn type="submit" { "Save" }
-                p .muted id=(feedback_id) role="status" { (feedback) }
-            }
-        }
-    } };
-    html! {
-        article .card .stack {
-            h2 { (item.title) }
-            (SAVE.bind(&component).form(fields))
-        }
-    }
-}
-
 // One small form per theme, so each button saves its own choice.
 fn theme_picker(current: Theme) -> Markup {
     let component = Component::new("theme", "picker");
@@ -165,95 +153,12 @@ async fn set_theme(Input(input): Input<SetTheme>) -> Response {
         .into_response()
 }
 
-async fn home(State(db): State<PgPool>, headers: HeaderMap) -> Result<Markup, Failed> {
-    let items: Vec<Item> = sqlx::query_as("SELECT id, title, version FROM items ORDER BY id")
-        .fetch_all(&db)
-        .await?;
-    let theme = Theme::from_cookies(&headers);
-    Ok(html! {
-        (DOCTYPE)
-        html lang="en" data-theme=(theme.name()) {
-            head {
-                meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "Items" }
-                link rel="stylesheet" href="/static/app.css";
-                script type="module" src="/placebo.js" {}
-            }
-            body {
-                main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
-                    div .cluster .cluster-between {
-                        div .stack style="--stack-space: var(--space-2xs)" {
-                            h1 { "Items" }
-                            p .muted { "Rename an item and save. Open a second tab to see a conflict." }
-                        }
-                        (Component::new("theme", "picker").mount(theme_picker(theme)))
-                    }
-                    div .grid {
-                        @for item in &items {
-                            (Component::new("editor", item.id).mount(editor(item, "", false)))
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-async fn save(
-    State(db): State<PgPool>,
-    Input(input): Input<SaveTitle>,
-) -> Result<Response, Failed> {
-    let Some(current) = item(&db, input.id).await? else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
-    let component = Component::new("editor", input.id);
-    let binding = SAVE.bind(&component);
-    let title = input.title.trim();
-    if !(3..=80).contains(&title.chars().count()) {
-        let submitted = Item {
-            title: input.title,
-            ..current
-        };
-        return Ok(binding
-            .invalid(editor(&submitted, "Use 3–80 characters.", true))
-            .into_response());
-    }
-    // The version check and the write are one statement, so two saves of the
-    // same version cannot both succeed.
-    let saved: Option<Item> = sqlx::query_as(
-        "UPDATE items SET title = $1, version = version + 1
-         WHERE id = $2 AND version = $3
-         RETURNING id, title, version",
-    )
-    .bind(title)
-    .bind(input.id)
-    .bind(input.version)
-    .fetch_optional(&db)
-    .await?;
-    let Some(saved) = saved else {
-        let Some(current) = item(&db, input.id).await? else {
-            return Ok(StatusCode::NOT_FOUND.into_response());
-        };
-        return Ok(binding
-            .conflict(editor(
-                &current,
-                "Changed in another tab. Review the saved title and retry.",
-                false,
-            ))
-            .into_response());
-    };
-    Ok(binding
-        .reply(editor(&saved, "Saved.", false))
-        .into_response())
-}
-
 async fn database() -> PgPool {
     // Each app gets its own database, placebo_<package name>, unless
     // DATABASE_URL names another. It signs in as PGUSER or the shell's user:
     // sqlx's own lookup of the user answers "anonymous" in some sandboxes.
     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        let database = format!("placebo_{}", env!("CARGO_PKG_NAME").replace('-', "_"));
+        let database = format!("placebo_{}", APP.replace('-', "_"));
         match ["PGUSER", "USER", "USERNAME"]
             .into_iter()
             .find_map(|name| std::env::var(name).ok())
@@ -283,14 +188,18 @@ async fn database() -> PgPool {
 
 #[tokio::main]
 async fn main() {
-    let db = database().await;
+    let live = Feed::new("live", "/live");
+    let state = App {
+        db: database().await,
+        live: live.clone(),
+    };
     let app = Router::new()
-        .route("/", get(home))
+        .merge(tasks::routes())
+        .route(live.path(), live.route())
         .route("/placebo.js", get(placebo::runtime))
-        .route(SAVE.path(), SAVE.route(save))
         .route(SET_THEME.path(), SET_THEME.route(set_theme))
         .nest_service("/static", ServeDir::new("static"))
-        .with_state(db);
+        .with_state(state);
     // Saves also work before the runtime loads, or without JavaScript.
     let app = placebo::native_forms(app);
     #[cfg(all(feature = "dev", debug_assertions))]

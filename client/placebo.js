@@ -480,7 +480,7 @@ let holding = new WeakSet();
 
 // Decide what the morph keeps, without changing the document.
 function emptyPlan() {
-  return { skipped: new Set(), plans: new Map(), morphed: [],
+  return { skipped: new Set(), plans: new Map(), morphed: [], editing: new Set(),
     summary: { refreshedLocal: [], preservedLocal: [], refreshedComponents: [], skippedComponents: [] } };
 }
 
@@ -521,6 +521,13 @@ function planPage(work, root, incoming, outcome) {
   for (const [oldRoot, newRoot, component] of scopes) {
     const own = component !== null && component === target;
     const current = locals(oldRoot);
+    // A form someone is editing keeps the hidden values it was rendered with,
+    // such as a record's version, through a refresh from another action: its
+    // next save must be checked against what the person started from, or it
+    // would overwrite a change they never saw. Its own reply updates them.
+    if (!own) for (const form of oldRoot.querySelectorAll("form")) {
+      if (!inSkipped(form) && !target?.contains(form) && controlsOf(form).some(control => control.type !== "hidden" && changedFromDefault(control))) plan.editing.add(form);
+    }
     for (const [key, next] of locals(newRoot)) {
       const old = current.get(key);
       if (!old || inSkipped(old)) continue;
@@ -565,7 +572,8 @@ function morphPage(root, incoming, plan) {
         // Any other control the person changed keeps its value too, such as a
         // note in a plain textarea.
         const unit = local ? null : localUnit(old);
-        const edited = !local && old.matches("input,textarea,select") && !(unit && plan.plans.has(unit)) && changedFromDefault(old);
+        const edited = !local && old.matches("input,textarea,select") && !(unit && plan.plans.has(unit))
+          && (changedFromDefault(old) || (old.type === "hidden" && plan.editing.has(old.form)));
         if (!local?.keep && !edited) {
           // Idiomorph leaves a file input's files; a unit taking the reply starts empty.
           if (local) for (const control of controlsOf(old)) if (control.type === "file") control.value = "";

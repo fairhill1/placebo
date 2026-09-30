@@ -106,6 +106,11 @@ control keeps its value while it is edited.
   form, showing the saved and normalized values. A read form's controls take
   the page read for them the same way. Controls anywhere else on the page keep
   their edits.
+- A form with an edited control also keeps its **hidden controls**, such as a
+  record's version, through a refresh from another action or a live update.
+  Its next save is then checked against the version the person started from,
+  so it gets a conflict instead of overwriting a change they never saw. The
+  form's own replies update them.
 - A control changed **after the request was sent** is always kept.
 - A kept control still takes the page's `aria-invalid`, `aria-describedby`,
   `aria-errormessage`, `disabled`, `readonly`, and `required`.

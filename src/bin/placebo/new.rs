@@ -10,11 +10,15 @@ const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
 /// Template files copied as they are. The kit files match the kit this
 /// Placebo ships, which the app's styles test requires.
-const FILES: [(&str, &str); 13] = [
+const FILES: [(&str, &str); 14] = [
     ("src/main.rs", include_str!("../../../template/src/main.rs")),
     (
-        "migrations/0001_items.sql",
-        include_str!("../../../template/migrations/0001_items.sql"),
+        "src/tasks.rs",
+        include_str!("../../../template/src/tasks.rs"),
+    ),
+    (
+        "migrations/0001_tasks.sql",
+        include_str!("../../../template/migrations/0001_tasks.sql"),
     ),
     (
         "tests/styles.rs",
@@ -183,9 +187,23 @@ updates), `typed-forms.md` (controls and payload types), and `diagnostics.md`
   `0002_tags.sql`; it runs when the app starts. Never edit a migration that
   has run.
 - Query with `sqlx::query_as` and `.bind` parameters; never format values into
-  SQL. Check a version in the same statement as its write, as `save` does with
-  `UPDATE … WHERE id = $2 AND version = $3 RETURNING …`.
+  SQL. Check a version in the same statement as its write, as `save` in
+  `src/tasks.rs` does with `UPDATE … WHERE id = $3 AND version = $4 RETURNING …`.
 - Remove the database with `dropdb {database}` when you delete the app.
+
+## The starter's demo
+
+`src/main.rs` is the app's shell: the database, `layout()` with its header,
+and the theme toggle. Keep it. `src/tasks.rs` is a task demo whose seeded
+tasks tour Placebo; read it for the patterns (a list, a page per record, adds,
+toggles, deletes, a versioned editor, live updates). When the person starts on
+their own app, remove it:
+
+1. Delete `src/tasks.rs`, and in `src/main.rs` remove `mod tasks;` and
+   `.merge(tasks::routes())`.
+2. Add a migration, such as `0002_remove_demo.sql`, with `DROP TABLE tasks;`.
+   Keep `0001_tasks.sql`: it has run.
+3. Route `/` to the app's own first page, rendered with `layout()`.
 
 ## Styles
 

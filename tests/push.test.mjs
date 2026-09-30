@@ -88,6 +88,26 @@ test("a refresh keeps a draft open in the other tab's editor", async t => {
   assert.equal(event.feed, "tasks-live");
 });
 
+test("a draft kept through a refresh saves as a conflict, not over the other tab's change", async t => {
+  const first = await visit(t);
+  const second = await visit(t);
+  await edit(second, 2);
+  await second.locator("#title-2").fill("A draft in the second tab");
+  await edit(first, 2);
+  await save(first, 2, "Renamed in the first tab");
+  await second.waitForFunction(() => document.querySelector('[data-task="2"] .task-title').textContent === "Renamed in the first tab");
+  // The editor kept the version its draft started from, so saving the draft
+  // is checked against it.
+  await save(second, 2, "A draft in the second tab");
+  assert.equal(await second.evaluate(() => window.events.findLast(e => e.type === "applied" && e.target === "task:2").outcome), "conflict");
+  assert.equal(await second.locator("#title-2").inputValue(), "A draft in the second tab");
+  assert.equal(await first.locator(`${row(2)} .task-title`).textContent(), "Renamed in the first tab");
+  // The conflict brought the current version, so saving again goes through.
+  await save(second, 2, "A draft in the second tab");
+  assert.equal(await second.evaluate(() => window.events.findLast(e => e.type === "applied" && e.target === "task:2").outcome), "applied");
+  await first.waitForFunction(() => document.querySelector('[data-task="2"] .task-title').textContent === "A draft in the second tab");
+});
+
 test("adding, moving, and deleting in one tab change the other tab's list", async t => {
   const first = await visit(t);
   const second = await visit(t);

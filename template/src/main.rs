@@ -42,8 +42,9 @@ impl IntoResponse for Failed {
     }
 }
 
-/// Every page: its heading beside the theme toggle, then its content.
-fn layout(headers: &HeaderMap, title: &str, heading: Markup, content: Markup) -> Markup {
+/// Every page: its heading beside the theme toggle, a line under it, then
+/// its content. The heading is also the tab's title.
+fn layout(headers: &HeaderMap, heading: &str, lede: Markup, content: Markup) -> Markup {
     let theme = Theme::from_cookies(headers);
     html! {
         (DOCTYPE)
@@ -51,15 +52,18 @@ fn layout(headers: &HeaderMap, title: &str, heading: Markup, content: Markup) ->
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { (title) " · " (APP) }
+                title { (heading) " · " (APP) }
                 link rel="stylesheet" href="/static/app.css";
                 script type="module" src="/placebo.js" {}
             }
             body {
                 main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
-                    header .cluster .cluster-between {
-                        div .stack style="--stack-space: var(--space-2xs)" { (heading) }
-                        (Component::new("theme", "picker").mount(theme_picker(theme)))
+                    header .stack style="--stack-space: var(--space-2xs)" {
+                        div .cluster .cluster-between {
+                            h1 { (heading) }
+                            (Component::new("theme", "picker").mount(theme_picker(theme)))
+                        }
+                        p .lede { (lede) }
                     }
                     (content)
                 }

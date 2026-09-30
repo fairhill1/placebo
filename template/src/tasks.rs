@@ -85,11 +85,8 @@ async fn list(State(app): State<App>, headers: HeaderMap) -> Result<Markup, Fail
     Ok(layout(
         &headers,
         "Tasks",
-        html! {
-            h1 { "Tasks" }
-            // Every save renders the page again, so this count follows.
-            p .lede { (tasks.len() - done) " open · " (done) " done" }
-        },
+        // Every save renders the page again, so this count follows.
+        html! { (tasks.len() - done) " open · " (done) " done" },
         html! {
             (app.live.mount())
             section .card {
@@ -220,12 +217,12 @@ async fn page(
     let Some(task) = task(&app.db, id).await? else {
         let missing = html! {
             (app.live.mount())
-            p .notice { (icon!("list-todo")) "This task is gone. " a href="/" { "Back to all tasks" } }
+            p .notice { (icon!("list-todo")) "This task was deleted." }
         };
-        let heading = html! { h1 { "Not found" } };
+        let back = html! { a href="/" { (icon!("arrow-left")) " All tasks" } };
         return Ok((
             StatusCode::NOT_FOUND,
-            layout(&headers, "Not found", heading, missing),
+            layout(&headers, "Not found", back, missing),
         )
             .into_response());
     };
@@ -234,8 +231,7 @@ async fn page(
         &task.title,
         html! {
             a href="/" { (icon!("arrow-left")) " All tasks" }
-            h1 { (task.title) }
-            p .lede { @if task.done { "Done" } @else { "Open" } }
+            " · " @if task.done { "Done" } @else { "Open" }
         },
         html! {
             (app.live.mount())

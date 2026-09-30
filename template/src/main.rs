@@ -58,7 +58,7 @@ fn layout(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
             body {
                 main .wrapper .page .stack style="--stack-space: var(--space-xl)" {
                     header .cluster .cluster-between {
-                        a href="/" { strong { (APP) } }
+                        strong { (APP) }
                         (Component::new("theme", "picker").mount(theme_picker(theme)))
                     }
                     (content)

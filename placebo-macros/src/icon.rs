@@ -19,14 +19,15 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     Ok(quote! { ::placebo::__private::PreEscaped(#svg) })
 }
 
-/// The icon's SVG, sized and coloured by the kit's `.icon` class and hidden
-/// from screen readers: the text beside it, or a visually hidden label, names it.
+/// The icon's SVG, the size of the text around it (Basecoat sizes it inside a
+/// button, alert, or menu), coloured by its text, and hidden from screen
+/// readers: the text beside it, or a visually hidden label, names it.
 fn svg(name: &str) -> Result<String, String> {
     let Some(Value::Array(elements)) = icons().get(name) else {
         return Err(unknown(name));
     };
     let mut svg = String::from(
-        "<svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" \
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1em\" height=\"1em\" \
          viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" \
          stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">",
     );
@@ -99,9 +100,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_icon_renders_its_elements_inside_the_kit_svg() {
+    fn an_icon_renders_its_elements_inside_a_text_sized_svg() {
         let check = svg("check").unwrap();
-        assert!(check.starts_with("<svg class=\"icon\""), "{check}");
+        assert!(
+            check.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1em\""),
+            "{check}"
+        );
         assert!(check.contains("aria-hidden=\"true\""));
         assert!(
             check.ends_with("<path d=\"M20 6 9 17l-5-5\"/></svg>"),

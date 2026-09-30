@@ -7,9 +7,10 @@ const PLACEBO: &str = env!("CARGO_MANIFEST_DIR");
 const REPO: &str = "https://github.com/fairhill1/placebo";
 const MANIFEST: &str = include_str!("../../../template/Cargo.toml");
 
-/// Template files copied as they are. The kit is not among them: Placebo
-/// serves it, so it updates with the crate.
-const FILES: [(&str, &str); 9] = [
+/// Template files copied as they are. Basecoat is not among them: `placebo
+/// css` copies it from the Placebo the app builds against, so it updates with
+/// the crate.
+const FILES: [(&str, &str); 8] = [
     ("src/main.rs", include_str!("../../../template/src/main.rs")),
     ("src/auth.rs", include_str!("../../../template/src/auth.rs")),
     (
@@ -21,12 +22,8 @@ const FILES: [(&str, &str); 9] = [
         include_str!("../../../template/tests/styles.rs"),
     ),
     (
-        "static/app.css",
-        include_str!("../../../template/static/app.css"),
-    ),
-    (
-        "static/components.css",
-        include_str!("../../../template/static/components.css"),
+        "styles/app.css",
+        include_str!("../../../template/styles/app.css"),
     ),
     (
         "static/app.js",
@@ -158,17 +155,21 @@ A Placebo app: Rust, Axum, Maud, and Postgres.
 
 Run `placebo rules` before changing any code, and follow them: they say how
 pages, forms, replies, and styles work here, and where the docs are. Run
-`placebo kit` for the CSS kit's tokens and classes. Both print the Placebo
+`placebo kit` for the styles: Tailwind and Basecoat. Both print the Placebo
 this app builds against, so they stay current when it updates.
 
 ## Commands
 
 - `placebo dev` builds and runs the app on http://127.0.0.1:3000. Rust edits
-  rebuild and restart it; edits in `static/` reload the browser. Run the app
+  rebuild and restart it; it compiles `styles/app.css` with Tailwind into
+  `static/app.css` as views and styles change, and edits in `static/` reload
+  the browser. Run the app
   with it, not `cargo run`, which does neither. Run it from this directory,
   which the app serves `static/` from. Beside another app on port 3000, run
   `PLACEBO_ADDR=127.0.0.1:3001 placebo dev`.
 - `cargo test` runs the tests, including the styles test.
+- `placebo css --minify` compiles the stylesheet once, before a release build;
+  `static/app.css` is built, not committed.
 - `cargo update -p placebo` takes Placebo's updates: its Rust, its script,
   its kit, and its rules. Run `cargo test` after it. `cargo install --git
   {REPO} placebo --features dev --locked` updates the `placebo` command.
@@ -216,9 +217,12 @@ sidebar's account menu.
 
 ## Styles
 
-The kit is served by Placebo at `/placebo/kit/`, and `static/app.css` imports
-it. The app's own components go in `static/components.css`, built from the
-kit's tokens; `cargo test` fails on values off the kit's scale.
+Pages use Basecoat's components (`.btn`, `.card`, `.field`...) and lay out
+with Tailwind's utilities, all from the theme's scale; `placebo kit` lists
+them. `styles/app.css` imports Tailwind and Basecoat, which `placebo css` and
+`placebo dev` copy into `.placebo/`. A pattern used twice is a Rust `const` of
+classes; `cargo test` fails on arbitrary values such as `p-[13px]` and on
+values off the theme.
 "
     )
 }
@@ -271,7 +275,7 @@ mod tests {
         let app = dir.join("my-app");
         fs::create_dir_all(&app).unwrap();
         run(&app).unwrap();
-        assert!(app.join("Cargo.toml").is_file() && app.join("static/app.css").is_file());
+        assert!(app.join("Cargo.toml").is_file() && app.join("styles/app.css").is_file());
         assert!(app.join("src/auth.rs").is_file() && app.join("migrations/0001_accounts.sql").is_file());
         let error = run(&app).unwrap_err().to_string();
         assert!(error.contains("already has src/main.rs"), "{error}");

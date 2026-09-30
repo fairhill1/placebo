@@ -1,1 +1,3 @@
 /target/
+/.placebo/
+/static/app.css

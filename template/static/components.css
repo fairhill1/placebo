@@ -1,5 +1,0 @@
-/* The app's own components: what the kit's components.css lacks. Build them
-   from the kit's tokens (`placebo kit` lists them); `cargo test` fails
-   on values off the scale. */
-@layer components {
-}

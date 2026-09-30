@@ -58,7 +58,7 @@ fn pages() -> [(&'static str, &'static str, PreEscaped<&'static str>); 2] {
 fn document(headers: &HeaderMap, title: &str, body: Markup) -> Markup {
     html! {
         (DOCTYPE)
-        html lang="en" data-theme=(Theme::from_cookies(headers).name()) {
+        html lang="en" class=[(Theme::from_cookies(headers) == Theme::Dark).then_some("dark")] {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover";
@@ -72,9 +72,17 @@ fn document(headers: &HeaderMap, title: &str, body: Markup) -> Markup {
     }
 }
 
+/// A sidebar link: a row with its icon in the sidebar, and under 48rem
+/// (Tailwind's `md`) a tab in the bar along the bottom, icon over name.
+const NAV_LINK: &str = "flex flex-col items-center gap-1 py-2 text-xs font-medium \
+    text-muted-foreground hover:text-foreground aria-[current=page]:text-foreground [&>svg]:size-5 \
+    md:flex-row md:gap-2 md:rounded-md md:px-2 md:py-1.5 md:text-sm md:hover:bg-sidebar-accent \
+    md:aria-[current=page]:bg-sidebar-accent md:[&>svg]:size-4";
+
 /// Every page: the sidebar, then the page's heading, an optional line under
 /// it, and its content. `path` marks the sidebar's current page; `title`
-/// names the tab.
+/// names the tab. Under 48rem the sidebar is a bar across the top, and its
+/// pages a tab bar along the bottom.
 fn layout(
     headers: &HeaderMap,
     user: &User,
@@ -89,31 +97,31 @@ fn layout(
         headers,
         title,
         html! {
-            body .shell {
-                aside .shell-side {
-                    a .shell-brand href="/" {
-                        span .shell-mark aria-hidden="true" { (icon!("pill")) }
-                        (APP)
-                    }
-                    nav .nav aria-label="Pages" {
+            body ."min-h-dvh md:flex" {
+                aside class="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-sidebar px-4 \
+                    text-sidebar-foreground md:h-dvh md:w-60 md:shrink-0 md:flex-col md:items-stretch \
+                    md:gap-4 md:border-e md:border-b-0 md:p-3" {
+                    (brand())
+                    nav class="fixed inset-x-0 bottom-0 z-10 grid auto-cols-fr grid-flow-col border-t \
+                        bg-sidebar md:static md:flex md:flex-col md:gap-1 md:border-t-0" aria-label="Pages" {
                         @for (href, name, symbol) in pages() {
-                            a href=(href) aria-current=[(href == path).then_some("page")] { (symbol) (name) }
+                            a class=(NAV_LINK) href=(href) aria-current=[(href == path).then_some("page")] { (symbol) (name) }
                         }
                     }
                     // The slider in the sidebar and the button in a phone's top bar,
                     // then who is signed in.
-                    div .shell-foot {
-                        div .shell-wide { (theme_slider(Place::Sidebar, theme)) }
-                        div .shell-narrow { (Component::new("theme", "picker").mount(theme_picker(theme))) }
+                    div ."ms-auto flex items-center gap-2 md:ms-0 md:mt-auto md:flex-col md:items-stretch" {
+                        div ."hidden md:block" { (theme_slider(Place::Sidebar, theme)) }
+                        div ."md:hidden" { (Component::new("theme", "picker").mount(theme_picker(theme))) }
                         (auth::account_menu(user))
                     }
                 }
-                main .shell-main {
-                    div .wrapper .page .stack style="--stack-space: var(--space-xl)" {
-                        header .stack style="--stack-space: var(--space-2xs)" {
-                            div .cluster style="--cluster-space: var(--space-2xs)" { (heading) }
+                main ."min-w-0 flex-1 pb-20 md:pb-0" {
+                    div ."mx-auto flex max-w-5xl flex-col gap-8 px-4 py-8 md:px-8 md:py-10" {
+                        header ."flex flex-col gap-1" {
+                            div ."flex items-center gap-2 text-2xl font-semibold tracking-tight" { (heading) }
                             @if let Some(lede) = lede {
-                                p .lede { (lede) }
+                                p ."text-muted-foreground" { (lede) }
                             }
                         }
                         (content)
@@ -131,17 +139,26 @@ fn solo(headers: &HeaderMap, title: &str, content: Markup) -> Markup {
         headers,
         title,
         html! {
-            body .solo {
-                main .stack style="--stack-space: var(--space-lg)" {
-                    a .shell-brand href="/" {
-                        span .shell-mark aria-hidden="true" { (icon!("pill")) }
-                        (APP)
-                    }
+            body ."grid min-h-dvh place-items-center p-4" {
+                main ."flex w-full max-w-sm flex-col items-center gap-6" {
+                    (brand())
                     (content)
                 }
             }
         },
     )
+}
+
+/// The app's mark and name, linking home.
+fn brand() -> Markup {
+    html! {
+        a ."flex items-center gap-2 font-semibold md:px-2 md:py-1.5" href="/" {
+            span ."flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground" aria-hidden="true" {
+                (icon!("pill"))
+            }
+            (APP)
+        }
+    }
 }
 
 /// The value of the request's cookie called `name`.
@@ -154,20 +171,18 @@ fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .find_map(|cookie| cookie.trim().strip_prefix(name)?.strip_prefix('='))
 }
 
-/// The kit's colour scheme, kept per browser in a cookie. The page renders it
-/// as `data-theme` on `<html>`.
+/// The colour scheme, kept per browser in a cookie. Dark renders Basecoat's
+/// `dark` class on `<html>`.
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, FormEnum)]
 #[serde(rename_all = "lowercase")]
 enum Theme {
-    System,
     Light,
     Dark,
 }
 
 impl Theme {
     /// Each theme with its cookie value and its name.
-    const ALL: [(Theme, &str, &str); 3] = [
-        (Theme::System, "system", "System"),
+    const ALL: [(Theme, &str, &str); 2] = [
         (Theme::Light, "light", "Light"),
         (Theme::Dark, "dark", "Dark"),
     ];
@@ -180,12 +195,11 @@ impl Theme {
         Self::ALL.iter().find(|(theme, ..)| *theme == self).unwrap().2
     }
 
-    /// The theme a press switches to: System, Light, Dark, and round again.
+    /// The theme a press switches to.
     fn next(self) -> Self {
         match self {
-            Theme::System => Theme::Light,
             Theme::Light => Theme::Dark,
-            Theme::Dark => Theme::System,
+            Theme::Dark => Theme::Light,
         }
     }
 
@@ -194,12 +208,11 @@ impl Theme {
         Self::ALL
             .into_iter()
             .find(|(_, name, _)| Some(*name) == chosen)
-            .map_or(Theme::System, |(theme, ..)| theme)
+            .map_or(Theme::Light, |(theme, ..)| theme)
     }
 
     fn icon(self) -> PreEscaped<&'static str> {
         match self {
-            Theme::System => icon!("monitor"),
             Theme::Light => icon!("sun"),
             Theme::Dark => icon!("moon"),
         }
@@ -225,9 +238,9 @@ fn theme_picker(current: Theme) -> Markup {
     let label = format!("Theme: {}. Switch to {}", current.label(), next.label());
     let fields = fields! { SetTheme {
         @field theme = Control::hidden(next);
-        button .btn .btn-ghost .btn-icon type="submit" title=(label) {
+        button .btn data-variant="ghost" data-size="icon" type="submit" title=(label) {
             (symbol)
-            span .visually-hidden { (label) }
+            span .sr-only { (label) }
         }
     } };
     SET_THEME
@@ -265,7 +278,7 @@ async fn home(State(app): State<App>, user: User, headers: HeaderMap) -> Result<
         (
             icon!("palette"),
             "Style it",
-            "The kit's components first (placebo kit lists them), and your own in static/components.css.",
+            "Basecoat's components, laid out with Tailwind's utilities; placebo kit lists them.",
         ),
     ];
     Ok(layout(
@@ -276,23 +289,23 @@ async fn home(State(app): State<App>, user: User, headers: HeaderMap) -> Result<
         html! { h1 { "Welcome to " (APP) } },
         Some(html! { "Your app is running. Ask your agent to build the first feature." }),
         html! {
-            div .grid {
+            div ."grid gap-4 md:grid-cols-3" {
                 @for (symbol, title, text) in next {
                     section .card {
-                        div .stack style="--stack-space: var(--space-xs)" {
-                            div .cluster style="--cluster-space: var(--space-xs)" { (symbol) h2 { (title) } }
-                            p .muted { (text) }
+                        header {
+                            h2 ."flex items-center gap-2" { (symbol) (title) }
+                            p { (text) }
                         }
                     }
                 }
             }
             section .card {
-                div .stack style="--stack-space: var(--space-md)" {
-                    h2 { "This app" }
-                    dl .kv {
-                        dt { "Database" } dd { (database) }
-                        dt { "Postgres" } dd { (version) }
-                        dt { "Address" } dd { (headers.get(header::HOST).and_then(|host| host.to_str().ok()).unwrap_or("")) }
+                header { h2 { "This app" } }
+                section {
+                    dl ."grid grid-cols-3 gap-y-2" {
+                        dt ."text-muted-foreground" { "Database" } dd ."col-span-2" { (database) }
+                        dt ."text-muted-foreground" { "Postgres" } dd ."col-span-2" { (version) }
+                        dt ."text-muted-foreground" { "Address" } dd ."col-span-2" { (headers.get(header::HOST).and_then(|host| host.to_str().ok()).unwrap_or("")) }
                     }
                 }
             }
@@ -322,14 +335,22 @@ fn slider(place: Place) -> Component {
     Component::new("theme", if place == Place::Sidebar { "sidebar" } else { "settings" })
 }
 
-// The themes as a row of icons; the current one is under the thumb.
+/// The themes as a row of icons, the chosen one raised: the radios hidden,
+/// their labels the buttons.
+const THEME_CHOICE: &str = "flex w-fit gap-0.5 rounded-lg bg-muted p-0.5 *:flex *:size-7 \
+    *:cursor-pointer *:items-center *:justify-center *:rounded-md *:text-muted-foreground \
+    *:hover:text-foreground *:has-checked:bg-background *:has-checked:text-foreground \
+    *:has-checked:shadow-sm *:has-focus-visible:ring-3 *:has-focus-visible:ring-ring/50 \
+    dark:*:has-checked:bg-input/50 [&_input]:sr-only";
+
+// The themes as a row of icons; the current one is raised.
 fn theme_choice(place: Place, current: Theme) -> Markup {
     let fields = fields! { ChooseTheme {
         @field place = Control::hidden(place);
         div role="group" aria-label="Theme" {
             @field theme = Control::radios(current, Theme::ALL.map(|(theme, _, label)| {
-                (theme, html! { (theme.icon()) span .visually-hidden { (label) } })
-            })).class("segmented");
+                (theme, html! { (theme.icon()) span .sr-only { (label) } })
+            })).class(THEME_CHOICE);
         }
     } };
     CHOOSE_THEME.bind(&slider(place)).form(fields)
@@ -363,15 +384,13 @@ async fn settings(user: User, headers: HeaderMap) -> Markup {
         None,
         html! {
             section .card {
-                div .stack style="--stack-space: var(--space-md)" {
-                    h2 { "Appearance" }
-                    div .switch-field {
-                        div .stack style="--stack-space: var(--space-3xs)" {
-                            h3 { "Theme" }
-                            p .muted { "System follows your device." }
-                        }
-                        (theme_slider(Place::Settings, Theme::from_cookies(&headers)))
+                header { h2 { "Appearance" } }
+                section ."flex items-center justify-between gap-4" {
+                    div {
+                        h3 ."font-medium" { "Theme" }
+                        p ."text-muted-foreground" { "Light or dark." }
                     }
+                    (theme_slider(Place::Settings, Theme::from_cookies(&headers)))
                 }
             }
         },
@@ -423,7 +442,7 @@ async fn main() {
         .route("/", get(home))
         .route("/settings", get(settings))
         .route("/placebo.js", get(placebo::runtime))
-        .route(placebo::KIT_PATH, get(placebo::kit))
+
         .route(SET_THEME.path(), SET_THEME.route(set_theme))
         .route(CHOOSE_THEME.path(), CHOOSE_THEME.route(choose_theme))
         // no-cache: browsers check for a newer file on every load (a 304 when

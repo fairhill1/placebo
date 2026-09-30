@@ -55,7 +55,7 @@ impl Component {
         }
     }
 
-    /// A class for the mounted root element, such as a kit's `modal`. It is
+    /// A class for the mounted root element, such as Basecoat's `dialog`. It is
     /// part of the mount only; replies never touch the root's attributes.
     pub fn class(mut self, class: &str) -> Self {
         self.class = Some(class.into());

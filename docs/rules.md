@@ -61,19 +61,18 @@ These apply to people and coding agents alike.
   creating or deleting a record, reply with `.navigate("/path")`. To update
   other open pages, call `feed.changed()` after the write, on a `Feed` the
   pages mount with `feed.mount()`; each page reads itself again.
-- **Styles:** pages compose the kit's classes, which its README lists. When the
-  design needs a component the kit lacks (a list row, a page header), write it
-  in the app's own `static/components.css`, from the kit's tokens, and
-  use it everywhere that pattern appears: don't approximate it out of layout
-  primitives. Spacing, type, colour, radii, and timing come only from the
-  tokens; a value the scale lacks is a new token, after the person approves
-  it. When a layout primitive needs other spacing, set its custom property to
-  a token on the element, such as `style="--stack-space: var(--space-xs)"` or
-  `style="--grid-min: var(--width-sm)"`;
-  write no other inline styles and no `<style>` elements. The styles test
-  (`placebo::styles::Check`) fails on what strays, and the console reports a
-  class no stylesheet defines as `[placebo:unknown-class]`; fix the cause.
-  Judge screenshots on how the page looks, not only on whether it works.
+- **Styles:** pages use Basecoat's components and Tailwind's utilities, which
+  `placebo kit` lists: a button is `.btn` and a card `.card`, never a stack of
+  utilities, and layout and spacing are utilities such as `flex gap-2` and
+  `md:grid-cols-3`. Spacing, type, colour, radii, and timing come only from
+  the theme's scale: no arbitrary values such as `p-[13px]` or `bg-[#fff]`; a
+  value the theme lacks is a new variable in `@theme`, after the person
+  approves it. A class list used twice is a Rust `const` or a function
+  returning the markup. Write no inline styles but custom properties, and no
+  `<style>` elements. The styles test (`placebo::styles::Check`) fails on what
+  strays, and the console reports a class no stylesheet defines, such as a
+  utility Tailwind could not generate, as `[placebo:unknown-class]`; fix the
+  cause. Judge screenshots on how the page looks, not only on whether it works.
 - **Verify in a browser:** compiling proves the Rust side agrees. Run the app and
   exercise the changed flows: valid saves, invalid input, independent drafts,
   conflicts, and any dialog or search. Placebo logs every failure in the console

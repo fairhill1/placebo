@@ -116,16 +116,21 @@ function auditCommands() {
   }
 }
 
-// A class no stylesheet defines styles nothing: usually a guess at the kit's
-// names, or a hook for a script or test. Report each class once.
+// A class no stylesheet defines styles nothing: usually a misspelled utility,
+// a guess at Basecoat's names, or a hook for a script or test. Report each class once.
 let reportedClasses = new Set();
+// A class in a selector, escaped as Tailwind writes them: `.md\:flex`,
+// `.w-1\/2`, `.\32 xl\:p-4`.
+const classSelector = /\.((?:\\[0-9a-fA-F]{1,6}\s?|\\.|-?[_a-zA-Z]|[\w-])(?:\\[0-9a-fA-F]{1,6}\s?|\\.|[\w-])*)/g;
+const unescapeClass = name =>
+  name.replace(/\\([0-9a-fA-F]{1,6})\s?|\\(.)/g, (_, hex, char) => hex ? String.fromCodePoint(parseInt(hex, 16)) : char);
 function auditClasses() {
   // The load event waits for every stylesheet, including imported ones.
   if (document.readyState !== "complete") return;
   const defined = new Set();
   const read = rules => {
     for (const rule of rules) {
-      for (const [, name] of rule.selectorText?.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g) ?? []) defined.add(name);
+      for (const [, name] of rule.selectorText?.matchAll(classSelector) ?? []) defined.add(unescapeClass(name));
       if (rule.cssRules) read(rule.cssRules);
       if (rule.styleSheet) read(rule.styleSheet.cssRules);
     }
@@ -258,7 +263,7 @@ const hints = {
   "push-disconnected": "The browser reconnects by itself. If this repeats, check the feed's route and any proxy timeouts; Network shows the event stream.",
   "push-closed": "Register the feed's route with .route(FEED.path(), FEED.route()), check the path and that it returns text/event-stream, then reload.",
   "missing-command-target": "Give the dialog or popover the id the button names, or mount it on this page. A mount_dialog component's id is its component id, such as 'task:1'.",
-  "unknown-class": "Use a class from the kit's README. A class that only hooks a script or a test should be a data attribute, such as data-feedback; a new visual pattern goes into the kit after the person approves it.",
+  "unknown-class": "Use a Basecoat component or a Tailwind utility (`placebo kit` lists them); a utility Tailwind could not generate is misspelled or uses a value the theme lacks. Run `placebo css`, or `placebo dev`, so the stylesheet has the classes the views use. A class that only hooks a script or a test should be a data attribute, such as data-feedback.",
   "invalid-command": "Point show-modal/close/request-close at a <dialog>, and show-/hide-/toggle-popover at an element with popover.",
   "unknown-behavior": "Check the name and module import. Register with behavior() before mounting, or reserve an asynchronous import with lazyBehavior().",
   "behavior-setup": "Inspect the original cause and setup function. Return a cleanup function or undefined.",
@@ -1375,7 +1380,7 @@ function showProgress() {
   progress.setAttribute("aria-hidden", "true");
   progress.dataset.placeboProgress = "";
   progress.style.cssText = "position: fixed; inset-block-start: 0; inset-inline-start: 0; z-index: 2147483647; " +
-    "block-size: 3px; inline-size: 0; background: var(--accent-bg, Highlight); transition: inline-size 8s cubic-bezier(0.1, 0.7, 0.2, 1)";
+    "block-size: 3px; inline-size: 0; background: var(--primary, Highlight); transition: inline-size 8s cubic-bezier(0.1, 0.7, 0.2, 1)";
   document.documentElement.append(progress);
   progress.getBoundingClientRect();
   progress.style.inlineSize = "90%";

@@ -241,7 +241,7 @@ into a field of the same name on the next record. The address and title
 change, the page starts at the top (or at the link's `#fragment`), and focus
 moves to the `autofocus` element or the first `h1`, which a screen reader
 then reads. A page that takes more than 300 ms shows a thin bar along the top
-in the kit's accent colour.
+in the theme's primary colour (`--primary`).
 
 Back and Forward read their page again, so it shows current data, and return
 to where it was scrolled. A save that replies with `.navigate(path)` goes

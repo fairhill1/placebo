@@ -36,6 +36,8 @@ use std::{
 /// before a handler runs, except on public paths, where `Option<User>` tells.
 #[derive(Clone)]
 pub struct User {
+    /// What the app's queries scope by: `WHERE owner_id = $1`.
+    #[allow(dead_code)]
     pub id: i64,
     pub email: String,
 }
@@ -62,9 +64,8 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for User {
 
 /// Paths anyone may open, signed in or not. Every other path needs a session.
 fn public(path: &str) -> bool {
-    let kit = placebo::KIT_PATH.trim_end_matches("{file}");
     matches!(path, "/login" | "/signup" | "/placebo.js")
-        || ["/auth/", "/static/", kit]
+        || ["/auth/", "/static/"]
             .into_iter()
             .any(|prefix| path.starts_with(prefix))
 }
@@ -332,9 +333,9 @@ fn sign_in_form(email: &str, next: &str, error: Option<&str>) -> Markup {
     };
     let fields = fields! { SignIn {
         @field next = Control::hidden(next.to_owned());
-        div .stack {
+        div ."flex flex-col gap-4" {
             @if let Some(error) = error {
-                p .alert #sign-in-error role="alert" { (error) }
+                div .alert data-variant="destructive" #sign-in-error role="alert" { (icon!("circle-alert")) h2 { (error) } }
             }
             div .field {
                 label for="sign-in-email" { "Email" }
@@ -344,7 +345,7 @@ fn sign_in_form(email: &str, next: &str, error: Option<&str>) -> Markup {
                 label for="sign-in-password" { "Password" }
                 @field password = password;
             }
-            button .btn .btn-block type="submit" { "Sign in" }
+            button .btn ."w-full" type="submit" { "Sign in" }
         }
     } };
     SIGN_IN.bind(&Component::new("account", "sign-in")).form(fields)
@@ -360,13 +361,13 @@ async fn login(user: Option<User>, headers: HeaderMap, Input(back): Input<Back>)
         &headers,
         "Sign in",
         html! {
-            section .card {
-                div .stack style="--stack-space: var(--space-lg)" {
-                    h1 { "Sign in" }
-                    (Component::new("account", "sign-in").mount(form))
-                }
+            section .card ."w-full" {
+                header { h1 ."text-xl font-semibold" { "Sign in" } }
+                section { (Component::new("account", "sign-in").mount(form)) }
             }
-            p .muted .solo-note { "No account yet? " a href="/signup" { "Sign up" } }
+            p ."text-sm text-muted-foreground" {
+                "No account yet? " a ."underline underline-offset-4 hover:text-foreground" href="/signup" { "Sign up" }
+            }
         },
     )
     .into_response()
@@ -409,9 +410,9 @@ fn sign_up_form(email: &str, error: Option<(&str, &str)>) -> Markup {
         _ => control,
     };
     let fields = fields! { SignUp {
-        div .stack {
+        div ."flex flex-col gap-4" {
             @if let Some(message) = message {
-                p .alert #sign-up-error role="alert" { (message) }
+                div .alert data-variant="destructive" #sign-up-error role="alert" { (icon!("circle-alert")) h2 { (message) } }
             }
             div .field {
                 label for="sign-up-email" { "Email" }
@@ -420,9 +421,9 @@ fn sign_up_form(email: &str, error: Option<(&str, &str)>) -> Markup {
             div .field {
                 label for="sign-up-password" { "Password" }
                 @field password = mark(Control::password().id("sign-up-password").required().max_length(MAX_PASSWORD as u32).autocomplete("new-password"), "password", "sign-up-hint");
-                p .field-hint #sign-up-hint { "At least " (MIN_PASSWORD) " characters." }
+                p #sign-up-hint { "At least " (MIN_PASSWORD) " characters." }
             }
-            button .btn .btn-block type="submit" { "Create account" }
+            button .btn ."w-full" type="submit" { "Create account" }
         }
     } };
     SIGN_UP.bind(&Component::new("account", "sign-up")).form(fields)
@@ -436,13 +437,13 @@ async fn signup(user: Option<User>, headers: HeaderMap) -> Response {
         &headers,
         "Sign up",
         html! {
-            section .card {
-                div .stack style="--stack-space: var(--space-lg)" {
-                    h1 { "Create your account" }
-                    (Component::new("account", "sign-up").mount(sign_up_form("", None)))
-                }
+            section .card ."w-full" {
+                header { h1 ."text-xl font-semibold" { "Create your account" } }
+                section { (Component::new("account", "sign-up").mount(sign_up_form("", None))) }
             }
-            p .muted .solo-note { "Have an account? " a href="/login" { "Sign in" } }
+            p ."text-sm text-muted-foreground" {
+                "Have an account? " a ."underline underline-offset-4 hover:text-foreground" href="/login" { "Sign in" }
+            }
         },
     )
     .into_response()
@@ -477,23 +478,25 @@ async fn sign_up(State(app): State<App>, Input(input): Input<SignUp>) -> Result<
 }
 
 /// The account menu at the foot of the sidebar: who is signed in, and
-/// signing out.
+/// signing out. It opens upward in the sidebar and downward in a phone's top
+/// bar, where it shows only the avatar.
 pub fn account_menu(user: &User) -> Markup {
     let initial = user.email.chars().next().unwrap_or('?').to_uppercase();
     let fields = fields! { SignOut {
-        button .menu-item type="submit" { (icon!("log-out")) "Sign out" }
+        button ."w-full" role="menuitem" type="submit" { (icon!("log-out")) "Sign out" }
     } };
     let component = Component::new("account", "menu");
     html! {
-        details .dropdown .shell-account data-placebo-behavior="dropdown" {
-            summary title=(user.email) {
-                // A hue of its own for each person, spread round the wheel.
-                span .avatar style=(format!("--avatar-hue: {}", user.id * 137 % 360)) aria-hidden="true" { (initial) }
-                span .shell-account-name { (user.email) }
-                (icon!("chevron-up"))
+        details .dropdown-menu ."group md:flex" data-placebo-behavior="dropdown" {
+            summary .btn data-variant="ghost" ."h-auto w-full justify-start p-1 md:px-2 md:py-1.5" title=(user.email) {
+                span .avatar data-size="sm" aria-hidden="true" { span { (initial) } }
+                span ."hidden truncate md:inline" { (user.email) }
+                span ."ms-auto hidden transition-transform group-open:rotate-180 md:inline" { (icon!("chevron-up")) }
             }
-            div .menu .menu-up {
-                (component.mount(SIGN_OUT.bind(&component).form(fields)))
+            div data-popover data-side="top" ."md:w-full max-md:top-full max-md:bottom-auto max-md:mt-1 max-md:mb-0 max-md:start-auto max-md:end-0" {
+                div role="menu" {
+                    (component.mount(SIGN_OUT.bind(&component).form(fields)))
+                }
             }
         }
     }
@@ -525,7 +528,8 @@ mod tests {
 
     #[test]
     fn only_account_pages_and_assets_are_public() {
-        for path in ["/login", "/signup", "/auth/login", "/auth/logout", "/static/app.css", "/placebo/kit/main.css", "/placebo.js"] {
+        for path in ["/login", "/signup", "/auth/login", "/auth/logout", "/static/app.css", "/placebo.js"] {
+
             assert!(public(path), "{path}");
         }
         for path in ["/", "/settings", "/theme", "/loginx", "/static"] {

@@ -43,7 +43,7 @@ placebo dev
 `placebo new` sets up the current directory, or the one it is given. The app
 is an empty shell on Postgres (a sidebar, Home, and Settings with the theme)
 behind sign-in (accounts with Argon2 passwords and database sessions, in
-`src/auth.rs`), with the kit, the styles test, and an
+`src/auth.rs`), styled with Tailwind and Basecoat, with the styles test and an
 `AGENTS.md` (read by Claude Code through `CLAUDE.md`) that gives coding agents
 this README's rules, the app's commands, and how to change its schema. Its
 database is `placebo_my_app` on the local server, created on the first debug
@@ -279,19 +279,18 @@ These apply to people and coding agents alike.
   creating or deleting a record, reply with `.navigate("/path")`. To update
   other open pages, call `feed.changed()` after the write, on a `Feed` the
   pages mount with `feed.mount()`; each page reads itself again.
-- **Styles:** pages compose the kit's classes, which its README lists. When the
-  design needs a component the kit lacks (a list row, a page header), write it
-  in the app's own `static/components.css`, from the kit's tokens, and
-  use it everywhere that pattern appears: don't approximate it out of layout
-  primitives. Spacing, type, colour, radii, and timing come only from the
-  tokens; a value the scale lacks is a new token, after the person approves
-  it. When a layout primitive needs other spacing, set its custom property to
-  a token on the element, such as `style="--stack-space: var(--space-xs)"` or
-  `style="--grid-min: var(--width-sm)"`;
-  write no other inline styles and no `<style>` elements. The styles test
-  (`placebo::styles::Check`) fails on what strays, and the console reports a
-  class no stylesheet defines as `[placebo:unknown-class]`; fix the cause.
-  Judge screenshots on how the page looks, not only on whether it works.
+- **Styles:** pages use Basecoat's components and Tailwind's utilities, which
+  `placebo kit` lists: a button is `.btn` and a card `.card`, never a stack of
+  utilities, and layout and spacing are utilities such as `flex gap-2` and
+  `md:grid-cols-3`. Spacing, type, colour, radii, and timing come only from
+  the theme's scale: no arbitrary values such as `p-[13px]` or `bg-[#fff]`; a
+  value the theme lacks is a new variable in `@theme`, after the person
+  approves it. A class list used twice is a Rust `const` or a function
+  returning the markup. Write no inline styles but custom properties, and no
+  `<style>` elements. The styles test (`placebo::styles::Check`) fails on what
+  strays, and the console reports a class no stylesheet defines, such as a
+  utility Tailwind could not generate, as `[placebo:unknown-class]`; fix the
+  cause. Judge screenshots on how the page looks, not only on whether it works.
 - **Verify in a browser:** compiling proves the Rust side agrees. Run the app and
   exercise the changed flows: valid saves, invalid input, independent drafts,
   conflicts, and any dialog or search. Placebo logs every failure in the console
@@ -321,7 +320,7 @@ showing the reply's contents. The runtime morphs that page into the document
 with [idiomorph](https://github.com/bigskysoftware/idiomorph): nodes, focus,
 and scroll stay, and only what differs changes. So a header, a count, or
 another panel that shows the saved data follows by itself, and so do the page's
-title and the attributes on its `<html>`, such as the kit's `data-theme`. A page rendered
+title and the attributes on its `<html>`, such as Basecoat's `dark` class. A page rendered
 before the one already shown never replaces it; a late reply then shows only
 in its own component. If the page cannot be rendered (for example, the record
 was deleted and its page answers 404), the reply shows in its component alone
@@ -475,53 +474,59 @@ release mode.
 ## Icons
 
 `placebo::icon!("sun")` renders a [Lucide](https://lucide.dev/icons) icon as
-inline SVG with the kit's `.icon` class: `button .btn { (icon!("sun")) "Light" }`.
+inline SVG the size of its text: `button .btn { (icon!("sun")) "Light" }`.
 The icons are vendored (Lucide 1.49.0, ISC) and looked up while compiling, so
 there is no CDN or script, a page carries only the icons it shows, and a
 misspelled name fails the build with the nearest names. Icons are
-`aria-hidden`: give an icon-only button a `span .visually-hidden` label.
+`aria-hidden`: give an icon-only button a `span .sr-only` label.
 
-## Styles stay on the kit's scale
+## Styles stay on the theme's scale
 
-Pages compose the CSS kit's classes; [kit/README.md](kit/README.md) lists
-them. A component the kit lacks goes in the app's own `static/components.css`,
-which `static/app.css` imports after the kit, built from the kit's tokens. What must not happen is
-drift: an agent that writes one-off values ends up with spacing, type sizes,
-and colours that differ from page to page. Maud accepts any class or
-attribute, so these checks run instead.
+Pages use [Basecoat](https://basecoatui.com)'s components and
+[Tailwind CSS](https://tailwindcss.com) v4's utilities;
+[kit/README.md](kit/README.md) (`placebo kit`) is the reference. The app's
+`styles/app.css` imports Tailwind and Basecoat, vendored in Placebo's `kit/`;
+`placebo dev` compiles it into `static/app.css` with Tailwind's standalone CLI
+as views and styles change, and `placebo css --minify` builds it for a
+release. Both copy the kit into the app's `.placebo/` first, so
+`cargo update -p placebo` updates Basecoat with the rest. Dark mode is
+Basecoat's `dark` class on `<html>`, rendered by the server.
+
+What must not happen is drift: an agent that writes one-off values ends up
+with spacing, type sizes, and colours that differ from page to page. Maud
+accepts any class or attribute, so these checks run instead.
 
 **In the browser**, the runtime reports each class that no stylesheet on the
-page defines, once, as `[placebo:unknown-class]`: usually a guess at the
-kit's names. A class that only hooks a script or a test belongs in a data
-attribute instead.
+page defines, once, as `[placebo:unknown-class]`: a misspelled utility, one
+Tailwind could not generate, or a guess at Basecoat's names. A class that only
+hooks a script or a test belongs in a data attribute instead.
 
 **In `cargo test`**, `placebo::styles::Check` fails on styles that left the scale:
 
 ```rust
 // tests/styles.rs
 #[test]
-fn styles_stay_in_the_kit() {
+fn styles_stay_in_the_theme() {
     placebo::styles::Check::new()
-        .app_css("static/app.css")
-        .app_css("static/components.css")
+        .app_css("styles/app.css")
         .views("src")
         .run();
 }
 ```
 
-The kit itself is served by Placebo (`.route(placebo::KIT_PATH,
-get(placebo::kit))`, imported as `@import url("/placebo/kit/main.css")`), so
-`cargo update -p placebo` updates it with the rest; re-skin it with tokens in
-`@layer tokens` in the app's stylesheet. Every rule in the app's stylesheets sits in one of the kit's
-layers, and nothing is `!important`. Outside `@layer tokens`, colours, font
-families, line heights, letter spacing, and durations are tokens; margins,
-padding, gaps, font sizes and weights, and radii are tokens or 0, and not
-scaled by a multiplier (`calc(var(--space-md) * 1.3)`); a font size is never
-a keyword such as `larger`; and nothing is in px but 1px. The views write no
-`<style>` element, and no `style=` attribute but one that sets custom
-properties: to tokens when written out, as in
-`style="--stack-space: var(--space-xs)"`, or to a value from data, as in
-`style=(format!("--badge-bg: {}", tag.colour))`.
+The views use no arbitrary value in a class (`p-[13px]`, `bg-[#fff]`; an
+arbitrary variant such as `[&>svg]:size-4` is fine), write no `<style>`
+element, and no `style=` attribute but one that sets custom properties: to a
+theme variable when written out, as in `style="--gap: var(--spacing)"`, or to
+a value from data, as in `style=(format!("--tag: {}", tag.colour))`. Every
+rule in the app's stylesheets sits in one of Tailwind's layers or is one of
+its at-rules (`@theme`, `@utility`...), nothing is `!important`, and no
+`@apply` uses an arbitrary value. Outside `@theme` and `@layer theme`,
+colours, font families, line heights, letter spacing, and durations are theme
+variables; margins, padding, gaps, font sizes and weights, and radii are
+theme variables or 0, and not scaled by a multiplier but the spacing unit's
+(`--spacing(4)`); a font size is never a keyword such as `larger`; and nothing
+is in px but 1px.
 
 ## Run this repository's demos
 

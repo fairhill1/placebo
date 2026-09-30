@@ -1,331 +1,136 @@
-# The kit: a layered, token-driven CSS system
+# The kit: Tailwind v4 and Basecoat
 
-Everything in this folder is a **vendorable** design system: plain CSS custom
-properties, cascade layers, and class names. No build step, no framework. To
-reuse it, copy the whole `kit/` folder. It knows nothing about Rust, Maud, or
-Placebo; a Placebo app is just one way to drive it.
+Pages are styled with [Tailwind CSS](https://tailwindcss.com) v4 utilities and
+[Basecoat](https://basecoatui.com)'s components, the shadcn/ui design as plain
+CSS classes, with Basecoat's theme as it ships. This folder holds only
+`basecoat/`: Basecoat's CSS (basecoat-css 1.0.2, MIT), vendored unchanged.
+Its JavaScript is not included.
 
-This file is the **contract**: the tokens you set, the classes you get, and the
-few non-obvious rules. If it isn't documented here, treat it as internal and
-subject to change.
-
----
-
-## Requirements
-
-- **A modern browser.** The kit uses `light-dark()`, OKLCH with relative color
-  syntax (`oklch(from …)`), `@starting-style`, `transition-behavior:
-  allow-discrete`, and `@layer`, with **no fallbacks**.
-  Baseline is roughly 2024+ evergreen browsers. Where `overlay` transitions are
-  unsupported, dialogs and popovers still close; only the exit fade is lost.
-- **Load `main.css` and nothing else from the kit.** It declares the layer order
-  and imports the other files into their layers:
-  ```css
-  @layer tokens, reset, base, layout, components, overrides;
-  ```
-  Serve the folder as static files so the `@import`s resolve next to `main.css`.
-- **`reset.css` is included.** Don't stack another reset on top.
-- **Bring your own font.** `--font-sans` is the system UI stack; the kit loads
-  no web fonts.
+This file is the **contract**: how the styles are built, the classes you get,
+and the rules. Basecoat's site shows each component's markup; where this file
+and the site differ (JavaScript), this file is right for a Placebo app.
 
 ---
 
-## Adding your app's CSS
+## How the stylesheet is built
 
-**Every app stylesheet enters a layer.** This is the one rule the whole scheme
-depends on. Unlayered styles beat *every* layered rule regardless of
-specificity, so a single unlayered file silently wins over the kit and the
-cascade order stops meaning anything. That includes tokens: an unlayered
-`:root { … }` outranks a layered state rule like
-`html[data-sidebar="collapsed"] { --sidebar-width: 3.5rem }`, and the state
-never applies.
+Tailwind generates the utilities a page uses by scanning the app's sources, so
+the stylesheet is compiled, not written by hand:
 
-Make your own entry stylesheet and import the kit first:
+| File | What it is |
+|---|---|
+| `styles/app.css` | The app's stylesheet: the input. Committed. |
+| `.placebo/kit/` | This folder, copied from the Placebo the app builds against. Ignored by git. |
+| `static/app.css` | Tailwind's output, which pages link. Ignored by git. |
 
 ```css
-/* static/app.css: the only stylesheet the page links */
-@import url("/placebo/kit/main.css");   /* served by placebo::kit */
-@import url("app/tokens.css") layer(tokens);         /* re-skin: token values only */
-@import url("app/components.css") layer(components); /* your components */
-@import url("app/overrides.css") layer(overrides);   /* rare, deliberate exceptions */
+/* styles/app.css */
+@import "tailwindcss";
+@import "../.placebo/kit/basecoat/basecoat.css";
 ```
 
-```html
-<link rel="stylesheet" href="/static/app.css">
-```
-
-Within one layer, specificity then source order still decide. Your components
-come after the kit's in `components`, so a same-specificity rule of yours wins.
-Anything in `overrides` beats every component whatever its selector; if that
-layer grows, a component is missing a variant.
+- `placebo dev` runs Tailwind in watch mode beside the app: a class added to a
+  view, or a rule to `styles/app.css`, rebuilds `static/app.css`, and the
+  browser reloads.
+- `placebo css` builds once; `placebo css --minify` before a release build.
+  Deploy `static/app.css` with the binary.
+- Both copy the kit into `.placebo/kit` first, so `cargo update -p placebo`
+  updates Basecoat with the rest of Placebo.
+- Tailwind is its standalone CLI (no Node), pinned by Placebo and downloaded
+  once into `~/.cache/placebo/`. `PLACEBO_TAILWINDCSS=/path/to/tailwindcss`
+  uses another binary.
+- Tailwind finds classes in any file it scans, so a class must appear whole in
+  the source: `."text-sm"` or `const ROW: &str = "flex gap-2"`, never
+  `format!("text-{size}")`.
 
 ---
 
-## Tokens
+## The theme
 
-### Public: set these to theme
-Override in `@layer tokens` on `:root` (or any scope). Every colour is a
-`light-dark(light, dark)` pair; set both halves, hand-picked, never computed.
+Basecoat's, unchanged. Light is the default; the `dark` class on `<html>`,
+rendered by the server from the stored choice, switches to dark, and
+Tailwind's `dark:` variant follows it.
 
-| Token | Purpose |
+Colours are Basecoat's (shadcn's) variables, each with a Tailwind colour
+utility (`bg-primary`, `text-muted-foreground`, `border-border`...):
+`--background`/`--foreground`, `--card`, `--popover`, `--primary`,
+`--secondary`, `--muted`, `--accent` (each with a `-foreground`),
+`--destructive`, `--border`, `--input`, `--ring`, `--sidebar-*`,
+`--chart-1 … 5`, and `--radius`, which `rounded-sm … rounded-xl` step from.
+Spacing, type, weights, shadows, and breakpoints are Tailwind's defaults
+(`p-4`, `text-sm`, `font-medium`, `shadow-sm`, `md:`).
+
+To re-skin, override the variables in `styles/app.css`, light in `:root` and
+dark in `.dark`, inside `@layer base`, as on
+[basecoatui.com](https://basecoatui.com/installation). A new scale value (a
+colour, a width) is a Tailwind theme variable in `@theme`, such as
+`--color-brand` for `bg-brand`, after the person approves it.
+
+---
+
+## The rules
+
+- **Components first, then utilities.** Use Basecoat's component for what it
+  covers (a button is `.btn`, never a stack of utilities); lay out and space
+  with utilities (`flex gap-2`, `grid md:grid-cols-3`, `text-muted-foreground`).
+- **Values come from the theme.** No arbitrary values in classes (`p-[13px]`,
+  `bg-[#fff]`, `grid-cols-[auto_1fr]`); an arbitrary *variant* such as
+  `[&>svg]:size-4` or `aria-[current=page]:bg-muted` is fine. The styles test
+  fails on an arbitrary value in a view or an `@apply`, and on a raw colour,
+  size, or duration in `styles/app.css`.
+- **A pattern used twice is a Rust `const` of classes** (`NAV_LINK` in the
+  starter) or a function returning its markup. Don't copy a long class list
+  between views.
+- **Every rule is in a Tailwind layer** (`theme`, `base`, `components`,
+  `utilities`) or is one of Tailwind's at-rules (`@theme`, `@utility`,
+  `@custom-variant`...). An unlayered rule beats every utility, so `md:` and
+  `hover:` stop working on what it styles. Nothing is `!important`.
+- **A utility overrides a component.** Utilities come after components, so
+  `."w-full"` on a `.btn` wins without a fight.
+- **No inline styles**, but custom properties: a theme variable written out
+  (`style="--gap: var(--spacing)"`) or a value from data
+  (`style=(format!("--tag: {}", tag.colour))`), read by a class such as
+  `bg-(--tag)`. No `<style>` elements.
+- **Hover only where a pointer can hover.** Tailwind v4's `hover:` already
+  applies only under `@media (hover: hover)`.
+- **Headings are unstyled.** Tailwind's reset makes `h1` plain text; give a
+  page heading its size (`text-2xl font-semibold tracking-tight`). Inside a
+  `.card > header`, Basecoat styles the `h2`.
+
+---
+
+## Components
+
+Basecoat's markup is on its site, per component. Variants and sizes are data
+attributes: `button .btn data-variant="outline" data-size="sm"`.
+
+### Pure CSS: use freely
+| Component | Markup |
 |---|---|
-| `--surface` | Page ground. |
-| `--surface-raised` | Cards, modals, inputs: anything standing off the page. |
-| `--surface-sunken` | A well: code, badges, notices, ghost-button hover. |
-| `--surface-hover` / `--surface-raised-hover` | Pointer-over tints, measured from `--surface` and `--surface-raised` respectively. Use the one matching the ground the element stands on. |
-| `--text`, `--text-muted` | Ink and secondary ink. |
-| `--border`, `--border-strong` | Resting hairline and control/emphasis border. |
-| `--accent-bg`, `--accent-fg`, `--accent-bg-hover`, `--accent-ink` | **The brand, as a set of four.** Fill, the ink on that fill, the hover fill, and the accent used as text on the page (links). Change them together. |
-| `--danger-bg`, `--danger-fg`, `--danger-bg-hover` | Destructive actions and error alerts. Keep its chroma above the accent's so danger outranks brand. |
-| `--success-bg`, `--success-fg` | Success alerts. |
-| `--shadow-1`, `--shadow-2` | Elevation: resting, floating. Neutral black; tint them if the ground gets real chroma. |
-| `--scrim` | The one backdrop for every dialog and popover. |
-| `--font-sans`, `--font-mono` | Font stacks. |
-| `--text-2xs … --text-2xl` | Type scale (`0.65rem … 2.25rem`). |
-| `--leading-tight`, `--leading-normal` | Line heights: headings, body. |
-| `--tracking-tight`, `--tracking-snug`, `--tracking-wide` | Letter spacing: h1, h2, small caps and eyebrows. |
-| `--weight-normal`, `--weight-medium`, `--weight-bold` | Font weights. |
-| `--space-3xs … --space-3xl` | Spacing scale (`0.125rem … 5.5rem`). |
-| `--control-size` | **Exact height of every text input, select, and button.** |
-| `--icon-sm`, `--icon-md`, `--icon-lg` | Icon sizes. `sm` is in `em` and tracks the surrounding text. |
-| `--measure` | Maximum line length for paragraphs (`68ch`). |
-| `--wrapper` | Maximum page width for `.wrapper` (`70rem`). |
-| `--width-xs … --width-xl` | Widths of things side by side: a `.grid` column, a sidebar, a dialog (`12rem … 34rem`). A view sets one with `style="--grid-min: var(--width-xs)"`. |
-| `--border-width` | Every border and hairline. |
-| `--radius-sm`, `--radius-md`, `--radius-lg`, `--radius-full` | Corner radii. |
-| `--focus-ring-size`, `--focus-offset` | Focus ring width and distance from the control. |
-| `--ease`, `--duration-fast`, `--duration-base`, `--duration-slow` | Motion scale: colour change, arrive/leave, size change. |
-| `--select-chevron` | The select arrow, as a data URI. Scheme-independent because a data URI can't read a custom property. |
+| Button | `.btn`, `data-variant` = `secondary`, `outline`, `ghost`, `link`, `destructive`; `data-size` = `xs`, `sm`, `lg`, `icon`, `icon-sm`... `.button-group` joins them. |
+| Badge | `.badge`, same variants. |
+| Card | `.card` holding `header` (an `h2`, a `p`), `section`, `footer`; `data-size="sm"`. |
+| Alert | `.alert` holding an icon, an `h2`, and a `section`; `data-variant="destructive"`. |
+| Form | `.field` wrapping a `label`, the control, and a `p` hint. Inputs, selects, and textareas are styled inside a `.field` or with `.input`, `.select`, `.textarea`. `.fieldset` groups fields. A checkbox with `role="switch"` is a switch. |
+| Table | `.table` in a `.table-container`. |
+| Avatar | `.avatar` holding an `img` or a `span` of initials; `data-size`. |
+| Others | `.accordion` (of `details`), `.breadcrumb`, `.kbd`, `.progress`, `.skeleton`, `.empty`, `.item`, `[data-tooltip]`. |
 
-### Derived: do not set (computed for you)
-| Token | How it's produced |
+### With Placebo's drivers
+| Component | How |
 |---|---|
-| `--control-size-sm` | `--control-size × 0.78`. Controls inside controls, or in a row of headings. |
-| `--radius-control` | Points at `--radius-lg`. Inputs, selects and buttons share it so a form row rounds as one. Re-point it to another radius step, never to a literal. |
-| `--focus-ring` | `--focus-ring-size solid --accent-bg`. |
-| `--transition`, `--transition-base`, `--transition-slow` | Each `--duration-*` with `--ease`. Components use these, never a raw duration. |
-| `--press-scale`, `--press-scale-strong` | How far a `.btn` shrinks while pressed; `.btn-icon` takes the deeper step. |
-| `--track`, `--thumb` | A tint of `--text` over whatever is underneath: the groove of a `.segmented` or `.switch` reads darker on a light surface and lighter on a dark one, on any surface. `--thumb` is `--surface-raised` in light mode. |
+| Dialog | `dialog.dialog` holding one element with `header`, `section`, `footer`. Open it with `showModal()`: a `command="show-modal"` button, or `Component::dialog`. |
+| Dropdown menu | `details.dropdown-menu` with a `summary.btn` and a `div data-popover` holding `div role="menu"` of `role="menuitem"` buttons or links. The starter's `dropdown` behavior closes it on a press outside or Escape. `data-side="top"` opens it upward. |
 
-### Per-instance inputs
-Layout primitives and one component read a custom property with a default, so
-an instance adjusts itself without a modifier class. Set these inline or on
-the element, not in `:root`.
+### Not available
+Basecoat's JavaScript is not loaded, so its tabs, custom select, combobox,
+command palette, JS popover, toast, drawer, and collapsible sidebar are out.
+Use a native `select`, radios styled with utilities for a small choice (the
+starter's theme picker), links for tabs, and
+a `dialog` for a drawer. Ask the person before adding a script.
 
-| Property | Read by | Default |
-|---|---|---|
-| `--stack-space` | `.stack` | `--space-md` |
-| `--cluster-space` | `.cluster` | `--space-sm` |
-| `--grid-space`, `--grid-min` | `.grid` | `--space-md`, `--width-sm` |
-| `--sidebar-width` | `.sidebar` | `--width-sm` |
-| `--badge-bg` | `.badge` | none (see below) |
-| `--shell-width` | `.shell` | `--width-sm` |
-| `--avatar-size`, `--avatar-hue` | `.avatar` | `--control-size`, `260` |
-
----
-
-## Theming
-
-### Light and dark
-Set `data-theme` on `<html>`, rendered by the server from the stored
-preference, so the right scheme is in the first byte of HTML:
-
-| Attribute | Scheme |
-|---|---|
-| none, or `data-theme="system"` | follows the OS |
-| `data-theme="light"` | light |
-| `data-theme="dark"` | dark |
-
-That is the whole switch: three rules in `base.css` set `color-scheme`, and
-every `light-dark()` token resolves against it. No component knows themes
-exist. **Never add a `@media (prefers-color-scheme)` block or a
-`[data-theme="dark"]` token block**; a second copy of the palette drifts the
-first time someone adds a token in a hurry.
-
-### Re-skinning
-The default palette is a near-neutral cool ground (hue 250) under a warm accent
-(hue 42). The identity is that split, so to re-brand, move the four accent
-tokens and leave the ground quiet. In light mode the tint lives in the ink and
-the surfaces are almost pure paper; in dark mode the surfaces carry the tint and
-the ink goes neutral. `tokens.css` explains why, and it's worth keeping if you
-pick a new hue.
-
-### Runtime colours
-A colour that arrives from the database (a user-picked tag, a tenant theme)
-can't have a hand-picked foreground. Pass it as `--badge-bg` and the badge flips
-its text to black or white by lightness, in CSS:
-
-```html
-<span class="badge" style="--badge-bg: oklch(70% 0.15 145)">Shipped</span>
-```
-
-Design-time colours always get a paired foreground token instead. Don't add a
-contrast library for either case.
-
----
-
-## The rules to internalize
-
-- **Controls don't negotiate height.** `base.css` gives every text input,
-  select, button and `.btn` an exact `block-size: var(--control-size)`, and
-  draws the select arrow itself (`appearance: none`). A row of input + select +
-  button lines up with no per-form fixes. Don't "fix" a row with
-  `align-items: stretch`.
-- **Components never set their own outer spacing.** The layout parent
-  (`.stack`, `.cluster`, `.grid`, a flex `gap`) spaces its children. A component
-  with a `margin` stops composing.
-- **A new value means the scale is incomplete.** Adding a feature adds
-  component lines and zero token lines. If a component needs a colour or size
-  the scale doesn't have, fix the scale, don't hardcode a literal.
-- **Hover only where a pointer can hover.** Every `:hover` sits inside
-  `@media (hover: hover)`; on touch, a bare hover rule is a highlight that
-  sticks after the tap.
-- **Reduced motion is handled once.** The reset cancels every transition and
-  animation, including view transitions. Components never check the preference.
-- **A press shows at once.** A `.btn` shrinks the moment it is pressed and
-  eases back on release, before any request exists. The reset removes the
-  platform's grey tap flash, so on touch this is the feedback that a tap landed.
-
----
-
-## Components (class reference)
-
-### Layout
-`.wrapper` (centred, max `--wrapper`, inline padding) · `.page` (block
-padding for the main region: `main.wrapper.page`) · `.stack` (vertical
-rhythm) · `.cluster` (+ `.cluster-between`, `.cluster-end`) · `.grid`
-(auto-fit columns) · `.sidebar` (two columns that stack below 60% content
-width; first child is the sidebar) · `.center`
-
-### Buttons
-`.btn` (accent fill) + `.btn-ghost` · `.btn-danger` · `.btn-danger-ghost` ·
-`.btn-block` (full width) · `.btn-sm` · `.btn-icon` · `.btn-round`
-`.card-actions`: a row of same-size buttons.
-
-Use `.btn-danger` for the one destructive answer in a dialog, and
-`.btn-danger-ghost` for destructive actions repeated per row.
-
-### Card
-`.card` · `.card-link` (the whole card is the link: put the link in the `h2`;
-any second link inside needs `position: relative`) · `.card-head`: a
-`.card-flush`'s heading row, its title (`h2`) and actions, ruled off from
-the list under it.
-
-### Stat
-`.card.stat` holding `.stat-label`, `.stat-value` (the figure), and an optional
-`.stat-note`; several in a `.grid`.
-
-### Form
-`.field` wrapping a `label`, the control, and an optional `.field-hint`.
-Inputs, selects and textareas are styled by element, with no class needed.
-
-### List
-`ul.list` of `li.list-row`, one record per row, divided by hairlines; put it
-in a `.card.card-flush` to run edge to edge. A row lines up a leading control
-(a `.btn-icon`, or an icon in `.list-lead`), the record's text as
-`.list-main`, and trailing actions. An `a.list-main` reads as text and makes
-the whole row its hit area; add `.muted` for a finished record. An adding row
-is a `details.list-main` holding `summary.list-add` ("Add ...") and, when
-open, a `.list-line` with the `.list-lead` icon and an `input.list-input`.
-Inside `.list-main`, `.list-title` over `.list-sub` gives a row two lines: the
-record's name and a quieter line about it. `.list-aside` is trailing text
-before the row's actions: a date, a count, an amount.
-
-### Shell and nav
-`body.shell` holds `aside.shell-side` (a `.shell-brand` link with a
-`.shell-mark`, a `nav.nav` of links, and a `.shell-foot` pinned to its bottom)
-and `main.shell-main`. Mark the current page's link `aria-current="page"`.
-The foot's items stack centred in the sidebar and sit in a row in the top bar.
-`details.dropdown.shell-account`, last in the foot, is who is signed in: its
-`summary` holds an `.avatar`, a `.shell-account-name`, and a `chevron-up`
-icon, and its `.menu` their actions (signing out). It spans the sidebar's
-foot with the menu opening upward and the chevron turned over while it is
-open, and shows only the avatar in the top bar.
-Under 48rem the sidebar becomes a bar across the top and the `.nav` a tab bar
-along the bottom (icon above name), from the same markup. `.shell-wide` shows an
-element only in the sidebar layout, `.shell-narrow` only in the top bar. They
-sit in the `overrides` layer, so a class of yours that sets `display` on the
-same element cannot undo them.
-
-### Solo
-`body.solo` is a page without the shell, such as signing in: it centres one
-`main`, `--width-md` wide, in the window. A `.shell-brand` over the card and
-a `.solo-note` under it (a link to signing up) are centred.
-
-### Menu
-`details.dropdown` with a `summary` (often a `.btn`) and a `.menu` of
-`.menu-item` links or buttons (+ `.menu-item-danger`), with `.menu-label`
-captioning a group. `.menu-end` opens it leftwards from the right edge,
-`.menu-up` above its control. Give the details the starter's `dropdown`
-behavior so a press outside or Escape closes it.
-
-### Segmented, switch
-`.segmented`: one choice of 2 to 5 with a sliding thumb. On radios
-(`Control::radios(..).class("segmented")`) or on a `nav` of links, the
-current one `aria-current="page"`. `input.switch`: a checkbox drawn as an
-on/off switch; `.switch-field` puts a label on the left and it on the right.
-
-### Pager
-`nav.pager` of `.page-step` (previous, next), `.page-num`, and `.page-gap`
-(an elision). The current page is `aria-current="page"`; an end with nowhere
-to go is `aria-disabled="true"`.
-
-### Avatar, key/value
-`img.avatar` for a picture; `span.avatar` for initials on a gradient from
-`--avatar-hue`. `dl.kv` of `dt`/`dd` pairs: a record's facts.
-
-### Table
-`.table`. Row hover is measured for a table on a `.card`.
-
-### Badge
-`.badge` · runtime colour via `--badge-bg`
-
-### Feedback
-`.alert` (danger by default) + `.alert-success` · `.alert-close`
-`.notice`: a quiet, neutral statement about the page (an empty list, a
-read-only record)
-
-### Modal
-`dialog.modal` wrapping `.modal-panel` · `.modal-close`. Put the padding on
-`.modal-panel`, not the dialog, so a click on the visible panel never counts as
-a backdrop click.
-
-### Icon and text
-`.icon` (inline SVG at `--icon-sm`) · `.lede` · `.muted` · `.visually-hidden`
-
----
-
-## What's pure CSS vs. needs a JS driver
-
-**Pure CSS:** everything except opening a modal. Top-layer entry and exit
-animations for every `<dialog>` and `[popover]` live in `base.css`, so a
-native `popover` + `popovertarget` needs no script at all.
-
-**Needs a driver:** `dialog.modal` must be opened with `showModal()`, which
-gives you the backdrop, focus trap and Escape for free. A dialog shown any
-other way (the `open` attribute alone) stays hidden on purpose, because a
-non-modal dialog renders inline at the bottom of the page.
-
----
-
-## Not in scope (yet)
-
-- No styling for checkboxes, radios, range or file inputs beyond the browser's
-  own. They are excluded from the control sizing rules, not restyled.
-- No page shell (header, footer, sticky layout), tabs, segmented controls,
-  toast container, avatar, or skeletons.
-- No styles for framework state such as `aria-busy`; that belongs to the app
-  or the framework, not the kit.
-- No class namespacing. Classes are unprefixed (`.btn`, `.card`); an app that
-  defines its own `.btn` merges with the kit's inside `components`.
-- No npm package, minified bundle, or single-file build. The `@import`s are
-  fetched as separate requests.
-
----
-
-## Origin
-
-Extracted from peqori's `static/css`: the layer scheme, tokens, reset, base,
-layout, and the generic primitives, with app-specific tokens and components
-removed. One structural change follows PHARMA: tokens live in their own layer
-instead of being unlayered.
+### Icons
+`icon!()` renders an SVG the size of its text; Basecoat sizes it inside a
+button, alert, or menu item. Size one elsewhere with a utility on its parent,
+such as `[&>svg]:size-5`. Label an icon-only button with
+`span .sr-only { "Delete" }`.

@@ -1,4 +1,4 @@
-//! `placebo rules` and `placebo kit`: Placebo's rules and the CSS kit's
+//! `placebo rules` and `placebo kit`: Placebo's rules and the styles'
 //! reference, from the Placebo the app in the current directory builds
 //! against, so they match it after `cargo update -p placebo`. Outside an app,
 //! or when Cargo cannot say, this CLI's own copies.
@@ -40,7 +40,7 @@ fn read(source: Option<&Path>, file: &str, own: &str) -> String {
 
 /// The directory of the `placebo` package Cargo resolves for the current
 /// directory: a clone, or Cargo's checkout of the repository.
-fn source() -> Option<PathBuf> {
+pub fn source() -> Option<PathBuf> {
     let output = Command::new("cargo")
         .args(["metadata", "--format-version", "1"])
         .stderr(std::process::Stdio::null())

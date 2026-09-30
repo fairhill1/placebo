@@ -1,4 +1,0 @@
-/* The only stylesheet the page links: the kit, then the app's own files.
-   Re-skin the kit with tokens in `@layer tokens` here. */
-@import url("/placebo/kit/main.css");
-@import url("components.css");

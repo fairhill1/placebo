@@ -33,9 +33,10 @@ pub use placebo_macros::fields;
 /// A [Lucide](https://lucide.dev/icons) icon as inline SVG, for Maud:
 /// `button .btn { (icon!("check")) "Save" }`. The name is checked while
 /// compiling, and only the icons an app names are in its binary and pages.
-/// The SVG carries the kit's `.icon` class and `aria-hidden`, so an icon
+/// The SVG is the size of its text (Basecoat sizes it inside a button) and
+/// `aria-hidden`, so an icon
 /// with no text beside it needs a visually hidden label:
-/// `span .visually-hidden { "Delete" }`.
+/// `span .sr-only { "Delete" }`.
 ///
 /// ```compile_fail
 /// let _ = placebo::icon!("chek"); // Lucide has no icon `chek`. Did you mean `check`?
@@ -315,37 +316,6 @@ pub async fn runtime() -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        content,
-    )
-        .into_response()
-}
-
-/// Where [`kit`] serves the CSS kit; an app's stylesheet starts with
-/// `@import url("/placebo/kit/main.css");`.
-pub const KIT_PATH: &str = "/placebo/kit/{file}";
-
-/// Serve the CSS kit embedded in this crate, as [`runtime`] serves the
-/// script, so an app's kit is always the one its Placebo version ships and
-/// `cargo update -p placebo` updates it: `.route(placebo::KIT_PATH,
-/// get(placebo::kit))`.
-pub async fn kit(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
-    let Some((name, shipped)) = styles::KIT.iter().find(|(name, _)| *name == file) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    // Placebo's own kit edits show without rebuilding the app.
-    #[cfg(all(feature = "dev", debug_assertions))]
-    let content = std::fs::read_to_string(format!("{}/kit/{name}", env!("CARGO_MANIFEST_DIR")))
-        .unwrap_or_else(|_| (*shipped).to_owned());
-    #[cfg(not(all(feature = "dev", debug_assertions)))]
-    let content = {
-        let _ = name;
-        *shipped
-    };
-    (
-        [
-            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
         content,

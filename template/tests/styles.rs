@@ -1,8 +1,7 @@
 #[test]
-fn styles_stay_in_the_kit() {
+fn styles_stay_in_the_theme() {
     placebo::styles::Check::new()
-        .app_css("static/app.css")
-        .app_css("static/components.css")
+        .app_css("styles/app.css")
         .views("src")
         .run();
 }

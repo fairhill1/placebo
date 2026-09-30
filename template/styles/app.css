@@ -1,0 +1,7 @@
+/* The app's stylesheet: Tailwind, then Basecoat's components and theme.
+   `placebo dev` compiles it into static/app.css on every change; `placebo
+   css --minify` before a release. Re-skin with Basecoat's variables in
+   `:root` and `.dark`, as on basecoatui.com; `cargo test` fails on values off
+   the theme. */
+@import "tailwindcss";
+@import "../.placebo/kit/basecoat/basecoat.css";

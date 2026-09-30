@@ -1,30 +1,31 @@
 /* One problem of each kind, next to what the check allows. */
-@import url("kit/main.css");
+@import "tailwindcss";
 
-@layer tokens {
-  :root { --brand: #c0392b; --hairline: 3px; }
+@theme {
+  --color-brand: #c0392b; --hairline: 3px;
 }
 
 @layer components {
   .film-layout { --sidebar-width: 17rem; }
   .eyebrow { letter-spacing: var(--tracking-wide); text-underline-offset: 0.4em; }
-  .bleed { margin-inline: calc(var(--space-md) * -1); line-height: var(--leading-tight); }
-  .fade { transition: opacity var(--transition); font-family: var(--font-mono); }
-  .facts > div { grid-template-columns: 8rem 1fr; gap: var(--space-sm); }
-  .card-quiet { color: var(--text-muted); background: transparent; margin: 0 auto; }
+  .bleed { margin-inline: calc(var(--spacing) * -4); line-height: var(--leading-tight); }
+  .fade { transition: opacity var(--default-transition-duration); font-family: var(--font-mono); }
+  .facts > div { grid-template-columns: 8rem 1fr; gap: --spacing(2); }
+  .card-quiet { color: var(--color-muted-foreground); background: transparent; margin: 0 auto; }
 
   .notice-strong { color: #333; }
   .notice-warm { background: rgb(250 240 230); }
   .notice-plain { border: 1px solid White; }
-  .notice-roomy { padding: 0.3rem var(--space-sm); }
-  .notice-shadow { box-shadow: 0 2px 4px var(--scrim); }
-  .notice-loud { font-weight: var(--weight-bold) !important; }
-  .notice-scaled { padding: calc(var(--space-md) * 1.3); }
+  .notice-roomy { padding: 0.3rem var(--spacing); }
+  .notice-shadow { box-shadow: 0 2px 4px var(--color-black); }
+  .notice-loud { font-weight: var(--font-weight-bold) !important; }
+  .notice-scaled { padding: calc(var(--text-sm) * 1.3); }
   .notice-tall { line-height: 1.4; }
   .notice-tracked { letter-spacing: 0.06em; }
   .notice-big { font-size: larger; }
   .notice-serif { font-family: Georgia, serif; }
   .notice-slow { transition: opacity 180ms; }
+  .notice-odd { @apply rounded-md p-[3px]; }
 }
 
 .stray { display: block; }

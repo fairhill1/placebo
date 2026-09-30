@@ -11,7 +11,7 @@ behavior("autosave", element => {
   return () => element.removeEventListener("change", save);
 });
 
-// A kit menu (<details class="dropdown">) closes on a press outside it, which
+// A menu (<details class="dropdown-menu">) closes on a press outside it, which
 // then does nothing else, and on Escape. Put the behavior on the <details>.
 behavior("dropdown", details => {
   let outside = false;
@@ -22,7 +22,7 @@ behavior("dropdown", details => {
     if (!outside) return;
     outside = false;
     details.open = false;
-    if (!event.target.closest?.(".dropdown > summary")) {
+    if (!event.target.closest?.(".dropdown-menu > summary")) {
       event.preventDefault();
       event.stopPropagation();
     }

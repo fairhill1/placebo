@@ -1,5 +1,6 @@
 //! Development supervisor. Cargo remains the compiler; this process owns its
 //! rebuild loop and the running application. Browser reload lives in the app.
+mod css;
 mod docs;
 mod new;
 
@@ -28,6 +29,7 @@ enum Task {
     New(PathBuf),
     Rules,
     Kit,
+    Css { minify: bool },
 }
 
 fn options() -> Result<Option<Task>, String> {
@@ -42,7 +44,7 @@ fn options() -> Result<Option<Task>, String> {
             .is_some_and(|arg| help(Some(arg)))
     {
         println!(
-            "Placebo development tools\n\n  placebo new [PATH]\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n  placebo rules\n  placebo kit\n\n`new` creates a starter app on Postgres, with an AGENTS.md for coding agents,\nin PATH or, without it, the current directory. Its database is placebo_NAME on\nthe local server.\n\n`rules` prints Placebo's rules, and `kit` the CSS kit's tokens and classes, from\nthe Placebo the app in the current directory builds against.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
+            "Placebo development tools\n\n  placebo new [PATH]\n  placebo dev [--bin NAME | --example NAME] [--features FEATURES]\n  placebo css [--minify]\n  placebo rules\n  placebo kit\n\n`new` creates a starter app on Postgres, with an AGENTS.md for coding agents,\nin PATH or, without it, the current directory. Its database is placebo_NAME on\nthe local server.\n\n`css` compiles styles/app.css into static/app.css with Tailwind, which it\ndownloads once; `dev` runs it on every change. Run `css --minify` before a\nrelease build.\n\n`rules` prints Placebo's rules, and `kit` the styles' reference (Tailwind and\nBasecoat), from the Placebo the app in the current directory builds against.\n\n`dev` runs from the Cargo package directory. Without --bin or --example it runs\nthe package's binary; without --features it enables `dev`. Rust edits rebuild\nand restart the app; the app's Placebo dev layer handles browser reload. Ctrl-C stops."
         );
         return Ok(None);
     }
@@ -53,6 +55,13 @@ fn options() -> Result<Option<Task>, String> {
             _ => Err("Expected `placebo new [PATH]`; use --help for usage.".into()),
         };
     }
+    if first.as_deref() == Some("css") {
+        return match (args.next().as_deref(), args.next()) {
+            (None, None) => Ok(Some(Task::Css { minify: false })),
+            (Some("--minify"), None) => Ok(Some(Task::Css { minify: true })),
+            _ => Err("Expected `placebo css [--minify]`; use --help for usage.".into()),
+        };
+    }
     if let Some(task @ ("rules" | "kit")) = first.as_deref() {
         if args.next().is_some() {
             return Err(format!("`placebo {task}` takes no arguments."));
@@ -61,7 +70,7 @@ fn options() -> Result<Option<Task>, String> {
     }
     if first.as_deref() != Some("dev") {
         return Err(
-            "Expected `placebo dev`, `new`, `rules`, or `kit`; use --help for usage.".into(),
+            "Expected `placebo dev`, `new`, `css`, `rules`, or `kit`; use --help for usage.".into(),
         );
     }
     let mut target = None;
@@ -273,6 +282,14 @@ async fn supervise(options: Options) -> io::Result<()> {
     watcher
         .watch(&root, RecursiveMode::Recursive)
         .map_err(io::Error::other)?;
+    // The stylesheet rebuilds beside the app; the app's reload layer sees
+    // static/app.css change.
+    let mut styles = if root.join(css::INPUT).is_file() {
+        let (tailwind, arguments) = css::watch_command(&root)?;
+        Some(command(tailwind).args(arguments).stdin(Stdio::null()).spawn()?)
+    } else {
+        None
+    };
     let mut server: Option<Child> = None;
     let mut building: Option<Build> = None;
     let mut dirty = true;
@@ -327,6 +344,9 @@ async fn supervise(options: Options) -> io::Result<()> {
     if let Some(mut child) = server {
         stop(&mut child).await;
     }
+    if let Some(mut child) = styles.take() {
+        stop(&mut child).await;
+    }
     eprintln!("[placebo:stopped] Development processes stopped.");
     result
 }
@@ -338,6 +358,7 @@ async fn main() {
         Ok(Some(Task::New(path))) => new::run(&path),
         Ok(Some(Task::Rules)) => docs::rules(),
         Ok(Some(Task::Kit)) => docs::kit(),
+        Ok(Some(Task::Css { minify })) => css::run(minify),
         Ok(None) => return,
         Err(error) => Err(io::Error::other(error)),
     };

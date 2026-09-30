@@ -125,20 +125,23 @@ message. After the page loads, and after each change to the DOM, the runtime
 reports each such button once as `[placebo:missing-command-target]` or
 `[placebo:invalid-command]`, naming the button, the id, and the command.
 
-## Styles outside the kit
+## Styles outside the theme
 
 After the page and its stylesheets load, and after each change to the DOM,
 the runtime reports each class that no stylesheet on the page defines, once,
-as `[placebo:unknown-class]`, naming the element. It is usually a guess at the
-kit's names; a class that only hooks a script or a test should be a data
-attribute. When a stylesheet from another site hides its rules, the check is
-skipped.
+as `[placebo:unknown-class]`, naming the element. It is usually a misspelled
+utility, one Tailwind could not generate, or a guess at Basecoat's names; a
+stylesheet built before the view changed (without `placebo dev` or
+`placebo css`) lacks the new utilities too. A class that only hooks a script
+or a test should be a data attribute. When a stylesheet from another site
+hides its rules, the check is skipped.
 
 The styles test, `placebo::styles::Check`, reports the rest in `cargo test`:
-`[placebo:unlayered]` for a rule outside the kit's layers,
-`[placebo:important]`, `[placebo:raw-value]` for a value that should be a
-token, and `[placebo:style-element]` and `[placebo:inline-style]` in the
-views. See [styles](../README.md#styles-stay-in-the-kit).
+`[placebo:unlayered]` for a rule outside Tailwind's layers,
+`[placebo:important]`, `[placebo:raw-value]` for a value that should come
+from the theme, `[placebo:arbitrary-value]` for a class such as `p-[13px]`,
+and `[placebo:style-element]` and `[placebo:inline-style]` in the views. See
+[styles](../README.md#styles-stay-on-the-themes-scale).
 
 ## Links between pages
 

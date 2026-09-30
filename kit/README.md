@@ -77,7 +77,8 @@ Override in `@layer tokens` on `:root` (or any scope). Every colour is a
 | `--border`, `--border-strong` | Resting hairline and control/emphasis border. |
 | `--accent-bg`, `--accent-fg`, `--accent-bg-hover`, `--accent-ink` | **The brand, as a set of four.** Fill, the ink on that fill, the hover fill, and the accent used as text on the page (links). Change them together. |
 | `--danger-bg`, `--danger-fg`, `--danger-bg-hover` | Destructive actions and error alerts. Keep its chroma above the accent's so danger outranks brand. |
-| `--success-bg`, `--success-fg` | Success alerts. |
+| `--success-bg`, `--success-fg` | Success alerts and badges. |
+| `--info-bg`, `--info-fg` | Information alerts and badges: a state that is neither good nor bad news. |
 | `--shadow-1`, `--shadow-2` | Elevation: resting, floating. Neutral black; tint them if the ground gets real chroma. |
 | `--scrim` | The one backdrop for every dialog and popover. |
 | `--font-sans`, `--font-mono` | Font stacks. |
@@ -110,7 +111,10 @@ Override in `@layer tokens` on `:root` (or any scope). Every colour is a
 ### Per-instance inputs
 Layout primitives and one component read a custom property with a default, so
 an instance adjusts itself without a modifier class. Set these inline or on
-the element, not in `:root`.
+the element, not in `:root`. A layout primitive's value applies to that
+element: a `.stack`, `.cluster` or `.grid` further down starts from its own
+default again. A `.stack` directly in a `.stack` is the one exception: it
+shares its parent's `--stack-space` unless it sets its own.
 
 | Property | Read by | Default |
 |---|---|---|
@@ -216,8 +220,20 @@ the list under it.
 `.stat-note`; several in a `.grid`.
 
 ### Form
-`.field` wrapping a `label`, the control, and an optional `.field-hint`.
+`.field` wrapping a `label`, the control, an optional `.field-hint`, and
+`.field-error` when the server rejected the value: under the control, linked
+with `described_by`, with the control marked `Control::invalid(true)`. An
+invalid control is ruled in the danger colour, and so is its focus ring. An
+`.alert` above the form is for what belongs to no one field.
 Inputs, selects and textareas are styled by element, with no class needed.
+
+```rust
+div .field {
+    label for="name" { "Name" }
+    @field name = Control::text(name).id("name").invalid(error.is_some()).described_by("name-error");
+    @if let Some(error) = error { p .field-error #name-error { (error) } }
+}
+```
 
 ### List
 `ul.list` of `li.list-row`, one record per row, divided by hairlines; put it
@@ -275,20 +291,37 @@ to go is `aria-disabled="true"`.
 `--avatar-hue`. `dl.kv` of `dt`/`dd` pairs: a record's facts.
 
 ### Table
-`.table`. Row hover is measured for a table on a `.card`.
+`.table`. Row hover is measured for a table on a `.card`. In a `.card-flush`
+under a `.card-head`, its columns line up with the head's title.
 
 ### Badge
-`.badge` · runtime colour via `--badge-bg`
+`.badge` (neutral) · `.badge-info` · `.badge-success` · `.badge-danger` ·
+`.badge-dot` (leads with a dot of its tone, for a status) · runtime colour via
+`--badge-bg`. A status is `span .badge .badge-dot .badge-info { "Active" }`.
 
 ### Feedback
-`.alert` (danger by default) + `.alert-success` · `.alert-close`
-`.notice`: a quiet, neutral statement about the page (an empty list, a
+`.alert` (danger by default) + `.alert-success` · `.alert-info` · `.alert-close`
+`.notice`: a quiet, neutral statement about the page (a search with no hits, a
 read-only record)
+`.empty-state`: what a list shows before it has anything in it, holding a
+`span.empty-state-icon` with an icon, an `h2`, a `p`, and the action that fills
+the list (a `.btn`).
 
 ### Modal
 `dialog.modal` wrapping `.modal-panel` · `.modal-close`. Put the padding on
 `.modal-panel`, not the dialog, so a click on the visible panel never counts as
-a backdrop click.
+a backdrop click. `.modal-close` puts a close button in the panel's corner;
+make it the panel's last child, so opening the dialog focuses the first field:
+
+```rust
+div .modal-panel .stack {
+    h2 #new-project-heading { "New project" }
+    (form)
+    button .btn .btn-ghost .btn-icon .modal-close type="button" command="close" commandfor=(dialog.id()) {
+        (icon!("x")) span .visually-hidden { "Close" }
+    }
+}
+```
 
 ### Icon and text
 `.icon` (inline SVG at `--icon-sm`) · `.lede` · `.muted` · `.visually-hidden`
@@ -312,8 +345,7 @@ non-modal dialog renders inline at the bottom of the page.
 
 - No styling for checkboxes, radios, range or file inputs beyond the browser's
   own. They are excluded from the control sizing rules, not restyled.
-- No page shell (header, footer, sticky layout), tabs, segmented controls,
-  toast container, avatar, or skeletons.
+- No tabs, toast container, or skeletons.
 - No styles for framework state such as `aria-busy`; that belongs to the app
   or the framework, not the kit.
 - No class namespacing. Classes are unprefixed (`.btn`, `.card`); an app that

@@ -138,6 +138,11 @@
   --danger-bg-hover: light-dark(oklch(47% 0.20 24), oklch(70% 0.18 24));
   --success-bg: light-dark(oklch(55% 0.14 150), oklch(68% 0.13 150));
   --success-fg: light-dark(oklch(99% 0 0), oklch(16% 0.02 150));
+  /* Information: a state that is neither good nor bad news, such as a record
+     in progress. Blue, well away from the warm accent so it never reads as
+     something to press, and from success's green. */
+  --info-bg: light-dark(oklch(55% 0.13 255), oklch(70% 0.12 255));
+  --info-fg: light-dark(oklch(99% 0 0), oklch(16% 0.02 255));
 
   /* Effects */
   /* Neutral black, and that is only correct because the ground is neutral.

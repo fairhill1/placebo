@@ -13,8 +13,26 @@
    leaves to the page. */
 .page { padding-block: var(--space-xl); }
 
-/* Vertical rhythm. Override per instance with --stack-space. */
-.stack > * + * { margin-block-start: var(--stack-space, var(--space-md)); }
+/* Each primitive's input applies to the element that sets it, and each
+   primitive starts from its default again. A custom property inherits, so a
+   page's `.stack` at --space-xl would otherwise space every stack further
+   down, to the fields of a form in a dialog, unless each one restated its own.
+   The reset loses to the element's own `style`, and the children still
+   inherit the value from it. A stack directly in a stack is the exception: its
+   own margin is spaced by the value it inherits, so it keeps it, and passes
+   it on unless it sets its own. */
+:not(.stack) > .stack { --stack-space: initial; }
+.cluster { --cluster-space: initial; }
+.grid { --grid-space: initial; --grid-min: initial; }
+.sidebar { --sidebar-width: initial; }
+
+/* Vertical rhythm. Override per instance with --stack-space. A dialog or
+   popover is not in the rhythm: it opens in the top layer, a margin would
+   undo the `margin: auto` that centres it, and the element after a closed one
+   is spaced from whatever came before it. */
+.stack > :where(:not(dialog, [popover])) ~ :where(:not(dialog, [popover])) {
+  margin-block-start: var(--stack-space, var(--space-md));
+}
 
 /* Horizontal group that wraps. Override the gap with --cluster-space. */
 .cluster {

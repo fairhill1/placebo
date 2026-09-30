@@ -399,27 +399,32 @@ async fn sign_in(State(app): State<App>, Input(input): Input<SignIn>) -> Result<
 
 fn sign_up_form(email: &str, error: Option<(&str, &str)>) -> Markup {
     // The error names the control it is about, "email" or "password", which
-    // is marked and described by the error before its own hint.
+    // is marked and shows the error under it, described by the error before
+    // its own hint.
     let (about, message) = error.unzip();
-    let mark = |control: Control<String>, name: &str, hint: &str| match about {
-        Some(about) if about == name => control
+    let wrong = |name: &str| about == Some(name);
+    let mark = |control: Control<String>, name: &str, hint: &str| match wrong(name) {
+        true => control
             .invalid(true)
-            .described_by(format!("sign-up-error {hint}").trim_end()),
-        _ if !hint.is_empty() => control.described_by(hint),
-        _ => control,
+            .described_by(format!("sign-up-{name}-error {hint}").trim_end()),
+        false if !hint.is_empty() => control.described_by(hint),
+        false => control,
     };
     let fields = fields! { SignUp {
         div .stack {
-            @if let Some(message) = message {
-                p .alert #sign-up-error role="alert" { (message) }
-            }
             div .field {
                 label for="sign-up-email" { "Email" }
                 @field email = mark(Control::email(email).id("sign-up-email").required().autocomplete("email"), "email", "");
+                @if let (true, Some(message)) = (wrong("email"), message) {
+                    p .field-error #sign-up-email-error { (message) }
+                }
             }
             div .field {
                 label for="sign-up-password" { "Password" }
                 @field password = mark(Control::password().id("sign-up-password").required().max_length(MAX_PASSWORD as u32).autocomplete("new-password"), "password", "sign-up-hint");
+                @if let (true, Some(message)) = (wrong("password"), message) {
+                    p .field-error #sign-up-password-error { (message) }
+                }
                 p .field-hint #sign-up-hint { "At least " (MIN_PASSWORD) " characters." }
             }
             button .btn .btn-block type="submit" { "Create account" }

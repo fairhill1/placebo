@@ -1,5 +1,5 @@
 /* The pieces an app builds out of: button, card, stat, field, list, table, badge,
-   alert, notice, modal, shell, nav, menu, segmented, switch, pager, avatar,
+   alert, notice, empty state, modal, shell, nav, menu, segmented, switch, pager, avatar,
    key/value. Nothing in this file knows what the app is about.
    Components consume tokens only -- never a hardcoded value -- and never set
    their own outer spacing; that belongs to the layout parent. */
@@ -158,6 +158,10 @@
 .field { display: flex; flex-direction: column; gap: var(--space-2xs); }
 .field > label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .field > .field-hint { font-size: var(--text-xs); color: var(--text-muted); }
+/* The server's word on this one field, under its control and linked from it
+   with described_by. What is wrong reads where the eye already is; an .alert
+   above the form is for what belongs to no one field. */
+.field > .field-error { font-size: var(--text-sm); color: var(--danger-bg); }
 
 /* List -- one record per row, divided by hairlines. A row lines up a leading
    control, the record's text (.list-main), and trailing actions. In a
@@ -215,17 +219,41 @@ details[open] > .list-add { display: none; }
 @media (hover: hover) {
   .table tbody tr:hover { background: var(--surface-raised-hover); }
 }
+/* In a .card-flush the outer cells hold the card's inset, so the columns line
+   up with the .card-head above, and the last row leaves the card's own border
+   to close it. */
+.card-flush .table :is(th, td):first-child { padding-inline-start: var(--space-md); }
+.card-flush .table :is(th, td):last-child { padding-inline-end: var(--space-md); }
+.card-flush .table tbody tr:last-child td { border-block-end: 0; }
 
-/* Badge */
+/* Badge. A tint of its tone, with the words left in --text so every tone
+   reads alike: the colour says which, the words say what. Neutral by default;
+   .badge-info, .badge-success and .badge-danger pick a tone, and .badge-dot
+   leads with a dot of it, as for a status. A tint and not --surface-sunken,
+   which is a well below a card in dark mode and reads as a black pill. */
 .badge {
+  --badge-tone: var(--text-muted);
   display: inline-flex;
   align-items: center;
+  gap: var(--space-2xs);
   padding: var(--space-3xs) var(--space-xs);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
+  white-space: nowrap;
   border-radius: var(--radius-full);
-  background: var(--surface-sunken);
-  border: var(--border-width) solid var(--border);
+  background: color-mix(in oklch, var(--badge-tone) 14%, transparent);
+  border: var(--border-width) solid color-mix(in oklch, var(--badge-tone) 30%, transparent);
+}
+.badge-info { --badge-tone: var(--info-bg); }
+.badge-success { --badge-tone: var(--success-bg); }
+.badge-danger { --badge-tone: var(--danger-bg); }
+.badge-dot::before {
+  content: "";
+  flex: none;
+  inline-size: 0.5em;
+  block-size: 0.5em;
+  border-radius: var(--radius-full);
+  background: var(--badge-tone);
 }
 /* Runtime colours -- a tag hue picked by a user and stored in the database --
    get the lightness flip instead of a paired token. Above the threshold the
@@ -252,6 +280,10 @@ details[open] > .list-add { display: none; }
 .alert-success {
   color: var(--success-fg);
   background: var(--success-bg);
+}
+.alert-info {
+  color: var(--info-fg);
+  background: var(--info-bg);
 }
 .alert-close {
   background: none;
@@ -281,6 +313,33 @@ details[open] > .list-add { display: none; }
 }
 .notice .icon { flex: none; }
 
+/* Empty state. What a list shows before it has anything in it: an icon in a
+   well, a heading and a line about it, and the action that fills it. A list
+   that is empty only for now -- a search with no hits -- takes a .notice. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xl) var(--space-md);
+  text-align: center;
+}
+.empty-state > :is(h2, h3) { font-size: var(--text-md); letter-spacing: normal; }
+.empty-state > p { color: var(--text-muted); }
+/* The icon sits apart from the words, and the action from both. */
+.empty-state > .empty-state-icon { margin-block-end: var(--space-xs); }
+.empty-state > :last-child:not(p, h2, h3) { margin-block-start: var(--space-xs); }
+.empty-state-icon {
+  display: inline-grid;
+  place-items: center;
+  inline-size: calc(var(--control-size) + var(--space-sm));
+  block-size: calc(var(--control-size) + var(--space-sm));
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-full);
+}
+.empty-state-icon .icon { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
+
 /* Modal -- a native <dialog>, opened with showModal() so the top layer, the
    backdrop, the focus trap and Escape are all the browser's. The reset already
    restores the `margin: auto` that centres it. */
@@ -303,19 +362,18 @@ details[open] > .list-add { display: none; }
 /* The padding is here and not on the dialog because the light-dismiss check is
    "did the click land on the dialog itself" -- padding on the dialog would be
    backdrop that closes on click while looking like part of the panel. */
-.modal-panel { padding: var(--space-lg); }
+.modal-panel { position: relative; padding: var(--space-lg); }
+/* The x in the panel's corner: a `.btn.btn-ghost.btn-icon` with
+   `command="close"`. Last in the markup, so opening the dialog focuses its
+   first field rather than the way out; Escape closes it too. The heading
+   keeps clear of it. */
 .modal-close {
-  background: none;
-  border: 0;
-  padding: 0;
-  inline-size: var(--control-size);
-  font-size: var(--text-xl);
-  line-height: 1;
-  color: var(--text-muted);
+  position: absolute;
+  inset-block-start: var(--space-md);
+  inset-inline-end: var(--space-md);
+  margin: 0;
 }
-@media (hover: hover) {
-  .modal-close:hover { color: var(--text); }
-}
+.modal-panel:has(> .modal-close) > :first-child { padding-inline-end: var(--control-size); }
 
 /* Shell -- the app's frame: a sidebar (.shell-side) beside the page
    (.shell-main). The sidebar holds the brand, a .nav, and a .shell-foot pinned

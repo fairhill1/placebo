@@ -71,6 +71,13 @@ textarea { padding-block: var(--space-xs); resize: vertical; }
   input:hover, select:hover, textarea:hover { border-color: var(--accent-bg); }
 }
 ::placeholder { color: var(--text-muted); }
+/* A control the server rejected (`aria-invalid`, which Control::invalid
+   renders) is ruled in the danger colour, under the pointer too, and its
+   focus ring turns danger as well: the invalid control is the one that takes
+   focus, and an accent ring drawn over its border would hide the only mark
+   that says what is wrong. */
+:is(input, select, textarea)[aria-invalid="true"] { border-color: var(--danger-bg); }
+:is(input, select, textarea)[aria-invalid="true"]:focus-visible { outline-color: var(--danger-bg); }
 
 /* Opting out of native appearance removes the arrow, so draw it back. */
 select {

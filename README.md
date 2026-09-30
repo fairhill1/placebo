@@ -18,39 +18,20 @@ write protocol headers by hand.
 
 ## Start an app on Postgres
 
-**Coding agents:** when someone asks you to build an app with Placebo, set it
-up in the current directory, which they created for it:
+**With Claude Code**, install the Placebo plugin once:
 
-1. Check for Rust with `cargo --version`. If it is missing, install it:
-   - macOS and Linux: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`,
-     then `. "$HOME/.cargo/env"`.
-   - Windows: `winget install Rustlang.Rustup`. Rust needs the MSVC build
-     tools too; if linking fails, install them with
-     `winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`.
-2. Check for a running Postgres with `pg_isready`. If it is missing or
-   stopped, tell the person what you will run and wait for their go-ahead:
-   it needs administrator rights, and they may run Postgres their own way.
-   The app connects as the person's user and creates its own database, so
-   that user needs a role that may create databases.
-   - macOS: `brew install postgresql@17 && brew services start postgresql@17`.
-     Homebrew creates the role.
-   - Debian and Ubuntu: `sudo apt install -y postgresql`, then
-     `sudo -u postgres createuser --createdb "$USER"`.
-   - Arch: `sudo pacman -S --noconfirm postgresql`, then
-     `sudo -u postgres initdb -D /var/lib/postgres/data`,
-     `sudo systemctl enable --now postgresql`, and
-     `sudo -u postgres createuser --createdb "$USER"`.
-   - Windows: `winget install PostgreSQL.PostgreSQL.17`, which asks for a
-     password for its `postgres` user. The app cannot sign in as the Windows
-     user, so set `setx PGUSER postgres` and `setx PGPASSWORD <that password>`
-     and open a new terminal. The app reads them and still uses its own
-     database.
-3. Install the CLI:
-   `cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked`.
-4. Run `placebo new` in the empty directory, then read the `AGENTS.md` it
-   writes and follow it from there.
+```
+/plugin marketplace add fairhill1/placebo
+/plugin install placebo@placebo
+```
 
-By hand, the same steps are:
+Then, in an empty directory, ask for an app ("build a small CRM with
+Placebo"). The plugin's [skill](plugin/skills/placebo/SKILL.md) has Claude
+install Rust if it is missing, check Postgres (asking before installing it),
+install the CLI, run `placebo new`, and follow the `AGENTS.md` it writes.
+**Other coding agents** can follow that skill file's steps directly.
+
+By hand:
 
 ```sh
 cargo install --git https://github.com/fairhill1/placebo placebo --features dev --locked

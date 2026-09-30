@@ -1,0 +1,8 @@
+{
+  "name": "placebo",
+  "description": "Start and build Placebo apps: Rust, Axum, Maud, and Postgres.",
+  "repository": "https://github.com/fairhill1/placebo",
+  "author": {
+    "name": "fairhill1"
+  }
+}

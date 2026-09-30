@@ -1,0 +1,14 @@
+{
+  "name": "placebo",
+  "owner": {
+    "name": "fairhill1"
+  },
+  "description": "Claude Code support for Placebo, a Rust + Axum framework.",
+  "plugins": [
+    {
+      "name": "placebo",
+      "source": "./plugin",
+      "description": "Start and build Placebo apps: Rust, Axum, Maud, and Postgres."
+    }
+  ]
+}

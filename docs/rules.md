@@ -51,6 +51,14 @@ These apply to people and coding agents alike.
   `.navigate("/path")`. To update other open pages, call `feed.changed()` after
   the write, on a `Feed` the pages mount with `feed.mount()`; each page reads
   itself again.
+- **Styles:** pages compose the kit's classes, which its README lists. When a
+  layout primitive needs other spacing or width, set its custom property to a
+  token on the element, such as `style="--stack-space: var(--space-xs)"`.
+  Write no other inline styles, no `<style>` elements, and no new CSS: a new
+  visual pattern goes into the kit after the person approves it. The styles
+  test (`placebo::styles::Check`) fails on what strays, and the console
+  reports a class no stylesheet defines as `[placebo:unknown-class]`; fix the
+  cause.
 - **Verify in a browser:** compiling proves the Rust side agrees. Run the app and
   exercise the changed flows: valid saves, invalid input, independent drafts,
   conflicts, and any dialog or search. Placebo logs every failure in the console

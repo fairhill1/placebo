@@ -2,7 +2,7 @@ for (const type of ["scheduled", "request", "applied", "discarded", "deferred", 
   document.addEventListener(`placebo:${type}`, ({ detail }) => {
     const trace = document.getElementById("trace");
     const entry = document.createElement("li");
-    entry.className = type;
+    entry.dataset.event = type;
     const what = detail.action ? `${detail.action} → ${detail.target}` : `read ${detail.path ?? "page"}`;
     entry.textContent = `${type} · ${what}${detail.outcome ? ` · ${detail.outcome}` : ""}${detail.reason ? ` · ${detail.reason}` : ""}${detail.code ? ` · ${detail.code}: ${detail.message}` : ""}`;
     trace.prepend(entry);

@@ -129,7 +129,10 @@ async fn a_reconnect_is_told_about_changes_after_its_last_event_id() {
         .unwrap();
     let mut stream = subscribe(app, request).await;
     let events = events(&mut stream, 1).await;
-    assert!(events[0].contains(&format!("id: {instance}-2")), "{events:?}");
+    assert!(
+        events[0].contains(&format!("id: {instance}-2")),
+        "{events:?}"
+    );
 }
 
 #[tokio::test]
@@ -180,7 +183,10 @@ async fn keyed_feeds_reach_only_the_pages_that_mount_their_key() {
     )
     .await;
     let events = events(&mut stream, 1).await;
-    assert!(events[0].contains(r#""feed":"inbox:bob%20smith""#), "{events:?}");
+    assert!(
+        events[0].contains(r#""feed":"inbox:bob%20smith""#),
+        "{events:?}"
+    );
     let mut stream = subscribe(app, get(&format!("/live/inbox/ada?after={ada_position}"))).await;
     assert!(quiet(&mut stream).await);
 }
@@ -197,19 +203,17 @@ async fn a_signal_from_a_save_names_the_request_that_made_it() {
     let feed = Feed::new("live", "/live");
     let rendered = position(&feed);
     let writer = feed.clone();
-    let app = Router::new()
-        .route(feed.path(), feed.route())
-        .route(
-            SAVE.path(),
-            SAVE.route(move |Input(_): Input<Save>| {
-                let feed = writer.clone();
-                async move {
-                    feed.changed();
-                    SAVE.bind(&Component::new("editor", 1))
-                        .reply(maud::html! { "Saved." })
-                }
-            }),
-        );
+    let app = Router::new().route(feed.path(), feed.route()).route(
+        SAVE.path(),
+        SAVE.route(move |Input(_): Input<Save>| {
+            let feed = writer.clone();
+            async move {
+                feed.changed();
+                SAVE.bind(&Component::new("editor", 1))
+                    .reply(maud::html! { "Saved." })
+            }
+        }),
+    );
     let mut stream = subscribe(app.clone(), get(&format!("/live?after={rendered}"))).await;
     let save = Request::post("/save")
         .header("content-type", "application/x-www-form-urlencoded")
@@ -226,5 +230,8 @@ async fn a_signal_from_a_save_names_the_request_that_made_it() {
         events[0].contains(r#"data: {"version":6,"feed":"live","request":"req-42"}"#),
         "{events:?}"
     );
-    assert!(events[1].contains(r#"data: {"version":6,"feed":"live"}"#), "{events:?}");
+    assert!(
+        events[1].contains(r#"data: {"version":6,"feed":"live"}"#),
+        "{events:?}"
+    );
 }

@@ -48,7 +48,7 @@ fn page(shown: u32, renders: u64, poll: bool) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "Placebo / Read triggers" }
-                style { ".entry { padding: 1.5rem 0; border-bottom: 1px solid #ddd; }" }
+                link rel="stylesheet" href="/triggers.css";
                 script type="module" src="/placebo.js" {}
             }
             body {
@@ -86,6 +86,16 @@ async fn main() {
         .route("/", get(home))
         .route("/quiet", get(home))
         .route("/placebo.js", get(placebo::runtime))
+        .route(
+            "/triggers.css",
+            get(async || {
+                support::asset(
+                    "triggers.css",
+                    "text/css",
+                    include_str!("static/triggers.css"),
+                )
+            }),
+        )
         .with_state(Counters::default());
     #[cfg(all(feature = "dev", debug_assertions))]
     let reload = support::reload();

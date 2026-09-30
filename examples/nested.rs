@@ -69,7 +69,7 @@ fn entry(entry: &Entry, locked: bool, feedback: &str) -> Markup {
         @field delay_ms = Control::select(0, [(0, "Now"), (700, "Slowly")])
             .id(&format!("entry-delay-{}", entry.id));
         button type="submit" disabled[locked] { "Save entry" }
-        span .feedback role="status" { (feedback) }
+        span data-feedback role="status" { (feedback) }
     } };
     SAVE_ENTRY
         .bind(&Component::new("entry", entry.id))

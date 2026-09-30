@@ -132,7 +132,9 @@ pub(crate) async fn run(native: bool, request: Request, next: Next) -> Response 
         .filter(|id| {
             !id.is_empty()
                 && id.len() <= 64
-                && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         })
         .map(str::to_owned);
     let submission = Submission {
@@ -594,7 +596,12 @@ async fn pages(State(app): State<Router>, mut request: Request, next: Next) -> R
         let name_str = name.as_str();
         let skip = matches!(
             name_str,
-            "content-type" | "content-length" | "transfer-encoding" | "origin" | "accept" | "cookie"
+            "content-type"
+                | "content-length"
+                | "transfer-encoding"
+                | "origin"
+                | "accept"
+                | "cookie"
         ) || name_str.starts_with("x-placebo-")
             || name_str.starts_with("sec-fetch-");
         if !skip {
@@ -713,7 +720,10 @@ fn cookies_after(request: &HeaderMap, response: &HeaderMap) -> Option<HeaderValu
     for set in response.get_all(header::SET_COOKIE) {
         let Some((pair, attributes)) = set.to_str().ok().map(|set| {
             let mut parts = set.splitn(2, ';');
-            (parts.next().unwrap_or_default(), parts.next().unwrap_or_default())
+            (
+                parts.next().unwrap_or_default(),
+                parts.next().unwrap_or_default(),
+            )
         }) else {
             continue;
         };
@@ -722,10 +732,13 @@ fn cookies_after(request: &HeaderMap, response: &HeaderMap) -> Option<HeaderValu
         };
         cookies.retain(|(existing, _)| existing != name);
         let expired = attributes.split(';').any(|attribute| {
-            attribute.trim().split_once('=').is_some_and(|(key, value)| {
-                key.eq_ignore_ascii_case("max-age")
-                    && value.trim().parse::<i64>().is_ok_and(|age| age <= 0)
-            })
+            attribute
+                .trim()
+                .split_once('=')
+                .is_some_and(|(key, value)| {
+                    key.eq_ignore_ascii_case("max-age")
+                        && value.trim().parse::<i64>().is_ok_and(|age| age <= 0)
+                })
         });
         if !expired {
             cookies.push((name.to_owned(), value.to_owned()));

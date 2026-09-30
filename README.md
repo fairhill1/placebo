@@ -232,6 +232,14 @@ These apply to people and coding agents alike.
   `.navigate("/path")`. To update other open pages, call `feed.changed()` after
   the write, on a `Feed` the pages mount with `feed.mount()`; each page reads
   itself again.
+- **Styles:** pages compose the kit's classes, which its README lists. When a
+  layout primitive needs other spacing or width, set its custom property to a
+  token on the element, such as `style="--stack-space: var(--space-xs)"`.
+  Write no other inline styles, no `<style>` elements, and no new CSS: a new
+  visual pattern goes into the kit after the person approves it. The styles
+  test (`placebo::styles::Check`) fails on what strays, and the console
+  reports a class no stylesheet defines as `[placebo:unknown-class]`; fix the
+  cause.
 - **Verify in a browser:** compiling proves the Rust side agrees. Run the app and
   exercise the changed flows: valid saves, invalid input, independent drafts,
   conflicts, and any dialog or search. Placebo logs every failure in the console
@@ -409,6 +417,59 @@ The reload helper is excluded from release application builds, even with `dev`
 enabled. Explicitly enabling that feature can still compile its optional
 dependencies; production builds should omit it. The CLI itself can be built in
 release mode.
+
+## Styles stay in the kit
+
+Pages compose the CSS kit's classes; [kit/README.md](kit/README.md) lists
+them. Coding agents drift from it: when something looks off, they invent a
+class and write CSS for it, or add an inline style. Maud accepts any class or
+attribute, so these checks run instead.
+
+**In the browser**, the runtime reports each class that no stylesheet on the
+page defines, once, as `[placebo:unknown-class]`: usually a guess at the
+kit's names. A class that only hooks a script or a test belongs in a data
+attribute instead.
+
+**In `cargo test`**, `placebo::styles::Check` fails on styles that left the kit:
+
+```rust
+// tests/styles.rs
+#[test]
+fn styles_stay_in_the_kit() {
+    placebo::styles::Check::new()
+        .kit("static/kit")
+        .app_css("static/app.css")
+        .views("src")
+        .run();
+}
+```
+
+The vendored kit must match the kit this Placebo ships; re-skin it with tokens
+in `@layer tokens` in the app's stylesheet. Every rule in the app's stylesheet
+sits in one of the kit's layers, nothing is `!important`, and outside
+`@layer tokens` colours are tokens; margins, padding, gaps, font sizes and
+weights, and radii are tokens or 0; and nothing is in px but 1px. The views
+write no `<style>` element, and no `style=` attribute but one that sets custom
+properties: to tokens when written out, as in
+`style="--stack-space: var(--space-xs)"`, or to a value from data, as in
+`style=(format!("--badge-bg: {}", tag.colour))`.
+
+**Ask before CSS edits.** With this rule in the app's `.claude/settings.json`,
+Claude Code asks the person before it edits or writes any stylesheet with its
+file tools, in every permission mode:
+
+```json
+{
+  "permissions": {
+    "ask": ["Edit(**/*.css)"]
+  }
+}
+```
+
+`Edit` rules cover every built-in tool that changes files, `Write` included; a
+`Write(...)` path rule is accepted but never consulted. The rule does not see a
+stylesheet written through the shell or a script, which is why the test backs
+it. See [Claude Code permissions](https://code.claude.com/docs/en/permissions).
 
 ## Run this repository's demos
 

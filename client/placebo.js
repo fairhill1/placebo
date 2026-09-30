@@ -116,6 +116,32 @@ function auditCommands() {
   }
 }
 
+// A class no stylesheet defines styles nothing: usually a guess at the kit's
+// names, or a hook for a script or test. Report each class once.
+let reportedClasses = new Set();
+function auditClasses() {
+  // The load event waits for every stylesheet, including imported ones.
+  if (document.readyState !== "complete") return;
+  const defined = new Set();
+  const read = rules => {
+    for (const rule of rules) {
+      for (const [, name] of rule.selectorText?.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g) ?? []) defined.add(name);
+      if (rule.cssRules) read(rule.cssRules);
+      if (rule.styleSheet) read(rule.styleSheet.cssRules);
+    }
+  };
+  // A stylesheet from another site hides its rules, and could define any class.
+  try { for (const sheet of document.styleSheets) read(sheet.cssRules); } catch { return; }
+  for (const element of document.querySelectorAll("[class]")) {
+    for (const name of element.classList) {
+      if (defined.has(name) || reportedClasses.has(name)) continue;
+      reportedClasses.add(name);
+      report(null, new ProtocolError("unknown-class", `No stylesheet on this page defines the class '${name}'.`),
+        "unknown-class", { element: elementName(element) });
+    }
+  }
+}
+
 // Browsers without invoker commands get the built-in ones from the runtime,
 // so the same buttons open and close dialogs and popovers everywhere the
 // runtime runs. Custom "--" commands need the browser's CommandEvent.
@@ -144,6 +170,7 @@ function auditBehaviors() {
   clearTimeout(behaviorAudit);
   if (!started || !contentLoaded) return;
   auditCommands();
+  auditClasses();
   for (const element of document.querySelectorAll("[data-placebo-behavior]")) {
     const name = element.dataset.placeboBehavior;
     if (behaviors.has(name) || unknownBehaviors.get(element) === name) continue;
@@ -231,6 +258,7 @@ const hints = {
   "push-disconnected": "The browser reconnects by itself. If this repeats, check the feed's route and any proxy timeouts; Network shows the event stream.",
   "push-closed": "Register the feed's route with .route(FEED.path(), FEED.route()), check the path and that it returns text/event-stream, then reload.",
   "missing-command-target": "Give the dialog or popover the id the button names, or mount it on this page. A mount_dialog component's id is its component id, such as 'task:1'.",
+  "unknown-class": "Use a class from the kit's README. A class that only hooks a script or a test should be a data attribute, such as data-feedback; a new visual pattern goes into the kit after the person approves it.",
   "invalid-command": "Point show-modal/close/request-close at a <dialog>, and show-/hide-/toggle-popover at an element with popover.",
   "unknown-behavior": "Check the name and module import. Register with behavior() before mounting, or reserve an asynchronous import with lazyBehavior().",
   "behavior-setup": "Inspect the original cause and setup function. Return a cleanup function or undefined.",
@@ -1226,6 +1254,7 @@ export function start() {
   document.addEventListener("compositionstart", onCompositionStart);
   document.addEventListener("compositionend", onCompositionEnd);
   document.addEventListener("DOMContentLoaded", onContentLoaded);
+  window.addEventListener("load", auditBehaviors);
   window.addEventListener("pagehide", onPageHide);
   window.addEventListener("pageshow", onPageShow);
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -1254,6 +1283,7 @@ export function stop() {
   document.removeEventListener("compositionstart", onCompositionStart);
   document.removeEventListener("compositionend", onCompositionEnd);
   document.removeEventListener("DOMContentLoaded", onContentLoaded);
+  window.removeEventListener("load", auditBehaviors);
   window.removeEventListener("pagehide", onPageHide);
   window.removeEventListener("pageshow", onPageShow);
   document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -1261,6 +1291,7 @@ export function stop() {
   clearTimeout(behaviorAudit);
   unknownBehaviors = new WeakMap();
   unresolvedCommands = new WeakMap();
+  reportedClasses = new Set();
   composing = new WeakSet();
   edits = new WeakMap();
   uncertain = new WeakMap();

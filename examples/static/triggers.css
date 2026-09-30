@@ -1,0 +1,2 @@
+/* Entries tall enough that the list runs past the window, so "load more" reads as its end scrolls into view. */
+.entry { padding: 1.5rem 0; border-bottom: 1px solid #ddd; }

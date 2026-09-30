@@ -37,6 +37,7 @@ mod diagnostics;
 mod native;
 mod push;
 pub mod replay;
+pub mod styles;
 mod upload;
 pub use component::{
     Component, MountedComponent, MutationAction, MutationBinding, MutationRequest,
@@ -271,9 +272,9 @@ impl IntoResponse for Rejected {
 /// dependency resolution. Version mismatches still fail visibly at runtime.
 pub async fn runtime() -> Response {
     #[cfg(all(feature = "dev", debug_assertions))]
-    let content = match ["idiomorph.js", "placebo.js"]
-        .map(|file| std::fs::read_to_string(format!("{}/client/{file}", env!("CARGO_MANIFEST_DIR"))))
-    {
+    let content = match ["idiomorph.js", "placebo.js"].map(|file| {
+        std::fs::read_to_string(format!("{}/client/{file}", env!("CARGO_MANIFEST_DIR")))
+    }) {
         [Ok(morph), Ok(runtime)] => format!("{morph}\n{runtime}"),
         _ => {
             return (
@@ -312,7 +313,10 @@ mod tests {
             .on_reveal()
             .form(Search::fields().with_q(Control::search("<rust>")).finish())
             .into_string();
-        assert!(form.starts_with("<form method=\"get\" data-placebo="), "{form}");
+        assert!(
+            form.starts_with("<form method=\"get\" data-placebo="),
+            "{form}"
+        );
         assert!(!form.contains("action="));
         assert!(form.contains(
             "{&quot;version&quot;:6,&quot;read&quot;:true,&quot;input_delay_ms&quot;:150,&quot;reveal&quot;:true}"

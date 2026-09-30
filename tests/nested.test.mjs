@@ -64,7 +64,7 @@ test("an entry with its own save in flight is left for its own reply", async t =
   assert.deepEqual(event.skippedComponents, [{ target: "entry:2", reason: "busy" }]);
   assert.equal(await page.locator('[id="entry:2"]').getAttribute("aria-busy"), "true");
   await applied(page, "entry:2");
-  assert.equal(await page.locator('[id="entry:2"] .feedback').textContent(), "Saved.");
+  assert.equal(await page.locator('[id="entry:2"] [data-feedback]').textContent(), "Saved.");
   assert.equal(await page.locator("#entry-2").inputValue(), "Saved slowly");
 });
 

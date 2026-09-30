@@ -321,23 +321,42 @@ async fn a_runtime_submission_gets_its_page_with_the_reply_in_the_component() {
     assert_eq!(response.headers()["x-placebo-outcome"], "invalid");
     assert_eq!(response.headers()["x-placebo-action"], "save");
     assert!(response.headers().contains_key("x-placebo-rendered"));
-    assert!(response.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
     let page = text(response).await;
-    assert!(page.contains("The page") && page.contains("Too short."), "{page}");
+    assert!(
+        page.contains("The page") && page.contains("Too short."),
+        "{page}"
+    );
 
     let body = form_body(&[("id", "1"), ("version", "1"), ("title", "Second")]);
     let response = app.clone().oneshot(runtime_post(body, "/")).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-placebo-outcome"], "applied");
     let page = text(response).await;
-    assert!(page.contains("The page") && page.contains("Saved."), "{page}");
+    assert!(
+        page.contains("The page") && page.contains("Saved."),
+        "{page}"
+    );
 
     // A later page carries a later stamp.
     let stamp = |response: &Response| -> u64 {
-        response.headers()["x-placebo-rendered"].to_str().unwrap().parse().unwrap()
+        response.headers()["x-placebo-rendered"]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap()
     };
     let body = || form_body(&[("id", "1"), ("version", "9"), ("title", "Third")]);
-    let first = app.clone().oneshot(runtime_post(body(), "/")).await.unwrap();
+    let first = app
+        .clone()
+        .oneshot(runtime_post(body(), "/"))
+        .await
+        .unwrap();
     let second = app.oneshot(runtime_post(body(), "/")).await.unwrap();
     assert_eq!(first.status(), StatusCode::CONFLICT);
     assert!(stamp(&second) > stamp(&first));
@@ -357,7 +376,10 @@ async fn a_runtime_reply_that_navigates_only_says_where_to() {
 async fn without_its_page_a_runtime_reply_shows_in_the_component_and_says_why() {
     // Not wrapped with native_forms: a setup error.
     let body = || form_body(&[("id", "1"), ("version", "1"), ("title", "x")]);
-    let response = router(store()).oneshot(runtime_post(body(), "/")).await.unwrap();
+    let response = router(store())
+        .oneshot(runtime_post(body(), "/"))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert!(response.headers().contains_key("x-placebo-page-error"));
     let contents = text(response).await;
@@ -365,7 +387,11 @@ async fn without_its_page_a_runtime_reply_shows_in_the_component_and_says_why() 
 
     // A page that no longer renders, such as a deleted record's.
     let app = placebo::native_forms(router(store()));
-    let response = app.clone().oneshot(runtime_post(body(), "/gone")).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(runtime_post(body(), "/gone"))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert!(
         response.headers()["x-placebo-page-missing"]

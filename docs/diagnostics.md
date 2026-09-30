@@ -125,6 +125,22 @@ message. After the page loads, and after each change to the DOM, the runtime
 reports each such button once as `[placebo:missing-command-target]` or
 `[placebo:invalid-command]`, naming the button, the id, and the command.
 
+## Styles outside the kit
+
+After the page and its stylesheets load, and after each change to the DOM,
+the runtime reports each class that no stylesheet on the page defines, once,
+as `[placebo:unknown-class]`, naming the element. It is usually a guess at the
+kit's names; a class that only hooks a script or a test should be a data
+attribute. When a stylesheet from another site hides its rules, the check is
+skipped.
+
+The styles test, `placebo::styles::Check`, reports the rest in `cargo test`:
+`[placebo:kit-changed]` for a vendored kit that differs from Placebo's,
+`[placebo:unlayered]` for a rule outside the kit's layers,
+`[placebo:important]`, `[placebo:raw-value]` for a value that should be a
+token, and `[placebo:style-element]` and `[placebo:inline-style]` in the
+views. See [styles](../README.md#styles-stay-in-the-kit).
+
 ## Live updates
 
 A feed's connection is traced as `placebo:push` with `push-connected`,

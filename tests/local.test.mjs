@@ -68,6 +68,20 @@ test("a button whose command target is missing or the wrong kind is reported", a
   assert.equal(await page.evaluate(() => window.events.filter(e => e.type === "error").length), 3);
 });
 
+test("a class no stylesheet defines is reported once", async t => {
+  const page = await visit(t);
+  const logs = [];
+  page.on("console", message => { if (message.type() === "error") logs.push(message.text()); });
+  await page.evaluate(() => document.body.insertAdjacentHTML("beforeend",
+    '<p id="guess" class="help text-muted">A</p><p class="text-muted">B</p>'));
+  await page.waitForFunction(() => window.events.some(e => e.code === "unknown-class"));
+  await page.evaluate(() => document.body.append(document.createElement("p")));
+  await page.waitForTimeout(50);
+  const found = await page.evaluate(() => window.events.filter(e => e.type === "error").map(e => [e.element, e.code]));
+  assert.deepEqual(found, [["p#guess", "unknown-class"]]);
+  assert.ok(logs.some(line => line.includes("[placebo:unknown-class]") && line.includes("'text-muted'")));
+});
+
 test("in a browser without command support, the runtime opens and closes dialogs and popovers", async t => {
   const page = await fixture.page(t, { feeds: false });
   // Hide the browser's support, and cancel its own handling of the buttons.

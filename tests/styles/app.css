@@ -1,0 +1,22 @@
+/* One problem of each kind, next to what the check allows. */
+@import url("kit/main.css");
+
+@layer tokens {
+  :root { --brand: #c0392b; --hairline: 3px; }
+}
+
+@layer components {
+  .film-layout { --sidebar-width: 17rem; }
+  .eyebrow { letter-spacing: 0.06em; text-underline-offset: 0.4em; }
+  .facts > div { grid-template-columns: 8rem 1fr; gap: var(--space-sm); }
+  .card-quiet { color: var(--text-muted); background: transparent; margin: 0 auto; }
+
+  .notice-strong { color: #333; }
+  .notice-warm { background: rgb(250 240 230); }
+  .notice-plain { border: 1px solid White; }
+  .notice-roomy { padding: 0.3rem var(--space-sm); }
+  .notice-shadow { box-shadow: 0 2px 4px var(--scrim); }
+  .notice-loud { font-weight: var(--weight-bold) !important; }
+}
+
+.stray { display: block; }

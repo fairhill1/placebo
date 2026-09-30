@@ -225,7 +225,8 @@ These apply to people and coding agents alike.
   the input, writes, and returns its component's contents. It never lists what
   else on the page shows the data: render every page from current data and it
   follows. Each save renders its page again, so keep pages bounded: paginate
-  long lists with a read form.
+  long lists with a read form, and keep page handlers free of writes (a view
+  count, marking something read): they run again on every save.
 - **Forms:** derive `FormInput` on the payload struct and write the form with
   `fields!` and typed `Control` values. Render it with
   `ACTION.bind(&component).form(fields)` for saves or

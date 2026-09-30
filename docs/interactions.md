@@ -42,11 +42,15 @@ A save costs its write plus one render of its page. Placebo adds nothing
 measurable to that, but whatever the page costs, every save made from it pays
 again. Measured against Postgres, a save answered with a film page took 1.5 ms
 where the same save answered with its component alone took 1.0 ms; the
-difference was the page's own queries. Two habits keep that small:
+difference was the page's own queries. Three habits keep that small and safe:
 
 - **Keep pages bounded.** Paginate a long list with a read form (`?page=2`, or
   "load more" with `on_reveal`) rather than rendering every row. A form on a
   page of 1,000 rows renders all 1,000 again on each save.
+- **Keep page handlers free of writes.** A page handler runs on every save
+  made from its page, not only when someone opens it. Counting a view,
+  marking a message read, or appending to an audit log there happens again on
+  each save; do it in the action that means it.
 - **Look up the session once.** The page render is a second request through
   the app, so an extractor that reads the session from the database runs
   twice per save. Do the lookup in middleware around `native_forms` instead.

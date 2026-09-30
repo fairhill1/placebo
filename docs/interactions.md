@@ -4,8 +4,9 @@ Run `cargo tasks` and open <http://127.0.0.1:4319>. The task-list example has
 a row editor in a dialog, a completed count, an add dialog, and rows that can
 be deleted and moved. Open it in two tabs to see changes arrive live. State is
 in memory; restarting the server resets the tasks. The
-[nested](../examples/nested.rs), [uploads](../examples/uploads.rs), and
-[triggers](../examples/triggers.rs) examples each focus on one feature.
+[nested](../examples/nested.rs), [uploads](../examples/uploads.rs),
+[triggers](../examples/triggers.rs), and [pages](../examples/pages.rs)
+examples each focus on one feature.
 
 ## A save answers with its page
 
@@ -188,6 +189,34 @@ polling stops.
 Poll when the data changes on its own schedule (a clock, a queue fed by
 another system) or when holding a connection per page is not wanted. Use a
 `Feed` when the changes come from writes in this application.
+
+## Links between pages
+
+A click on a link within the site reads the linked page and shows it without
+a document load, so the browser shows no loading bar and the runtime, its
+feeds, and the page's scripts carry on. The new page replaces the old one
+whole, as a load would: nothing typed on the page left carries over, even
+into a field of the same name on the next record. The address and title
+change, the page starts at the top (or at the link's `#fragment`), and focus
+moves to the `autofocus` element or the first `h1`, which a screen reader
+then reads. A page that takes more than 300 ms shows a thin bar along the top
+in the kit's accent colour.
+
+Back and Forward read their page again, so it shows current data, and return
+to where it was scrolled. A save that replies with `.navigate(path)` goes
+there the same way.
+
+The browser loads the page as usual for a link to another site, one with
+`target` or `download`, one clicked with a modifier key (to open a new tab),
+a link to a `#fragment` on the same page, and a link inside an element with
+`data-placebo-reload`. So does a page whose head loads other scripts or
+stylesheets than this one, an answer that is not a page (a file, a CSV), and
+a read that fails, so the browser shows why.
+
+A tab that never loads a page keeps the scripts and stylesheets it loaded
+first, including after a deploy. Put a version in their URLs, such as
+`/static/app.css?v=2` and `/placebo.js?v=2`, and change it when they change:
+the next link then loads the page with the new ones.
 
 ## Live updates across tabs
 

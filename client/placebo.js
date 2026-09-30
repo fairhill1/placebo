@@ -724,6 +724,7 @@ async function send(work) {
   } else {
     work.pageUrl = work.url.pathname + work.url.search;
     if (work.pageUrl !== here()) history.replaceState(history.state, "", work.url);
+    shown = work.pageUrl;
   }
   emit("request", work);
   try {
@@ -788,7 +789,7 @@ async function send(work) {
       settle(work.target);
       emit("applied", work, { outcome, replayed: Boolean(work.replayed), ...emptyPlan().summary,
         navigate: destination.pathname + destination.search + destination.hash });
-      location.assign(destination.href);
+      visit(destination, "push");
       return;
     }
     let body, update;
@@ -1148,8 +1149,9 @@ function showPage(work, page, rendered, url, extra = {}) {
   emit("applied", work, { ...extra, outcome: "applied", ...plan.summary, page: "whole" });
 }
 
-function onPageHide() { unloading = true; }
-function onPageShow() { unloading = false; syncFeeds(); }
+// The browser restores the scroll of a page it loads again, such as on reload.
+function onPageHide() { unloading = true; history.scrollRestoration = "auto"; }
+function onPageShow() { unloading = false; history.scrollRestoration = "manual"; syncFeeds(); }
 
 // Reads that start themselves: a read form when it scrolls into view, and
 // the page again on an interval while a refresh_every element is on it. Each
@@ -1245,6 +1247,118 @@ function onVisibilityChange() {
   }
 }
 
+// A link within the site shows its page without a document load: the page is
+// read, and its body replaces this one as a load would, so nothing typed on
+// this page carries over to the next. Back and Forward read their page again
+// and return to where it was scrolled. A link to another site, one with a
+// target or download, one clicked with a modifier key, and one inside
+// data-placebo-reload load as usual, as does a page that loads other scripts
+// or stylesheets, an answer that is not a page, and a read that fails.
+let entry = null;
+const scrolls = new Map();
+let visiting = null;
+let progress = null;
+// The page shown: a Back or Forward within it moves between its fragments.
+let shown = null;
+let loadedAssets = null;
+const headAssets = doc =>
+  Array.from(doc.head.querySelectorAll('script, style, link[rel~="stylesheet"]'), node => node.outerHTML).join("\n");
+const remember = () => { if (entry) scrolls.set(entry, [scrollX, scrollY]); };
+
+function onLinkClick(event) {
+  const link = event.target.closest?.("a[href]");
+  if (!(link instanceof HTMLAnchorElement) || event.defaultPrevented || event.button !== 0 ||
+    event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if ((link.target && link.target !== "_self") || link.hasAttribute("download") || link.closest("[data-placebo-reload]")) return;
+  const url = new URL(link.href);
+  // A place on this page: the browser scrolls there.
+  if (url.origin !== location.origin || link.getAttribute("href").startsWith("#") ||
+    (url.hash && url.pathname + url.search === here())) return;
+  event.preventDefault();
+  visit(url, "push");
+}
+
+function onPopState() {
+  if (here() === shown) return;
+  remember();
+  entry = history.state?.placebo ?? null;
+  visit(new URL(location.href), "restore");
+}
+
+async function visit(url, how) {
+  if (how === "push" && url.href === location.href) how = "replace";
+  visiting?.abort();
+  const controller = visiting = new AbortController();
+  const timer = setTimeout(showProgress, 300);
+  const path = url.pathname + url.search;
+  let response = null, page = null;
+  try {
+    response = await fetch(url, { headers: { Accept: "text/html", "X-Placebo-Refresh": String(VERSION) },
+      credentials: "same-origin", cache: "no-store", signal: controller.signal });
+    if (response.headers.get("content-type")?.split(";")[0].trim() === "text/html") {
+      page = new DOMParser().parseFromString(await response.text(), "text/html");
+    }
+  } catch { /* A read that fails loads the page, and the browser shows why. */ }
+  finally { clearTimeout(timer); }
+  if (visiting !== controller) return;
+  visiting = null;
+  progress?.remove();
+  progress = null;
+  const reload = !page ? (response ? "not-a-page" : "network-error") : headAssets(page) !== loadedAssets ? "head-changed" : null;
+  if (reload) {
+    emit("navigated", null, { method: "GET", path, how, reason: reload });
+    if (how === "restore") location.reload();
+    else location[how === "replace" ? "replace" : "assign"](url.href);
+    return;
+  }
+  // A redirect's page is at the address it ended at.
+  const at = new URL(response.url);
+  if (!response.redirected) at.hash = url.hash;
+  if (how === "restore") {
+    entry ??= freshKey();
+    history.replaceState({ ...history.state, placebo: entry }, "", at);
+  } else {
+    remember();
+    if (how === "push") entry = freshKey();
+    history[how === "push" ? "pushState" : "replaceState"]({ placebo: entry }, "", at);
+  }
+  // Scripts a parser made do not run; the body's own run as on a load.
+  for (const old of page.body.querySelectorAll("script")) {
+    const script = document.createElement("script");
+    for (const { name, value } of old.attributes) script.setAttribute(name, value);
+    script.textContent = old.textContent;
+    old.replaceWith(script);
+  }
+  document.body.replaceWith(page.body);
+  shown = here();
+  shownRendered = renderedAt(response) ?? 0;
+  holding = new WeakSet();
+  document.title = page.title;
+  const saved = how === "restore" ? scrolls.get(entry) : null;
+  const target = at.hash ? document.getElementById(decodeURIComponent(at.hash.slice(1))) : null;
+  if (saved) scrollTo(...saved);
+  else if (target) target.scrollIntoView();
+  else scrollTo(0, 0);
+  // Focus starts at the new page, and a screen reader reads its heading.
+  const start = document.querySelector("[autofocus]") ?? document.querySelector("h1") ?? document.body;
+  if (!start.matches(FOCUSABLE)) start.setAttribute("tabindex", "-1");
+  start.focus({ preventScroll: true });
+  emit("navigated", null, { method: "GET", path: here(), how, status: response.status, reason: how });
+}
+
+// A thin bar along the top while a page is slow to come, in the site's accent.
+function showProgress() {
+  if (progress) return;
+  progress = document.createElement("div");
+  progress.setAttribute("aria-hidden", "true");
+  progress.dataset.placeboProgress = "";
+  progress.style.cssText = "position: fixed; inset-block-start: 0; inset-inline-start: 0; z-index: 2147483647; " +
+    "block-size: 3px; inline-size: 0; background: var(--accent-bg, Highlight); transition: inline-size 8s cubic-bezier(0.1, 0.7, 0.2, 1)";
+  document.documentElement.append(progress);
+  progress.getBoundingClientRect();
+  progress.style.inlineSize = "90%";
+}
+
 export function start() {
   if (started) return;
   started = true;
@@ -1259,6 +1373,13 @@ export function start() {
   window.addEventListener("pageshow", onPageShow);
   document.addEventListener("visibilitychange", onVisibilityChange);
   if (!nativeCommands) document.addEventListener("click", onCommandClick);
+  document.addEventListener("click", onLinkClick);
+  window.addEventListener("popstate", onPopState);
+  history.scrollRestoration = "manual";
+  shown = here();
+  loadedAssets = headAssets(document);
+  entry = history.state?.placebo ?? freshKey();
+  history.replaceState({ ...history.state, placebo: entry }, "");
   observer = new MutationObserver(() => {
     for (const work of pending.values()) {
       if (!work.form.isConnected || !work.target.isConnected) cancel(work, "unmounted");
@@ -1288,6 +1409,13 @@ export function stop() {
   window.removeEventListener("pageshow", onPageShow);
   document.removeEventListener("visibilitychange", onVisibilityChange);
   document.removeEventListener("click", onCommandClick);
+  document.removeEventListener("click", onLinkClick);
+  window.removeEventListener("popstate", onPopState);
+  history.scrollRestoration = "auto";
+  visiting?.abort();
+  visiting = null;
+  progress?.remove();
+  progress = null;
   clearTimeout(behaviorAudit);
   unknownBehaviors = new WeakMap();
   unresolvedCommands = new WeakMap();

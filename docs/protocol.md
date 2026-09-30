@@ -140,6 +140,20 @@ read or refresh is in flight, and is paused while `document.visibilityState` is
 shown. `placebo:scheduled` carries `source`: `user` or `reveal`; a refresh's
 `placebo:applied` carries `source`: `push`, `interval`, or `moved`.
 
+A link click within the site fetches the linked URL with
+`X-Placebo-Refresh` (following redirects, `cache: "no-store"`), then pushes
+the final URL with `history.pushState` and replaces `document.body` with the
+answer's body; scripts in it run as on a load. The history entry carries a
+key in `history.state.placebo`, under which the runtime keeps the scroll
+position for Back and Forward, which fetch the entry's URL again the same way.
+`history.scrollRestoration` is `manual` while the page is shown. A mutation
+reply with `X-Placebo-Navigate` goes to its path the same way. The runtime
+loads the URL natively instead when the answer is not `text/html`, the fetch
+fails, or the answer's `<head>` scripts, styles, and stylesheets differ from
+the page's as loaded. `placebo:navigated` carries `how` (`push`, `replace`,
+or `restore`) and `reason`: `how` again when the page was shown, or why it
+was loaded natively (`not-a-page`, `network-error`, or `head-changed`).
+
 The Rust and browser halves must be upgraded together.
 
 ## Feeds

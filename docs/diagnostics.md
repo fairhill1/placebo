@@ -141,6 +141,15 @@ The styles test, `placebo::styles::Check`, reports the rest in `cargo test`:
 token, and `[placebo:style-element]` and `[placebo:inline-style]` in the
 views. See [styles](../README.md#styles-stay-in-the-kit).
 
+## Links between pages
+
+A link shown without a document load is traced as `placebo:navigated` with the
+path and `how`: `push`, `replace`, or `restore` (Back and Forward). A link the
+runtime handed to the browser is traced with `reason`: `not-a-page` (the
+answer was a file or other content), `network-error`, or `head-changed` (the
+page loads other scripts or stylesheets). These are not console errors; the
+browser shows the page, or why it could not.
+
 ## Live updates
 
 A feed's connection is traced as `placebo:push` with `push-connected`,

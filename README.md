@@ -228,10 +228,12 @@ These apply to people and coding agents alike.
   JavaScript. Use `popovertarget` and `details` for other local UI; their open
   state is the person's and survives replies. Use `behavior()` for intent such
   as closing after a save, and listen for `placebo:applied` on `document`.
-- **Other pages and tabs:** after creating or deleting a record, reply with
-  `.navigate("/path")`. To update other open pages, call `feed.changed()` after
-  the write, on a `Feed` the pages mount with `feed.mount()`; each page reads
-  itself again.
+- **Other pages and tabs:** link pages with plain `a href`; a click shows the
+  next page without a document load, and Back and Forward work. Put
+  `data-placebo-reload` on a link that must load its page as usual. After
+  creating or deleting a record, reply with `.navigate("/path")`. To update
+  other open pages, call `feed.changed()` after the write, on a `Feed` the
+  pages mount with `feed.mount()`; each page reads itself again.
 - **Styles:** pages compose the kit's classes, which its README lists. When a
   layout primitive needs other spacing or width, set its custom property to a
   token on the element, such as `style="--stack-space: var(--space-xs)"`.
@@ -488,6 +490,7 @@ cargo run --example editors
 cargo run --example uploads  # File fields: http://127.0.0.1:4321
 cargo run --example nested   # Nested components: http://127.0.0.1:4322
 cargo run --example triggers # Polling and "load more": http://127.0.0.1:4323
+cargo run --example pages    # Links between pages: http://127.0.0.1:4324
 ```
 
 `PLACEBO_ADDR` overrides example listening addresses. Example data is in memory.
@@ -566,7 +569,10 @@ chosen file across a rejected reply, and refuse oversized files in the browser
 and server. Nested tests reply around busy, edited, and dialog components. Push
 tests keep two tabs in step through saves, drafts, adds, moves, and deletes,
 and drop and resume the stream. Trigger tests poll, pause while hidden, stop
-when the poll element goes, and scroll an infinite list. Local UI tests
+when the poll element goes, and scroll an infinite list. Navigation tests
+follow links, go Back and Forward to where each page was scrolled, leave
+links with a hash, a modifier key, or another page's head to the browser,
+drop what was typed on the page left, and show a slow page's progress bar. Local UI tests
 open dialogs without JavaScript, keep details and popovers across replies, and
 report command buttons without a target. The dev-loop test creates and removes
 a temporary application.

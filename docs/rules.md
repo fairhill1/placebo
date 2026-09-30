@@ -47,10 +47,12 @@ These apply to people and coding agents alike.
   JavaScript. Use `popovertarget` and `details` for other local UI; their open
   state is the person's and survives replies. Use `behavior()` for intent such
   as closing after a save, and listen for `placebo:applied` on `document`.
-- **Other pages and tabs:** after creating or deleting a record, reply with
-  `.navigate("/path")`. To update other open pages, call `feed.changed()` after
-  the write, on a `Feed` the pages mount with `feed.mount()`; each page reads
-  itself again.
+- **Other pages and tabs:** link pages with plain `a href`; a click shows the
+  next page without a document load, and Back and Forward work. Put
+  `data-placebo-reload` on a link that must load its page as usual. After
+  creating or deleting a record, reply with `.navigate("/path")`. To update
+  other open pages, call `feed.changed()` after the write, on a `Feed` the
+  pages mount with `feed.mount()`; each page reads itself again.
 - **Styles:** pages compose the kit's classes, which its README lists. When a
   layout primitive needs other spacing or width, set its custom property to a
   token on the element, such as `style="--stack-space: var(--space-xs)"`.

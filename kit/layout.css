@@ -30,7 +30,7 @@
 .grid {
   display: grid;
   gap: var(--grid-space, var(--space-md));
-  grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min, 16rem), 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min, var(--width-sm)), 100%), 1fr));
 }
 
 /* Two columns that stack when the content column would drop below 60%.
@@ -40,7 +40,7 @@
   flex-wrap: wrap;
   gap: var(--space-lg);
 }
-.sidebar > :first-child { flex-basis: var(--sidebar-width, 16rem); flex-grow: 1; }
+.sidebar > :first-child { flex-basis: var(--sidebar-width, var(--width-sm)); flex-grow: 1; }
 .sidebar > :last-child { flex-basis: 0; flex-grow: 999; min-inline-size: 60%; }
 
 .center { display: flex; flex-direction: column; align-items: center; }

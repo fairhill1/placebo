@@ -166,6 +166,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         let rust_name = ident.to_string();
         let rust_name = rust_name.trim_start_matches("r#");
         let setter = format_ident!("with_{rust_name}");
+        let omitter = format_ident!("without_{rust_name}");
         let mut wire_name = rust_name.to_owned();
         let mut has_default = false;
         for attr in field
@@ -229,17 +230,36 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 quote!(#state)
             }
         });
-        let after = states.iter().enumerate().map(|(i, state)| {
-            if i == index {
-                present.clone()
-            } else {
-                quote!(#state)
-            }
-        });
+        let after: Vec<_> = states
+            .iter()
+            .enumerate()
+            .map(|(i, state)| {
+                if i == index {
+                    present.clone()
+                } else {
+                    quote!(#state)
+                }
+            })
+            .collect();
+        // Leaving a field out of the form is defined only where its absence
+        // decodes: an Option (None), a Vec (empty), a bool (false), or a
+        // field with serde(default).
+        let omittable = if has_default {
+            quote!()
+        } else {
+            // Higher-ranked, so the bound is checked where the method is
+            // called rather than for every field where it is defined.
+            quote_spanned!(ty.span()=> where for<'__placebo> #ty: ::placebo::__private::Omittable)
+        };
         setters.push(quote! {
             impl #impl_generics #builder<#(#before),*> {
                 pub fn #setter(mut self, control: ::placebo::Control<#ty>) -> #builder<#(#after),*> {
                     ::placebo::__private::render_control::<#name, _>(&mut self.body, control, #wire_name);
+                    #builder { body: self.body, state: ::core::marker::PhantomData }
+                }
+
+                /// Leave this field out of the form; the handler sees its absence.
+                pub fn #omitter(self) -> #builder<#(#after),*> #omittable {
                     #builder { body: self.body, state: ::core::marker::PhantomData }
                 }
             }

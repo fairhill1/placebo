@@ -337,6 +337,44 @@ fn float_numbers_accept_fractions_and_passwords_are_never_echoed() {
     assert!(form.contains("<input type=\"number\" name=\"weight\" value=\"1.25\" step=\"any\" required data-placebo-field=\"weight\">"));
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, FormInput)]
+struct Filter {
+    q: String,
+    page: Option<u32>,
+    archived: bool,
+}
+
+async fn filter(Input(input): Input<Filter>) -> String {
+    format!("{input:?}")
+}
+
+#[tokio::test]
+async fn omitted_fields_render_nothing_and_decode_as_absent() {
+    const FILTER: MutationAction<Filter> = MutationAction::new("filter", "/filter");
+    let form = FILTER
+        .bind(&Component::new("filter", 1))
+        .form(fields! { Filter {
+            @field q = Control::search("tea");
+            @omit page;
+            @omit archived;
+        } })
+        .into_string();
+    assert!(form.contains("name=\"q\""), "{form}");
+    assert!(!form.contains("name=\"page\"") && !form.contains("name=\"archived\""), "{form}");
+    let app = Router::new().route(FILTER.path(), FILTER.route(filter));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/filter")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("x-placebo-request", placebo::VERSION.to_string())
+        .body(Body::from("q=tea"))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains(r#"Filter { q: "tea", page: None, archived: false }"#));
+}
+
 #[test]
 #[should_panic(expected = "every selected value needs exactly one matching option")]
 fn multiple_selection_rejects_values_without_options() {
@@ -748,5 +786,57 @@ async fn line_breaks_decode_the_same_from_browsers_and_the_runtime() {
             format!("{:?}", profile("Hi\nthere")),
             "{bio}"
         );
+    }
+}
+
+#[cfg(feature = "time")]
+mod dates {
+    use super::*;
+
+    #[derive(Debug, Deserialize, FormInput)]
+    struct Due {
+        on: time::Date,
+        until: Option<time::Date>,
+    }
+
+    async fn due(Input(input): Input<Due>) -> String {
+        format!("{} {:?}", input.on, input.until)
+    }
+
+    #[tokio::test]
+    async fn dates_render_as_date_inputs_and_decode_checked() {
+        const DUE: MutationAction<Due> = MutationAction::new("due", "/due");
+        let on = time::Date::from_calendar_date(2026, time::Month::September, 30).unwrap();
+        let form = DUE
+            .bind(&Component::new("due", 1))
+            .form(fields! { Due {
+                @field on = Control::date(on);
+                @field until = Control::date(None);
+            } })
+            .into_string();
+        assert!(form.contains(r#"type="date" name="on" value="2026-09-30""#), "{form}");
+        let tag = |name: &str| {
+            let start = form.find(&format!("name=\"{name}\"")).unwrap();
+            form[start..start + form[start..].find('>').unwrap()].to_owned()
+        };
+        assert!(tag("on").contains("required") && !tag("until").contains("required"), "{form}");
+        let app = Router::new().route(DUE.path(), DUE.route(due));
+        for (body, status, reply) in [
+            ("on=2026-10-01&until=", StatusCode::OK, "2026-10-01 None"),
+            ("on=2026-10-01&until=2026-12-24", StatusCode::OK, "2026-10-01 Some(2026-12-24)"),
+            ("on=2026-02-30", StatusCode::UNPROCESSABLE_ENTITY, ""),
+        ] {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/due")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-placebo-request", placebo::VERSION.to_string())
+                .body(Body::from(body))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), status, "{body}");
+            let text = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert!(String::from_utf8_lossy(&text).contains(reply), "{body}");
+        }
     }
 }

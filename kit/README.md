@@ -90,6 +90,7 @@ Override in `@layer tokens` on `:root` (or any scope). Every colour is a
 | `--icon-sm`, `--icon-md`, `--icon-lg` | Icon sizes. `sm` is in `em` and tracks the surrounding text. |
 | `--measure` | Maximum line length for paragraphs (`68ch`). |
 | `--wrapper` | Maximum page width for `.wrapper` (`70rem`). |
+| `--width-xs … --width-xl` | Widths of things side by side: a `.grid` column, a sidebar, a dialog (`12rem … 34rem`). A view sets one with `style="--grid-min: var(--width-xs)"`. |
 | `--border-width` | Every border and hairline. |
 | `--radius-sm`, `--radius-md`, `--radius-lg`, `--radius-full` | Corner radii. |
 | `--focus-ring-size`, `--focus-offset` | Focus ring width and distance from the control. |
@@ -115,10 +116,10 @@ the element, not in `:root`.
 |---|---|---|
 | `--stack-space` | `.stack` | `--space-md` |
 | `--cluster-space` | `.cluster` | `--space-sm` |
-| `--grid-space`, `--grid-min` | `.grid` | `--space-md`, `16rem` |
-| `--sidebar-width` | `.sidebar` | `16rem` |
+| `--grid-space`, `--grid-min` | `.grid` | `--space-md`, `--width-sm` |
+| `--sidebar-width` | `.sidebar` | `--width-sm` |
 | `--badge-bg` | `.badge` | none (see below) |
-| `--shell-width` | `.shell` | `15rem` |
+| `--shell-width` | `.shell` | `--width-sm` |
 | `--avatar-size`, `--avatar-hue` | `.avatar` | `--control-size`, `260` |
 
 ---
@@ -206,7 +207,13 @@ Use `.btn-danger` for the one destructive answer in a dialog, and
 
 ### Card
 `.card` · `.card-link` (the whole card is the link: put the link in the `h2`;
-any second link inside needs `position: relative`)
+any second link inside needs `position: relative`) · `.card-head`: a
+`.card-flush`'s heading row, its title (`h2`) and actions, ruled off from
+the list under it.
+
+### Stat
+`.card.stat` holding `.stat-label`, `.stat-value` (the figure), and an optional
+`.stat-note`; several in a `.grid`.
 
 ### Form
 `.field` wrapping a `label`, the control, and an optional `.field-hint`.
@@ -220,6 +227,9 @@ in a `.card.card-flush` to run edge to edge. A row lines up a leading control
 the whole row its hit area; add `.muted` for a finished record. An adding row
 is a `details.list-main` holding `summary.list-add` ("Add ...") and, when
 open, a `.list-line` with the `.list-lead` icon and an `input.list-input`.
+Inside `.list-main`, `.list-title` over `.list-sub` gives a row two lines: the
+record's name and a quieter line about it. `.list-aside` is trailing text
+before the row's actions: a date, a count, an amount.
 
 ### Shell and nav
 `body.shell` holds `aside.shell-side` (a `.shell-brand` link with a
@@ -227,7 +237,9 @@ open, a `.list-line` with the `.list-lead` icon and an `input.list-input`.
 and `main.shell-main`. Mark the current page's link `aria-current="page"`.
 Under 48rem the sidebar becomes a bar across the top and the `.nav` a tab bar
 along the bottom (icon above name), from the same markup. `.shell-wide` shows an
-element only in the sidebar layout, `.shell-narrow` only in the top bar.
+element only in the sidebar layout, `.shell-narrow` only in the top bar. They
+sit in the `overrides` layer, so a class of yours that sets `display` on the
+same element cannot undo them.
 
 ### Menu
 `details.dropdown` with a `summary` (often a `.btn`) and a `.menu` of

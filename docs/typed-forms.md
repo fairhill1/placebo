@@ -53,6 +53,19 @@ struct SaveTitle { id: u64, title: String }
 let fields = fields! { SaveTitle { @field id = Control::hidden(42); } };
 ```
 
+A form leaves a field out on purpose with `@omit`, such as a search that
+resets the page it lists from. Only a field whose absence decodes can be
+omitted: an `Option` (`None`), a `bool` (`false`), or one with
+`serde(default)`. Anything else fails compilation:
+
+```compile_fail
+use placebo::{Control, FormInput, fields};
+use serde::Deserialize;
+#[derive(Deserialize, FormInput)]
+struct Search { q: String, page: u32 }
+let fields = fields! { Search { @field q = Control::search(""); @omit page; } };
+```
+
 A field cannot appear twice, even in separate layout groups:
 
 ```compile_fail
@@ -149,6 +162,7 @@ Each control constructor only accepts the field types it can submit correctly.
 | Field type | Controls |
 |---|---|
 | `String` / `Option<String>` | `text`, `search`, `email`, `url`, `tel`, `date`, `time`, `datetime_local`, `password`, `textarea`, plus `hidden`, `select`, `radios` |
+| `time::Date` / `Option<time::Date>` (the `time` feature) | `date`, `hidden`; the handler gets a checked date, which sqlx's `time` feature binds as a Postgres `DATE` |
 | integers, `f32`, `f64`, and `Option` of those | `number`, `hidden`, `select`, `radios` |
 | `bool` | `checkbox`, `hidden`, `select`, `radios` |
 | `#[derive(FormEnum)]` enums and `Option` of one | `select`, `radios`, `hidden` |

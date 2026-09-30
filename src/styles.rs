@@ -11,13 +11,14 @@ use std::{
 };
 
 /// The kit this version of Placebo ships, which [`crate::kit`] serves.
-pub(crate) const KIT: [(&str, &str); 6] = [
+pub(crate) const KIT: [(&str, &str); 7] = [
     ("main.css", include_str!("../kit/main.css")),
     ("tokens.css", include_str!("../kit/tokens.css")),
     ("reset.css", include_str!("../kit/reset.css")),
     ("base.css", include_str!("../kit/base.css")),
     ("layout.css", include_str!("../kit/layout.css")),
     ("components.css", include_str!("../kit/components.css")),
+    ("visibility.css", include_str!("../kit/visibility.css")),
 ];
 /// The kit's cascade layers, as `main.css` declares them.
 const LAYERS: &str = "tokens reset base layout components overrides";

@@ -13,7 +13,9 @@ These apply to people and coding agents alike.
   `ACTION.bind(&component).form(fields)` for saves or
   `Read::new().form(fields)` for searches and filters. Don't write
   `data-placebo` attributes, named inputs for payload fields, or protocol
-  headers by hand.
+  headers by hand. A date is a `time::Date` field with `Control::date`, stored
+  as a Postgres `DATE`. Money is an integer of the smallest unit (cents) in the
+  database and the payload, formatted for display in the view; never a float.
 - **Routes:** register every action with `.route(ACTION.path(), ACTION.route(handler))`
   and wrap the finished router with `placebo::native_forms(app)`, which renders
   each reply's page. The handler takes any Axum extractors (state, session),
@@ -40,7 +42,9 @@ These apply to people and coding agents alike.
   which reads the page it is on with the form's fields as the query and puts
   the query in the address. Render every page from its query (`Input<Q>` in
   the page handler) and build each read form on it from that same `Q`,
-  rendering the fields it does not change as hidden controls. "Load more" is
+  rendering the fields it keeps as hidden controls and leaving out with
+  `@omit` an optional field it resets, such as the page a new search starts
+  from. "Load more" is
   a read form asking for a longer page (`?shown=40`), with `.on_reveal()` to
   read as it scrolls into view. To poll, render `placebo::refresh_every(ms)`
   while there is something to wait for. Don't rebuild these with `fetch` or
@@ -63,7 +67,8 @@ These apply to people and coding agents alike.
   primitives. Spacing, type, colour, radii, and timing come only from the
   tokens; a value the scale lacks is a new token, after the person approves
   it. When a layout primitive needs other spacing, set its custom property to
-  a token on the element, such as `style="--stack-space: var(--space-xs)"`;
+  a token on the element, such as `style="--stack-space: var(--space-xs)"` or
+  `style="--grid-min: var(--width-sm)"`;
   write no other inline styles and no `<style>` elements. The styles test
   (`placebo::styles::Check`) fails on what strays, and the console reports a
   class no stylesheet defines as `[placebo:unknown-class]`; fix the cause.

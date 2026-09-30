@@ -17,15 +17,21 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
         let builder = Ident::new("__placebo_fields", Span::mixed_site());
         let controls = fields
             .iter()
-            .map(|(name, value, slot): &(Ident, Expr, Ident)| {
-                let setter = format_ident!(
-                    "with_{}",
-                    name.to_string().trim_start_matches("r#"),
-                    span = name.span()
-                );
-                quote! {
-                    let mut #builder = #builder.#setter(#value);
-                    let #slot = ::placebo::__private::take_markup(&mut #builder);
+            .map(|(name, value, slot): &(Ident, Option<Expr>, Ident)| {
+                let rust_name = name.to_string();
+                let rust_name = rust_name.trim_start_matches("r#");
+                match value {
+                    Some(value) => {
+                        let setter = format_ident!("with_{rust_name}", span = name.span());
+                        quote! {
+                            let mut #builder = #builder.#setter(#value);
+                            let #slot = ::placebo::__private::take_markup(&mut #builder);
+                        }
+                    }
+                    None => {
+                        let omitter = format_ident!("without_{rust_name}", span = name.span());
+                        quote! { let #builder = #builder.#omitter(); }
+                    }
                 }
             });
         Ok(quote! {{
@@ -52,7 +58,7 @@ fn reject_fields(tokens: TokenStream) -> syn::Result<()> {
     let mut previous_at = false;
     for token in tokens {
         match &token {
-            TokenTree::Ident(ident) if previous_at && ident == "field" => {
+            TokenTree::Ident(ident) if previous_at && (ident == "field" || ident == "omit") => {
                 return Err(syn::Error::new(
                     ident.span(),
                     "required @field entries must be unconditional markup; move the field outside this branch, loop, or Rust expression",
@@ -68,7 +74,7 @@ fn reject_fields(tokens: TokenStream) -> syn::Result<()> {
 
 fn rewrite(
     tokens: TokenStream,
-    fields: &mut Vec<(Ident, Expr, Ident)>,
+    fields: &mut Vec<(Ident, Option<Expr>, Ident)>,
 ) -> syn::Result<TokenStream> {
     let parser = |input: ParseStream| {
         let mut output = TokenStream::new();
@@ -76,23 +82,29 @@ fn rewrite(
             if input.peek(Token![@]) {
                 let at: Token![@] = input.parse()?;
                 let directive: Ident = input.call(Ident::parse_any)?;
-                if directive == "field" {
+                if directive == "field" || directive == "omit" {
                     let name: Ident = input.parse()?;
                     if fields.iter().any(|(existing, _, _)| existing == &name) {
                         return Err(syn::Error::new(
                             name.span(),
-                            "this form field has already been rendered",
+                            "this form field has already been rendered or omitted",
                         ));
                     }
-                    input.parse::<Token![=]>()?;
-                    let value: Expr = input.parse()?;
-                    input.parse::<Token![;]>()?;
                     let slot = format_ident!(
                         "__placebo_control_{}",
                         fields.len(),
                         span = Span::mixed_site()
                     );
-                    output.extend(quote! { (#slot) });
+                    // `@omit name;` leaves an optional field out of the form.
+                    let value = if directive == "field" {
+                        input.parse::<Token![=]>()?;
+                        let value: Expr = input.parse()?;
+                        output.extend(quote! { (#slot) });
+                        Some(value)
+                    } else {
+                        None
+                    };
+                    input.parse::<Token![;]>()?;
                     fields.push((name, value, slot));
                     continue;
                 }
@@ -130,7 +142,7 @@ fn rewrite(
                     _ => {
                         return Err(syn::Error::new(
                             directive.span(),
-                            "expected @field or a Maud control-flow directive",
+                            "expected @field, @omit, or a Maud control-flow directive",
                         ));
                     }
                 }
@@ -176,6 +188,8 @@ mod tests {
             "(html! { @field title = control; })",
             "@field title = control; div { @field title = control; }",
             "@let title = value; @field title = control;",
+            "@if visible { @omit title; }",
+            "@omit title; @field title = control;",
         ] {
             assert!(
                 expand(format!("Input {{ {body} }}").parse().unwrap()).is_err(),

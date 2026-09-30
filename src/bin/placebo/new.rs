@@ -121,13 +121,13 @@ fn database(name: &str) -> String {
 
 fn manifest(name: &str, placebo: &str) -> String {
     let dependency = if from_git(placebo) {
-        format!("placebo = {{ git = {REPO:?} }}")
+        format!("placebo = {{ git = {REPO:?}, features = [\"time\"] }}")
     } else {
-        format!("placebo = {{ path = {placebo:?} }}")
+        format!("placebo = {{ path = {placebo:?}, features = [\"time\"] }}")
     };
     let manifest = MANIFEST
         .replacen("name = \"starter\"", &format!("name = \"{name}\""), 1)
-        .replacen("placebo = { path = \"..\" }", &dependency, 1);
+        .replacen("placebo = { path = \"..\", features = [\"time\"] }", &dependency, 1);
     // A standalone app is its own workspace, not a member of Placebo's.
     manifest.replacen("[features]", "[workspace]\n\n[features]", 1)
 }
@@ -210,12 +210,12 @@ mod tests {
     fn a_clone_is_a_path_dependency_and_a_git_install_the_repository() {
         let clone = manifest("my-app", CLONE);
         assert!(clone.contains("name = \"my-app\""), "{clone}");
-        assert!(clone.contains("placebo = { path = \"/home/someone/placebo\" }"));
+        assert!(clone.contains("placebo = { path = \"/home/someone/placebo\", features = [\"time\"] }"));
         assert!(clone.contains("[workspace]"));
         assert!(!clone.contains("starter") && !clone.contains("\"..\""));
         let cached = manifest("my-app", CACHED);
         assert!(
-            cached.contains(&format!("placebo = {{ git = {REPO:?} }}")),
+            cached.contains(&format!("placebo = {{ git = {REPO:?}, features = [\"time\"] }}")),
             "{cached}"
         );
         assert!(!cached.contains(".cargo"));

@@ -1,4 +1,4 @@
-/* The pieces an app builds out of: button, card, field, list, table, badge,
+/* The pieces an app builds out of: button, card, stat, field, list, table, badge,
    alert, notice, modal, shell, nav, menu, segmented, switch, pager, avatar,
    key/value. Nothing in this file knows what the app is about.
    Components consume tokens only -- never a hardcoded value -- and never set
@@ -128,6 +128,32 @@
    that is -- the whole-card hover above is the feedback. */
 .card-link h2 a { color: var(--text); text-decoration: none; }
 
+/* A card's heading row: its title and actions, ruled off from what follows.
+   Made for a .card-flush, whose list runs edge to edge under it. */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-block-size: calc(var(--control-size) + var(--space-xs));
+  padding: var(--space-xs) var(--space-md);
+  border-block-end: var(--border-width) solid var(--border);
+}
+.card-head > :is(h2, h3) { font-size: var(--text-md); letter-spacing: normal; }
+
+/* Stat -- a figure with its label, as on a dashboard: a .card.stat, several
+   in a .grid. .stat-note is an optional line under the figure. */
+.stat { display: flex; flex-direction: column; gap: var(--space-3xs); }
+.stat-label { font-size: var(--text-sm); color: var(--text-muted); }
+.stat-value {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+}
+.stat-note { font-size: var(--text-xs); color: var(--text-muted); }
+
 /* Field */
 .field { display: flex; flex-direction: column; gap: var(--space-2xs); }
 .field > label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
@@ -142,7 +168,7 @@
 .list-row {
   position: relative;
   min-block-size: calc(var(--control-size) + var(--space-xs));
-  padding-inline: var(--space-md);
+  padding: var(--space-xs) var(--space-md);
   border-block-end: var(--border-width) solid var(--border);
   transition: background var(--transition);
 }
@@ -152,6 +178,11 @@
   .list-row:has(a.list-main, summary):hover { background: var(--surface-raised-hover); }
 }
 .list-main { flex: 1; min-inline-size: 0; overflow-wrap: anywhere; }
+/* Two lines in .list-main: the record's name over a quieter line about it. */
+.list-title { display: block; font-weight: var(--weight-medium); }
+.list-sub { display: block; font-size: var(--text-sm); color: var(--text-muted); }
+/* Trailing text in a row, before its actions: a date, a count, an amount. */
+.list-aside { flex: none; font-size: var(--text-sm); font-variant-numeric: tabular-nums; color: var(--text-muted); }
 /* A record's link reads as its text, and the whole row is the hit area; the
    row's own controls sit above it. */
 a.list-main { color: var(--text); text-decoration: none; }
@@ -255,7 +286,7 @@ details[open] > .list-add { display: none; }
    restores the `margin: auto` that centres it. */
 .modal {
   padding: 0;
-  inline-size: min(26rem, calc(100vw - var(--space-xl)));
+  inline-size: min(var(--width-lg), calc(100vw - var(--space-xl)));
   max-block-size: calc(100dvh - var(--space-xl));
   color: var(--text);
   background: var(--surface-raised);
@@ -294,7 +325,7 @@ details[open] > .list-add { display: none; }
 .shell {
   --tab-bar: calc(var(--control-size) + var(--space-sm));
   display: grid;
-  grid-template-columns: var(--shell-width, 15rem) minmax(0, 1fr);
+  grid-template-columns: var(--shell-width, var(--width-sm)) minmax(0, 1fr);
   min-block-size: 100dvh;
 }
 .shell-side {
@@ -310,8 +341,6 @@ details[open] > .list-add { display: none; }
   border-inline-end: var(--border-width) solid var(--border);
 }
 .shell-foot { display: flex; align-items: center; justify-content: center; gap: var(--space-xs); margin-block-start: auto; }
-/* Shown only as a sidebar (.shell-wide) or only as a top bar (.shell-narrow). */
-.shell-narrow { display: none; }
 /* Room between the sidebar and the page's .wrapper, beyond its own gutter. */
 .shell-main { padding-inline: var(--space-md); }
 .shell-brand {
@@ -345,8 +374,6 @@ details[open] > .list-add { display: none; }
     border-block-end: var(--border-width) solid var(--border);
   }
   .shell-foot { margin-block-start: 0; margin-inline-start: auto; }
-  .shell-wide { display: none; }
-  .shell-narrow { display: revert; }
   .shell-main { padding-inline: 0; padding-block-end: var(--tab-bar); }
 }
 

@@ -55,6 +55,14 @@
   --icon-lg: 1.5rem;
   --measure: 68ch;
   --wrapper: 70rem;
+  /* Widths of things laid side by side: a grid's column (--grid-min), a
+     sidebar, a dialog. A view sets one with `style="--grid-min:
+     var(--width-sm)"`, which the styles check allows, where a raw rem is not. */
+  --width-xs: 12rem;
+  --width-sm: 16rem;
+  --width-md: 20rem;
+  --width-lg: 26rem;
+  --width-xl: 34rem;
   --border-width: 1px;
 
   /* Shape */

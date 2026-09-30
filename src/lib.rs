@@ -25,7 +25,7 @@ mod forms;
 pub use forms::private as __private;
 pub use forms::{
     Control, FieldValue, FormEnum, FormFields, FormInput, FormValue, Input, NumberValue,
-    SingleValue, TextValue,
+    DateValue, SingleValue, TextValue,
 };
 /// Render a typed form body using Maud markup and `@field name = control;` entries.
 /// See [`FormInput`] for examples and compile-time guarantees.
@@ -122,17 +122,32 @@ ends_with_input!(
 ///
 /// Render the page from its query with `Input<Q>` in the page handler, and
 /// build every read form on the page from that same `Q`: the form replaces
-/// the whole query, so a form renders the fields it does not change as
-/// hidden controls.
+/// the whole query, so a form renders the fields it keeps as hidden controls,
+/// and leaves out with `@omit` an optional field it resets, such as the page
+/// a new search starts again from.
 ///
 /// ```
 /// use placebo::{Control, FormInput, Read, fields};
 /// #[derive(serde::Deserialize, FormInput)]
-/// struct Search { q: String }
+/// struct Search { q: String, page: Option<u32> }
 /// let form = Read::new().on_input(150).form(fields! { Search {
 ///     @field q = Control::search("rust");
+///     @omit page;
 /// } });
 /// assert!(form.into_string().starts_with("<form method=\"get\" data-placebo="));
+/// ```
+///
+/// Only a field whose absence decodes can be omitted: an `Option`, a `bool`,
+/// or one with `serde(default)`.
+///
+/// ```compile_fail
+/// use placebo::{Control, FormInput, Read, fields};
+/// #[derive(serde::Deserialize, FormInput)]
+/// struct Search { q: String, page: u32 }
+/// let form = Read::new().form(fields! { Search {
+///     @field q = Control::search("rust");
+///     @omit page;
+/// } });
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Read {

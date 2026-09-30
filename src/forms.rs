@@ -219,6 +219,9 @@ macro_rules! scalars {
     )* };
 }
 scalars!(Required: String, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64);
+// A date submits as `YYYY-MM-DD`, which is how `time::Date` reads and writes.
+#[cfg(feature = "time")]
+scalars!(Required: time::Date);
 // An unchecked checkbox submits nothing, so an absent bool decodes as false.
 scalars!(False: bool);
 
@@ -235,6 +238,23 @@ impl<T: FormEnum> FieldValue for T {
 
 impl TextValue for String {}
 impl TextValue for Option<String> {}
+
+/// Values for date inputs: a `YYYY-MM-DD` `String`, or with the `time`
+/// feature a `time::Date`, which the form decodes and checks; `Option` of
+/// either, where empty is `None`.
+pub trait DateValue: SingleValue {
+    /// Whether an empty submission fails decoding, so the input is `required`.
+    #[doc(hidden)]
+    const REQUIRED: bool = false;
+}
+impl DateValue for String {}
+impl DateValue for Option<String> {}
+#[cfg(feature = "time")]
+impl DateValue for time::Date {
+    const REQUIRED: bool = true;
+}
+#[cfg(feature = "time")]
+impl DateValue for Option<time::Date> {}
 
 macro_rules! numbers {
     ($step:expr => $($ty:ty),* $(,)?) => { $(
@@ -619,10 +639,6 @@ impl<T: TextValue> Control<T> {
     pub fn tel(value: impl Into<T>) -> Self {
         Self::text_kind(value.into(), "tel")
     }
-    /// A `YYYY-MM-DD` string; parse and validate it in the handler.
-    pub fn date(value: impl Into<T>) -> Self {
-        Self::text_kind(value.into(), "date")
-    }
     /// An `HH:MM` or `HH:MM:SS` string.
     pub fn time(value: impl Into<T>) -> Self {
         Self::text_kind(value.into(), "time")
@@ -641,6 +657,17 @@ impl<T: TextValue> Control<T> {
 
     fn text_kind(value: T, kind: &'static str) -> Self {
         Self::new(Kind::Text(value.encode(), kind))
+    }
+}
+
+impl<T: DateValue> Control<T> {
+    /// A date picker. On a `time::Date` field (the `time` feature) the
+    /// handler gets a checked date, and the input is `required`; on a
+    /// `String`, a `YYYY-MM-DD` string to parse in the handler.
+    pub fn date(value: impl Into<T>) -> Self {
+        let mut control = Self::new(Kind::Text(value.into().encode(), "date"));
+        control.required = T::REQUIRED;
+        control
     }
 }
 
@@ -921,6 +948,17 @@ pub mod private {
         }
         false
     }
+
+    /// A field type a form may leave out with `@omit`, because its absence
+    /// decodes: an `Option` as `None`, a `bool` as `false`. A field with
+    /// `serde(default)` may be left out whatever its type.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` cannot be left out of a form: its absence would fail decoding",
+        label = "only Option, bool, and serde(default) fields can be omitted"
+    )]
+    pub trait Omittable {}
+    impl<T: FieldValue> Omittable for Option<T> {}
+    impl Omittable for bool {}
 
     /// What an absent field means when a browser omits it from a submission.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
